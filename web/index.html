@@ -1,0 +1,968 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Signal Deck</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg-top: #f4f0dc;
+      --bg-bottom: #d6efe8;
+      --card: #f8f7f2;
+      --ink: #16322f;
+      --muted: #4f6965;
+      --teal: #007f6f;
+      --coral: #d7533d;
+      --amber: #b67a22;
+      --line: #b9d2cc;
+      --mono: "IBM Plex Mono", monospace;
+      --sans: "Space Grotesk", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      color: var(--ink);
+      background:
+        radial-gradient(1000px 420px at 0% 0%, #ffe2a8 0%, rgba(255, 226, 168, 0) 70%),
+        radial-gradient(900px 420px at 100% 100%, #9de2d4 0%, rgba(157, 226, 212, 0) 68%),
+        linear-gradient(160deg, var(--bg-top), var(--bg-bottom));
+      min-height: 100vh;
+      animation: fadeIn 500ms ease-out;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .page {
+      max-width: 1320px;
+      margin: 0 auto;
+      padding: 24px 18px 30px;
+      display: grid;
+      gap: 14px;
+      grid-template-columns: 380px 1fr;
+    }
+
+    .panel {
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(248, 247, 242, 0.94));
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: 0 14px 32px rgba(22, 50, 47, 0.1);
+    }
+
+    .left {
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+      height: fit-content;
+      position: sticky;
+      top: 12px;
+    }
+
+    .right {
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+      align-content: start;
+    }
+
+    .title {
+      margin: 0;
+      font-weight: 700;
+      font-size: 1.42rem;
+      letter-spacing: 0.02em;
+    }
+
+    .sub {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    .box {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+      opacity: 0;
+      animation: rise 380ms ease-out forwards;
+    }
+
+    .box:nth-child(2) { animation-delay: 70ms; }
+    .box:nth-child(3) { animation-delay: 140ms; }
+    .box:nth-child(4) { animation-delay: 210ms; }
+    .box:nth-child(5) { animation-delay: 280ms; }
+
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .box h3 {
+      margin: 0;
+      font-size: 0.92rem;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .grid-2 {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .grid-3 {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(3, 1fr);
+    }
+
+    label {
+      display: grid;
+      gap: 4px;
+      font-size: 0.82rem;
+      color: var(--muted);
+    }
+
+    input, select {
+      width: 100%;
+      border-radius: 9px;
+      border: 1px solid #9fbab3;
+      background: #fbfbf8;
+      color: var(--ink);
+      padding: 8px 9px;
+      font-size: 0.9rem;
+      font-family: var(--sans);
+    }
+
+    input:focus, select:focus {
+      outline: 2px solid rgba(0, 127, 111, 0.26);
+      border-color: var(--teal);
+    }
+
+    .check {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.86rem;
+      color: var(--muted);
+    }
+
+    .check input {
+      width: auto;
+      margin: 0;
+    }
+
+    .btn-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    button {
+      border: 0;
+      border-radius: 9px;
+      padding: 8px 12px;
+      font-family: var(--sans);
+      font-size: 0.86rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 110ms ease, opacity 110ms ease, box-shadow 110ms ease;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      opacity: 0.96;
+    }
+
+    button:active {
+      transform: translateY(0);
+      opacity: 0.9;
+    }
+
+    .btn-main {
+      background: var(--teal);
+      color: #fff;
+      box-shadow: 0 8px 16px rgba(0, 127, 111, 0.25);
+    }
+
+    .btn-stop {
+      background: #213f3b;
+      color: #fff;
+    }
+
+    .btn-aux {
+      background: #e8efe7;
+      color: #264844;
+      border: 1px solid #a3c3bc;
+    }
+
+    .status-card {
+      display: grid;
+      gap: 10px;
+      background: linear-gradient(145deg, #fefefb, #f4f7ef);
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      padding: 12px;
+    }
+
+    .status-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .action {
+      font-size: 1.34rem;
+      font-weight: 700;
+      margin: 0;
+    }
+
+    .badge {
+      padding: 5px 8px;
+      border-radius: 999px;
+      border: 1px solid transparent;
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .badge.signal { background: #e4f6ef; color: #0f6d4a; border-color: #8fd6ba; }
+    .badge.wait { background: #fff3da; color: #885715; border-color: #efc17b; }
+    .badge.error { background: #ffe6de; color: #9f2d18; border-color: #e99b89; }
+
+    .metrics {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(4, 1fr);
+    }
+
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px;
+      background: #fbfcf9;
+    }
+
+    .metric .k {
+      margin: 0 0 4px;
+      font-size: 0.72rem;
+      color: var(--muted);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .metric .v {
+      margin: 0;
+      font-family: var(--mono);
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: #193532;
+    }
+
+    .discover-list, .log-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.84rem;
+    }
+
+    .discover-list th, .discover-list td, .log-table th, .log-table td {
+      border-bottom: 1px solid #d0e0db;
+      padding: 7px 6px;
+      vertical-align: top;
+    }
+
+    .discover-list th, .log-table th {
+      text-align: left;
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 0.77rem;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .mono {
+      font-family: var(--mono);
+    }
+
+    .tiny {
+      font-size: 0.76rem;
+      color: var(--muted);
+    }
+
+    .pill {
+      display: inline-block;
+      margin-top: 4px;
+      padding: 2px 6px;
+      border-radius: 999px;
+      background: #ecf4f0;
+      border: 1px solid #bdd3cd;
+      font-size: 0.72rem;
+      color: #35544f;
+    }
+
+    .empty {
+      color: var(--muted);
+      font-size: 0.86rem;
+      padding: 6px 0;
+    }
+
+    .hint {
+      font-size: 0.76rem;
+      color: var(--muted);
+      line-height: 1.35;
+    }
+
+    @media (max-width: 1100px) {
+      .page {
+        grid-template-columns: 1fr;
+      }
+      .left {
+        position: static;
+      }
+      .metrics {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+
+    @media (max-width: 640px) {
+      .grid-2, .grid-3 {
+        grid-template-columns: 1fr;
+      }
+      .metrics {
+        grid-template-columns: 1fr;
+      }
+      .title {
+        font-size: 1.2rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="panel left">
+      <div>
+        <h1 class="title">Signal Deck</h1>
+        <p class="sub">本地实验面板。仅用于信号分析，不会自动下单。</p>
+      </div>
+
+      <section class="box">
+        <h3>信号设置</h3>
+        <div class="grid-2">
+          <label>Provider
+            <select id="provider">
+              <option value="kalshi_espn">kalshi_espn</option>
+              <option value="polymarket_espn">polymarket_espn</option>
+            </select>
+          </label>
+          <label>Yes Team
+            <select id="yesTeam">
+              <option value="home">home</option>
+              <option value="away">away</option>
+            </select>
+          </label>
+        </div>
+        <label>Market (Kalshi ticker 或 Polymarket id)
+          <input id="market" placeholder="KXNBAGAME-... 或 553824" />
+        </label>
+        <div class="btn-row">
+          <button class="btn-aux" id="btnAutofill">自动填充 Market</button>
+          <span class="hint" id="autofillHint">先选 ESPN Event，再点自动填充。</span>
+        </div>
+        <div class="grid-3">
+          <label>ESPN Sport
+            <input id="espnSport" value="basketball" />
+          </label>
+          <label>ESPN League
+            <input id="espnLeague" value="nba" />
+          </label>
+          <label>ESPN Event ID
+            <input id="espnEventId" placeholder="401810741" />
+          </label>
+        </div>
+        <div class="grid-2">
+          <label>快速选择比赛
+            <select id="gamePicker">
+              <option value="">先点“加载比赛”</option>
+            </select>
+          </label>
+          <label>比赛范围
+            <select id="gamePickerState">
+              <option value="in">in（进行中）</option>
+              <option value="pre">pre（未开始）</option>
+              <option value="all">all（全部）</option>
+              <option value="post">post（已结束）</option>
+            </select>
+          </label>
+        </div>
+        <div class="btn-row">
+          <button class="btn-aux" id="btnLoadGames">加载比赛</button>
+          <label class="check">
+            <input id="gameAutoFill" type="checkbox" checked />
+            <span>选中后自动配 Market</span>
+          </label>
+          <span class="hint" id="gamePickerHint">支持多场同时进行时快速切换。</span>
+        </div>
+        <div class="grid-3">
+          <label>Interval(s)
+            <input id="interval" type="number" step="0.1" value="2" />
+          </label>
+          <label>Timeout(s)
+            <input id="timeout" type="number" step="0.1" value="6" />
+          </label>
+          <label>Min EV
+            <input id="minEv" type="number" step="0.001" value="0.03" />
+          </label>
+        </div>
+        <div class="check">
+          <input id="requireLive" type="checkbox" checked />
+          <span>Require Live (开赛前输出 WAITING)</span>
+        </div>
+      </section>
+
+      <section class="box">
+        <h3>成本与风控</h3>
+        <div class="grid-3">
+          <label>Fee Open
+            <input id="feeOpen" type="number" step="0.001" value="0.01" />
+          </label>
+          <label>Alpha
+            <input id="alpha" type="number" step="0.01" value="0.7" />
+          </label>
+          <label>Roundtrip
+            <input id="roundtripCost" type="number" step="0.001" value="0.04" />
+          </label>
+        </div>
+        <div class="grid-3">
+          <label>Spread Buffer
+            <input id="spreadBuffer" type="number" step="0.001" value="0.02" />
+          </label>
+          <label>Account (opt)
+            <input id="accountEquity" type="number" step="1" placeholder="1000" />
+          </label>
+          <label>Risk %
+            <input id="riskPct" type="number" step="0.0001" value="0.0025" />
+          </label>
+        </div>
+      </section>
+
+      <section class="box">
+        <h3>运行</h3>
+        <div class="btn-row">
+          <button class="btn-main" id="btnStart">开始轮询</button>
+          <button class="btn-stop" id="btnStop">停止</button>
+          <button class="btn-aux" id="btnOnce">单次</button>
+          <button class="btn-aux" id="btnClear">清空日志</button>
+        </div>
+        <div class="tiny mono" id="runState">IDLE</div>
+      </section>
+    </section>
+
+    <section class="panel right">
+      <section class="status-card">
+        <div class="status-head">
+          <p class="action" id="actionText">-</p>
+          <span class="badge wait" id="stateBadge">WAITING</span>
+        </div>
+        <div class="tiny" id="reasonText">等待数据...</div>
+        <div class="metrics">
+          <div class="metric"><p class="k">P Live Yes</p><p class="v" id="mPLive">-</p></div>
+          <div class="metric"><p class="k">P Eff</p><p class="v" id="mPEff">-</p></div>
+          <div class="metric"><p class="k">Best EV</p><p class="v" id="mBestEv">-</p></div>
+          <div class="metric"><p class="k">A Yes / A No</p><p class="v" id="mPrices">-</p></div>
+          <div class="metric"><p class="k">Time Left</p><p class="v" id="mTime">-</p></div>
+          <div class="metric"><p class="k">ESPN Status</p><p class="v" id="mStatus">-</p></div>
+          <div class="metric"><p class="k">Provider</p><p class="v" id="mProvider">-</p></div>
+          <div class="metric"><p class="k">Mode</p><p class="v" id="mMode">-</p></div>
+        </div>
+      </section>
+
+      <section class="box">
+        <h3>发现数据源</h3>
+        <div class="grid-3">
+          <label>Date (YYYYMMDD)
+            <input id="discoverDate" placeholder="20260303" />
+          </label>
+          <label>State
+            <select id="discoverState">
+              <option value="all">all</option>
+              <option value="pre">pre</option>
+              <option value="in">in</option>
+              <option value="post">post</option>
+            </select>
+          </label>
+          <label>Query
+            <input id="discoverQuery" placeholder="Brooklyn / Stanley Cup" />
+          </label>
+        </div>
+        <label class="check">
+          <input id="polyNbaOnly" type="checkbox" checked />
+          <span>Polymarket 仅显示 NBA 相关</span>
+        </label>
+        <label class="check">
+          <input id="pairOnly" type="checkbox" checked />
+          <span>仅当前 ESPN 两队相关</span>
+        </label>
+        <div class="hint">多场同时进行时：先在 ESPN 列表点某场“用 Event”，再点找市场。</div>
+        <div class="hint">关键词建议：`GAME`、`SPREAD`、`PTS`、`AST`、`3PT`（数据源主要是英文）。</div>
+        <div class="btn-row">
+          <button class="btn-aux" id="btnEspn">找 ESPN</button>
+          <button class="btn-aux" id="btnKalshi">找 Kalshi</button>
+          <button class="btn-aux" id="btnPoly">找 Polymarket</button>
+        </div>
+        <div id="discoverWrap" class="empty">点击上面的按钮加载结果。</div>
+      </section>
+
+      <section class="box">
+        <h3>信号日志</h3>
+        <table class="log-table" id="logTable">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>State</th>
+              <th>Action</th>
+              <th>Best EV</th>
+              <th>P Live</th>
+              <th>A Yes/No</th>
+              <th>Info</th>
+            </tr>
+          </thead>
+          <tbody id="logBody"></tbody>
+        </table>
+      </section>
+    </section>
+  </main>
+
+  <script>
+    const state = {
+      timer: null,
+      historyLimit: 180
+    };
+
+    const el = {
+      provider: document.getElementById("provider"),
+      yesTeam: document.getElementById("yesTeam"),
+      market: document.getElementById("market"),
+      espnSport: document.getElementById("espnSport"),
+      espnLeague: document.getElementById("espnLeague"),
+      espnEventId: document.getElementById("espnEventId"),
+      gamePicker: document.getElementById("gamePicker"),
+      gamePickerState: document.getElementById("gamePickerState"),
+      gameAutoFill: document.getElementById("gameAutoFill"),
+      gamePickerHint: document.getElementById("gamePickerHint"),
+      interval: document.getElementById("interval"),
+      timeout: document.getElementById("timeout"),
+      minEv: document.getElementById("minEv"),
+      requireLive: document.getElementById("requireLive"),
+      feeOpen: document.getElementById("feeOpen"),
+      alpha: document.getElementById("alpha"),
+      roundtripCost: document.getElementById("roundtripCost"),
+      spreadBuffer: document.getElementById("spreadBuffer"),
+      accountEquity: document.getElementById("accountEquity"),
+      riskPct: document.getElementById("riskPct"),
+      runState: document.getElementById("runState"),
+      actionText: document.getElementById("actionText"),
+      stateBadge: document.getElementById("stateBadge"),
+      reasonText: document.getElementById("reasonText"),
+      mPLive: document.getElementById("mPLive"),
+      mPEff: document.getElementById("mPEff"),
+      mBestEv: document.getElementById("mBestEv"),
+      mPrices: document.getElementById("mPrices"),
+      mTime: document.getElementById("mTime"),
+      mStatus: document.getElementById("mStatus"),
+      mProvider: document.getElementById("mProvider"),
+      mMode: document.getElementById("mMode"),
+      discoverDate: document.getElementById("discoverDate"),
+      discoverState: document.getElementById("discoverState"),
+      discoverQuery: document.getElementById("discoverQuery"),
+      polyNbaOnly: document.getElementById("polyNbaOnly"),
+      pairOnly: document.getElementById("pairOnly"),
+      discoverWrap: document.getElementById("discoverWrap"),
+      logBody: document.getElementById("logBody"),
+      btnStart: document.getElementById("btnStart"),
+      btnStop: document.getElementById("btnStop"),
+      btnOnce: document.getElementById("btnOnce"),
+      btnClear: document.getElementById("btnClear"),
+      btnLoadGames: document.getElementById("btnLoadGames"),
+      btnEspn: document.getElementById("btnEspn"),
+      btnKalshi: document.getElementById("btnKalshi"),
+      btnPoly: document.getElementById("btnPoly"),
+      btnAutofill: document.getElementById("btnAutofill"),
+      autofillHint: document.getElementById("autofillHint")
+    };
+
+    function fmtNum(value, digits = 4) {
+      if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
+      return Number(value).toFixed(digits);
+    }
+
+    function esc(text) {
+      return String(text)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll("\"", "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    function fmtTime(seconds) {
+      if (seconds === null || seconds === undefined || Number.isNaN(Number(seconds))) return "-";
+      const total = Math.max(0, Math.floor(Number(seconds)));
+      const m = Math.floor(total / 60);
+      const s = total % 60;
+      return `${m}:${String(s).padStart(2, "0")}`;
+    }
+
+    function nowStamp() {
+      return new Date().toISOString();
+    }
+
+    function getConfig() {
+      const account = el.accountEquity.value.trim();
+      return {
+        provider: el.provider.value,
+        market: el.market.value.trim(),
+        espn_sport: el.espnSport.value.trim() || "basketball",
+        espn_league: el.espnLeague.value.trim() || "nba",
+        espn_event_id: el.espnEventId.value.trim(),
+        yes_team: el.yesTeam.value,
+        require_live: el.requireLive.checked,
+        timeout: Number(el.timeout.value || 6),
+        fee_open: Number(el.feeOpen.value || 0.01),
+        min_ev: Number(el.minEv.value || 0.03),
+        alpha: Number(el.alpha.value || 0.7),
+        roundtrip_cost: Number(el.roundtripCost.value || 0.04),
+        spread_buffer: Number(el.spreadBuffer.value || 0.02),
+        account_equity: account ? Number(account) : null,
+        per_trade_risk_pct: Number(el.riskPct.value || 0.0025),
+        daily_stop_pct: 0.01,
+        ts: nowStamp()
+      };
+    }
+
+    async function apiGet(url) {
+      const res = await fetch(url);
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      return data;
+    }
+
+    async function apiSignal() {
+      const cfg = getConfig();
+      const res = await fetch("/api/signal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(cfg)
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      return data;
+    }
+
+    async function apiAutofill() {
+      const provider = encodeURIComponent(el.provider.value);
+      const sport = encodeURIComponent(el.espnSport.value.trim() || "basketball");
+      const league = encodeURIComponent(el.espnLeague.value.trim() || "nba");
+      const eventId = encodeURIComponent(el.espnEventId.value.trim());
+      const yesTeam = encodeURIComponent(el.yesTeam.value);
+      const timeout = encodeURIComponent(String(Number(el.timeout.value || 6)));
+      const url = `/api/autofill?provider=${provider}&sport=${sport}&league=${league}&event_id=${eventId}&yes_team=${yesTeam}&timeout=${timeout}`;
+      return apiGet(url);
+    }
+
+    function updateBadge(kind, text) {
+      el.stateBadge.className = "badge";
+      if (kind === "SIGNAL") el.stateBadge.classList.add("signal");
+      else if (kind === "ERROR") el.stateBadge.classList.add("error");
+      else el.stateBadge.classList.add("wait");
+      el.stateBadge.textContent = text;
+    }
+
+    function updateStatus(data) {
+      if (data.state === "SIGNAL") {
+        el.actionText.textContent = data.action || "-";
+        el.reasonText.textContent = data.reason || "-";
+        updateBadge("SIGNAL", "SIGNAL");
+      } else if (data.state === "WAITING") {
+        el.actionText.textContent = "WAITING";
+        el.reasonText.textContent = `等待开赛中 (${data.espn_status || "-"})`;
+        updateBadge("WAITING", "WAITING");
+      } else {
+        el.actionText.textContent = "ERROR";
+        el.reasonText.textContent = data.error || "Unknown error";
+        updateBadge("ERROR", "ERROR");
+      }
+
+      el.mPLive.textContent = fmtNum(data.p_live_yes, 4);
+      el.mPEff.textContent = fmtNum(data.p_eff, 4);
+      el.mBestEv.textContent = fmtNum(data.best_ev, 4);
+      el.mPrices.textContent = `${fmtNum(data.a_yes, 3)} / ${fmtNum(data.a_no, 3)}`;
+      el.mTime.textContent = `${fmtTime(data.time_left)} / ${fmtTime(data.time_total)}`;
+      el.mStatus.textContent = data.espn_status || "-";
+      el.mProvider.textContent = data.provider || "-";
+      el.mMode.textContent = data.probability_mode || "-";
+    }
+
+    function addLog(data, error = false) {
+      const tr = document.createElement("tr");
+      const stateText = error ? "ERROR" : (data.state || "-");
+      const actionText = data.action || "-";
+      tr.innerHTML = `
+        <td class="mono">${new Date().toLocaleTimeString()}</td>
+        <td>${stateText}</td>
+        <td class="mono">${actionText}</td>
+        <td class="mono">${fmtNum(data.best_ev, 4)}</td>
+        <td class="mono">${fmtNum(data.p_live_yes, 4)}</td>
+        <td class="mono">${fmtNum(data.a_yes, 3)} / ${fmtNum(data.a_no, 3)}</td>
+        <td class="tiny">${error ? data.error : (data.reason || data.probability_mode || "-")}</td>
+      `;
+      el.logBody.prepend(tr);
+      while (el.logBody.children.length > state.historyLimit) {
+        el.logBody.removeChild(el.logBody.lastChild);
+      }
+    }
+
+    async function pollOnce() {
+      try {
+        const data = await apiSignal();
+        updateStatus(data);
+        addLog(data, false);
+      } catch (err) {
+        const data = { state: "ERROR", error: String(err) };
+        updateStatus(data);
+        addLog(data, true);
+      }
+    }
+
+    function stopPolling() {
+      if (state.timer) {
+        clearInterval(state.timer);
+        state.timer = null;
+      }
+      el.runState.textContent = "IDLE";
+    }
+
+    function startPolling() {
+      stopPolling();
+      const intervalMs = Math.max(300, Number(el.interval.value || 2) * 1000);
+      el.runState.textContent = `RUNNING ${intervalMs / 1000}s`;
+      pollOnce();
+      state.timer = setInterval(pollOnce, intervalMs);
+    }
+
+    function renderDiscoverTable(headers, rows) {
+      if (!rows.length) {
+        el.discoverWrap.innerHTML = `<div class="empty">没有匹配结果。</div>`;
+        return;
+      }
+      const thead = headers.map(h => `<th>${h.label}</th>`).join("");
+      const tbody = rows.map((row) => {
+        const cells = headers.map((h) => `<td>${h.render(row)}</td>`).join("");
+        return `<tr>${cells}</tr>`;
+      }).join("");
+      el.discoverWrap.innerHTML = `
+        <table class="discover-list">
+          <thead><tr>${thead}</tr></thead>
+          <tbody>${tbody}</tbody>
+        </table>
+      `;
+      el.discoverWrap.querySelectorAll("[data-fill-market]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          el.market.value = btn.getAttribute("data-fill-market") || "";
+        });
+      });
+      el.discoverWrap.querySelectorAll("[data-fill-event]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          el.espnEventId.value = btn.getAttribute("data-fill-event") || "";
+        });
+      });
+      el.discoverWrap.querySelectorAll("[data-fill-event-auto]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          el.espnEventId.value = btn.getAttribute("data-fill-event-auto") || "";
+          try {
+            await autoFillMarket();
+          } catch (err) {
+            el.autofillHint.textContent = `自动填充失败: ${err}`;
+          }
+        });
+      });
+    }
+
+    async function autoFillMarket() {
+      const eventId = el.espnEventId.value.trim();
+      if (!eventId) {
+        throw new Error("请先填写 ESPN Event ID");
+      }
+      el.autofillHint.textContent = "匹配中...";
+      const data = await apiAutofill();
+
+      if (data.market) {
+        el.market.value = data.market;
+      }
+      if (data.suggested_provider && data.suggested_provider !== el.provider.value) {
+        el.provider.value = data.suggested_provider;
+      }
+
+      const home = data.event?.home_abbr || "";
+      const away = data.event?.away_abbr || "";
+      const baseMsg = data.message || (data.matched ? "已匹配" : "未匹配");
+      const providerMsg = data.suggested_provider ? ` 建议 provider=${data.suggested_provider}` : "";
+      el.autofillHint.textContent = `${baseMsg} (${away} vs ${home}).${providerMsg}`;
+      return data;
+    }
+
+    function renderGamePicker(items) {
+      const current = el.espnEventId.value.trim();
+      const options = [`<option value="">请选择比赛</option>`];
+      for (const item of items) {
+        const eventId = String(item.event_id || "");
+        const name = String(item.name || "");
+        const stateText = String(item.state || "-");
+        const statusText = String(item.status || "");
+        const whenText = String(item.date || "").replace("T", " ").slice(5, 16);
+        const label = `${name} [${stateText}] ${statusText || whenText}`.trim();
+        const selected = current && current === eventId ? " selected" : "";
+        options.push(`<option value="${esc(eventId)}"${selected}>${esc(label)}</option>`);
+      }
+      el.gamePicker.innerHTML = options.join("");
+    }
+
+    async function loadGamePicker() {
+      const sport = encodeURIComponent(el.espnSport.value.trim() || "basketball");
+      const league = encodeURIComponent(el.espnLeague.value.trim() || "nba");
+      const date = encodeURIComponent(el.discoverDate.value.trim());
+      const stateValue = encodeURIComponent(el.gamePickerState.value || "in");
+      const url = `/api/discover/espn?sport=${sport}&league=${league}&date=${date}&state=${stateValue}&limit=50`;
+      el.gamePickerHint.textContent = "加载中...";
+      const data = await apiGet(url);
+      const items = Array.isArray(data.items) ? data.items : [];
+      renderGamePicker(items);
+      el.gamePickerHint.textContent = `已加载 ${items.length} 场`;
+    }
+
+    async function onGamePickerChange() {
+      const picked = el.gamePicker.value.trim();
+      if (!picked) {
+        return;
+      }
+      el.espnEventId.value = picked;
+      el.gamePickerHint.textContent = `已选择 Event ${picked}`;
+      if (el.gameAutoFill.checked) {
+        try {
+          await autoFillMarket();
+        } catch (err) {
+          el.gamePickerHint.textContent = `自动配 Market 失败: ${err}`;
+        }
+      }
+    }
+
+    async function loadEspn() {
+      const sport = encodeURIComponent(el.espnSport.value.trim() || "basketball");
+      const league = encodeURIComponent(el.espnLeague.value.trim() || "nba");
+      const date = encodeURIComponent(el.discoverDate.value.trim());
+      const stateValue = encodeURIComponent(el.discoverState.value);
+      const query = encodeURIComponent(el.discoverQuery.value.trim());
+      const url = `/api/discover/espn?sport=${sport}&league=${league}&date=${date}&state=${stateValue}&query=${query}&limit=12`;
+      const data = await apiGet(url);
+      renderDiscoverTable(
+        [
+          { label: "Event", render: (r) => `<div>${r.name}<div class="tiny mono">${r.event_id}</div></div>` },
+          { label: "When", render: (r) => `<div class="tiny">${r.status || "-"}<div class="mono">${(r.date || "").replace("T", " ").slice(0, 16)}</div></div>` },
+          { label: "State", render: (r) => `<span class="pill">${r.state || "-"}</span>` },
+          { label: "Use", render: (r) => `<button class="btn-aux" data-fill-event="${r.event_id}">用 Event</button> <button class="btn-aux" data-fill-event-auto="${r.event_id}">用并自动配</button>` }
+        ],
+        data.items || []
+      );
+    }
+
+    async function loadKalshi() {
+      const query = encodeURIComponent(el.discoverQuery.value.trim());
+      let pairParam = "";
+      if (el.pairOnly.checked) {
+        const eventId = el.espnEventId.value.trim();
+        if (!eventId) {
+          throw new Error("开启两队过滤时，请先填写 ESPN Event ID。");
+        }
+        const sport = encodeURIComponent(el.espnSport.value.trim() || "basketball");
+        const league = encodeURIComponent(el.espnLeague.value.trim() || "nba");
+        pairParam = `&pair_only=1&event_id=${encodeURIComponent(eventId)}&sport=${sport}&league=${league}`;
+      }
+      const data = await apiGet(`/api/discover/kalshi?query=${query}&limit=12${pairParam}`);
+      renderDiscoverTable(
+        [
+          { label: "Ticker", render: (r) => `<div class="mono">${r.ticker}</div><div class="tiny">${r.title || ""}</div>` },
+          { label: "Market", render: (r) => `<div class="tiny">Y ${r.yes_bid}/${r.yes_ask} · N ${r.no_bid}/${r.no_ask}</div>` },
+          { label: "Associated", render: (r) => `<div class="tiny mono">${(r.associated_markets || []).slice(0, 2).join("<br>") || "-"}</div>` },
+          { label: "Use", render: (r) => `<button class="btn-aux" data-fill-market="${r.ticker}">用 Ticker</button>` }
+        ],
+        data.items || []
+      );
+    }
+
+    async function loadPolymarket() {
+      const query = encodeURIComponent(el.discoverQuery.value.trim());
+      const nbaOnly = el.polyNbaOnly.checked ? "1" : "0";
+      let pairParam = "";
+      if (el.pairOnly.checked) {
+        const eventId = el.espnEventId.value.trim();
+        if (!eventId) {
+          throw new Error("开启两队过滤时，请先填写 ESPN Event ID。");
+        }
+        const sport = encodeURIComponent(el.espnSport.value.trim() || "basketball");
+        const league = encodeURIComponent(el.espnLeague.value.trim() || "nba");
+        pairParam = `&pair_only=1&event_id=${encodeURIComponent(eventId)}&sport=${sport}&league=${league}`;
+      }
+      const data = await apiGet(`/api/discover/polymarket?query=${query}&limit=12&nba_only=${nbaOnly}${pairParam}`);
+      renderDiscoverTable(
+        [
+          { label: "Market", render: (r) => `<div>${r.question || ""}<div class="tiny mono">${r.id}</div></div>` },
+          { label: "Price", render: (r) => `<div class="tiny mono">${String(r.outcomePrices || "-")}</div>` },
+          { label: "End", render: (r) => `<div class="tiny">${(r.endDate || "").replace("T", " ").slice(0, 16) || "-"}</div>` },
+          { label: "Use", render: (r) => `<button class="btn-aux" data-fill-market="${r.id}">用 ID</button>` }
+        ],
+        data.items || []
+      );
+    }
+
+    el.btnStart.addEventListener("click", startPolling);
+    el.btnStop.addEventListener("click", stopPolling);
+    el.btnOnce.addEventListener("click", pollOnce);
+    el.btnClear.addEventListener("click", () => { el.logBody.innerHTML = ""; });
+    el.btnLoadGames.addEventListener("click", () => loadGamePicker().catch((err) => { el.gamePickerHint.textContent = `加载失败: ${err}`; }));
+    el.gamePicker.addEventListener("change", () => { onGamePickerChange(); });
+    el.gamePickerState.addEventListener("change", () => loadGamePicker().catch((err) => { el.gamePickerHint.textContent = `加载失败: ${err}`; }));
+    el.btnEspn.addEventListener("click", () => loadEspn().catch((err) => { el.discoverWrap.innerHTML = `<div class="empty">Error: ${err}</div>`; }));
+    el.btnKalshi.addEventListener("click", () => loadKalshi().catch((err) => { el.discoverWrap.innerHTML = `<div class="empty">Error: ${err}</div>`; }));
+    el.btnPoly.addEventListener("click", () => loadPolymarket().catch((err) => { el.discoverWrap.innerHTML = `<div class="empty">Error: ${err}</div>`; }));
+    el.btnAutofill.addEventListener("click", () => autoFillMarket().catch((err) => { el.autofillHint.textContent = `自动填充失败: ${err}`; }));
+
+    (function initDate() {
+      const d = new Date();
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const dd = String(d.getDate()).padStart(2, "0");
+      el.discoverDate.value = `${yyyy}${mm}${dd}`;
+      loadGamePicker().catch((err) => { el.gamePickerHint.textContent = `加载失败: ${err}`; });
+    })();
+  </script>
+</body>
+</html>
