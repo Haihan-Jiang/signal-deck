@@ -10,8 +10,12 @@ Then open:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
+import subprocess
+import sys
+import time
 from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -26,6 +30,41 @@ from signal_engine import compute_signal
 
 ROOT = Path(__file__).resolve().parent
 INDEX_HTML = ROOT / "web" / "index.html"
+HOTRELOAD_WATCH_FILES = (
+    ROOT / "dashboard_server.py",
+    ROOT / "live_experiment_signal.py",
+    ROOT / "signal_engine.py",
+    INDEX_HTML,
+)
+
+
+def file_signature(path: Path) -> str:
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return f"{path.name}:missing"
+    return f"{path.name}:{stat.st_mtime_ns}:{stat.st_size}"
+
+
+def compute_reload_token(paths: tuple[Path, ...] = HOTRELOAD_WATCH_FILES) -> str:
+    joined = "|".join(file_signature(path) for path in paths)
+    return hashlib.sha1(joined.encode("utf-8")).hexdigest()[:12]
+
+
+def terminate_process(child: subprocess.Popen[Any], timeout: float = 3.0) -> None:
+    if child.poll() is not None:
+        return
+    child.terminate()
+    try:
+        child.wait(timeout=timeout)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    child.kill()
+    try:
+        child.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def parse_int(value: Any, default: int) -> int:
@@ -104,6 +143,30 @@ NBA_MARKET_TERMS = [
     "utah jazz",
     "washington wizards",
 ]
+
+KALSHI_ABBR_ALIASES: dict[str, tuple[str, ...]] = {
+    "NO": ("NOP",),
+    "NOP": ("NO",),
+    "NY": ("NYK",),
+    "NYK": ("NY",),
+    "GS": ("GSW",),
+    "GSW": ("GS",),
+    "SA": ("SAS",),
+    "SAS": ("SA",),
+    "WSH": ("WAS",),
+    "WAS": ("WSH",),
+}
+
+
+def nba_abbr_aliases(abbr: str) -> list[str]:
+    key = str(abbr or "").strip().upper()
+    if not key:
+        return []
+    aliases = [key]
+    for alt in KALSHI_ABBR_ALIASES.get(key, ()):
+        if alt not in aliases:
+            aliases.append(alt)
+    return aliases
 
 
 def is_nba_polymarket(market: dict[str, Any]) -> bool:
@@ -187,9 +250,12 @@ def discover_kalshi(
     if pair_filter is not None:
         home_abbr = str(pair_filter.get("home_abbr") or "").upper()
         away_abbr = str(pair_filter.get("away_abbr") or "").upper()
-        if not home_abbr or not away_abbr:
+        home_aliases = nba_abbr_aliases(home_abbr)
+        away_aliases = nba_abbr_aliases(away_abbr)
+        if not home_aliases or not away_aliases:
             raise ValueError("Invalid pair_filter: missing home/away abbreviations.")
-        combos = {f"{away_abbr}{home_abbr}", f"{home_abbr}{away_abbr}"}
+        combos = {f"{a}{h}" for a in away_aliases for h in home_aliases}
+        combos.update({f"{h}{a}" for h in home_aliases for a in away_aliases})
 
         candidate_tickers: list[str] = []
         seen: set[str] = set()
@@ -433,8 +499,10 @@ def get_espn_event_meta(sport: str, league: str, event_id: str) -> dict[str, Any
 def build_pair_filter(event_meta: dict[str, Any]) -> dict[str, Any]:
     home_terms = set(_team_terms(event_meta["home_name"]))
     away_terms = set(_team_terms(event_meta["away_name"]))
-    home_terms.add(str(event_meta["home_abbr"]).lower())
-    away_terms.add(str(event_meta["away_abbr"]).lower())
+    for alias in nba_abbr_aliases(str(event_meta["home_abbr"])):
+        home_terms.add(alias.lower())
+    for alias in nba_abbr_aliases(str(event_meta["away_abbr"])):
+        away_terms.add(alias.lower())
     return {
         "home_terms": sorted(home_terms),
         "away_terms": sorted(away_terms),
@@ -475,10 +543,19 @@ def _kalshi_ticker_exists(ticker: str) -> bool:
 
 def autofill_kalshi_market(event_meta: dict[str, Any], yes_team: str, timeout: float) -> dict[str, Any]:
     yes_abbr = event_meta["home_abbr"] if yes_team == "home" else event_meta["away_abbr"]
-    combos = [
-        event_meta["away_abbr"] + event_meta["home_abbr"],
-        event_meta["home_abbr"] + event_meta["away_abbr"],
-    ]
+    yes_aliases = nba_abbr_aliases(yes_abbr)
+    home_aliases = nba_abbr_aliases(str(event_meta["home_abbr"]))
+    away_aliases = nba_abbr_aliases(str(event_meta["away_abbr"]))
+    combos: list[str] = []
+    for away in away_aliases:
+        for home in home_aliases:
+            pair1 = f"{away}{home}"
+            pair2 = f"{home}{away}"
+            if pair1 not in combos:
+                combos.append(pair1)
+            if pair2 not in combos:
+                combos.append(pair2)
+
     base_prefixes: list[str] = []
     preferred_tickers: list[str] = []
     for token in event_meta["date_tokens"]:
@@ -486,9 +563,10 @@ def autofill_kalshi_market(event_meta: dict[str, Any], yes_team: str, timeout: f
             base = f"KXNBAGAME-{token}{combo}"
             if base not in base_prefixes:
                 base_prefixes.append(base)
-            preferred_ticker = f"{base}-{yes_abbr}"
-            if preferred_ticker not in preferred_tickers:
-                preferred_tickers.append(preferred_ticker)
+            for yes_alias in yes_aliases:
+                preferred_ticker = f"{base}-{yes_alias}"
+                if preferred_ticker not in preferred_tickers:
+                    preferred_tickers.append(preferred_ticker)
 
     for ticker in preferred_tickers:
         if _kalshi_ticker_exists(ticker):
@@ -524,8 +602,8 @@ def autofill_kalshi_market(event_meta: dict[str, Any], yes_team: str, timeout: f
                 seen.add(cand)
                 collected.append(cand)
 
-    preferred_suffix = f"-{yes_abbr}"
-    best = next((c for c in collected if c.endswith(preferred_suffix)), None)
+    preferred_suffixes = {f"-{abbr}" for abbr in yes_aliases}
+    best = next((c for c in collected if any(c.endswith(sfx) for sfx in preferred_suffixes)), None)
     if best is None and collected:
         best = collected[0]
 
@@ -668,6 +746,13 @@ def build_signal_once(config: dict[str, Any]) -> dict[str, Any]:
             "p_live_yes": espn["p_live_yes"],
             "time_left": espn["time_left"],
             "time_total": espn["time_total"],
+            "home_team": espn["home_team"],
+            "away_team": espn["away_team"],
+            "home_abbr": espn["home_abbr"],
+            "away_abbr": espn["away_abbr"],
+            "home_score": espn["home_score"],
+            "away_score": espn["away_score"],
+            "rivalry": espn["rivalry"],
         }
 
     result = compute_signal(
@@ -701,6 +786,13 @@ def build_signal_once(config: dict[str, Any]) -> dict[str, Any]:
         "clock_seconds": espn["clock_seconds"],
         "espn_status": espn["status_state"],
         "probability_mode": espn["probability_mode"],
+        "home_team": espn["home_team"],
+        "away_team": espn["away_team"],
+        "home_abbr": espn["home_abbr"],
+        "away_abbr": espn["away_abbr"],
+        "home_score": espn["home_score"],
+        "away_score": espn["away_score"],
+        "rivalry": espn["rivalry"],
         "a_yes": market["a_yes"],
         "a_no": market["a_no"],
         "ev_yes": result.ev_yes,
@@ -709,6 +801,91 @@ def build_signal_once(config: dict[str, Any]) -> dict[str, Any]:
         "p_eff": result.p_eff,
         "required_exit_spread": result.required_exit_spread,
         "max_contracts": result.max_contracts,
+    }
+
+
+def build_winner_once(config: dict[str, Any]) -> dict[str, Any]:
+    espn_sport = str(config.get("espn_sport") or "basketball")
+    espn_league = str(config.get("espn_league") or "nba")
+    espn_event_id = str(config.get("espn_event_id") or "").strip()
+    if not espn_event_id:
+        raise ValueError("espn_event_id is required.")
+
+    timeout = parse_float(config.get("timeout"), 6.0)
+    require_live = parse_bool(config.get("require_live"), True)
+    period_seconds = parse_float(config.get("period_seconds"), 720.0)
+    regulation_periods = parse_int(config.get("regulation_periods"), 4)
+
+    espn = get_espn_state(
+        sport=espn_sport,
+        league=espn_league,
+        event_id=espn_event_id,
+        timeout=timeout,
+        yes_team="home",
+        period_seconds=period_seconds,
+        regulation_periods=regulation_periods,
+    )
+
+    if require_live and espn["status_state"] != "in":
+        return {
+            "espn_event_id": espn_event_id,
+            "state": "WAITING",
+            "espn_status": espn["status_state"],
+            "probability_mode": espn["probability_mode"],
+            "p_home": espn["home_probability"],
+            "p_away": 1.0 - espn["home_probability"],
+            "time_left": espn["time_left"],
+            "time_total": espn["time_total"],
+            "period": espn["period"],
+            "clock_seconds": espn["clock_seconds"],
+            "home_team": espn["home_team"],
+            "away_team": espn["away_team"],
+            "home_abbr": espn["home_abbr"],
+            "away_abbr": espn["away_abbr"],
+            "home_score": espn["home_score"],
+            "away_score": espn["away_score"],
+            "rivalry": espn["rivalry"],
+        }
+
+    p_home = float(espn["home_probability"])
+    p_away = 1.0 - p_home
+    if p_home > p_away:
+        guess_side = "home"
+        guess_team = str(espn["home_abbr"] or espn["home_team"] or "HOME")
+        guess_prob = p_home
+    elif p_away > p_home:
+        guess_side = "away"
+        guess_team = str(espn["away_abbr"] or espn["away_team"] or "AWAY")
+        guess_prob = p_away
+    else:
+        guess_side = "tie"
+        guess_team = "TOSS_UP"
+        guess_prob = p_home
+
+    confidence = abs(p_home - 0.5) * 2.0
+
+    return {
+        "espn_event_id": espn_event_id,
+        "state": "GUESS",
+        "guess_side": guess_side,
+        "guess_team": guess_team,
+        "guess_prob": guess_prob,
+        "confidence": confidence,
+        "p_home": p_home,
+        "p_away": p_away,
+        "espn_status": espn["status_state"],
+        "probability_mode": espn["probability_mode"],
+        "time_left": espn["time_left"],
+        "time_total": espn["time_total"],
+        "period": espn["period"],
+        "clock_seconds": espn["clock_seconds"],
+        "home_team": espn["home_team"],
+        "away_team": espn["away_team"],
+        "home_abbr": espn["home_abbr"],
+        "away_abbr": espn["away_abbr"],
+        "home_score": espn["home_score"],
+        "away_score": espn["away_score"],
+        "rivalry": espn["rivalry"],
     }
 
 
@@ -751,6 +928,16 @@ class Handler(BaseHTTPRequestHandler):
 
             if path == "/api/health":
                 self._send_json(HTTPStatus.OK, {"ok": True})
+                return
+
+            if path == "/api/dev/reload-token":
+                self._send_json(
+                    HTTPStatus.OK,
+                    {
+                        "token": compute_reload_token(),
+                        "files": [path.name for path in HOTRELOAD_WATCH_FILES],
+                    },
+                )
                 return
 
             if path == "/api/discover/espn":
@@ -830,7 +1017,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
-        if parsed.path != "/api/signal":
+        if parsed.path not in {"/api/signal", "/api/winner"}:
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "Not found"})
             return
 
@@ -841,7 +1028,10 @@ class Handler(BaseHTTPRequestHandler):
             payload = json.loads(data.decode("utf-8"))
             if not isinstance(payload, dict):
                 raise ValueError("Request body must be a JSON object.")
-            result = build_signal_once(payload)
+            if parsed.path == "/api/winner":
+                result = build_winner_once(payload)
+            else:
+                result = build_signal_once(payload)
             result["ts"] = payload.get("ts") or ""
             self._send_json(HTTPStatus.OK, result)
         except Exception as exc:
@@ -852,20 +1042,65 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run local signal dashboard web server.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8787)
+    parser.add_argument("--hotreload", action="store_true", help="Restart server automatically when watched files change.")
+    parser.add_argument("--hotreload-interval", type=float, default=1.0, help="Hotreload polling interval in seconds.")
     args = parser.parse_args()
 
     if args.port <= 0 or args.port > 65535:
         raise SystemExit("Input error: --port must be in 1..65535")
+    if args.hotreload_interval <= 0:
+        raise SystemExit("Input error: --hotreload-interval must be > 0")
 
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
-    print(f"Dashboard running on http://{args.host}:{args.port}")
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        server.server_close()
-    return 0
+    if not args.hotreload:
+        server = ThreadingHTTPServer((args.host, args.port), Handler)
+        print(f"Dashboard running on http://{args.host}:{args.port}")
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            server.server_close()
+        return 0
+
+    child_cmd = [
+        sys.executable,
+        str((ROOT / "dashboard_server.py").resolve()),
+        "--host",
+        args.host,
+        "--port",
+        str(args.port),
+    ]
+    last_token = compute_reload_token()
+    print(
+        f"Dashboard hotreload supervisor on http://{args.host}:{args.port} "
+        f"(interval={args.hotreload_interval:.1f}s)",
+        flush=True,
+    )
+    while True:
+        child: subprocess.Popen[Any] | None = None
+        try:
+            child = subprocess.Popen(child_cmd)
+            print(f"[hotreload] started child pid={child.pid}", flush=True)
+            while True:
+                time.sleep(args.hotreload_interval)
+                current_token = compute_reload_token()
+                if current_token != last_token:
+                    last_token = current_token
+                    print("[hotreload] file change detected; restarting child...", flush=True)
+                    terminate_process(child)
+                    break
+                code = child.poll()
+                if code is not None:
+                    print(f"[hotreload] child exited with code={code}; restarting...", flush=True)
+                    break
+        except Exception as exc:
+            print(f"[hotreload] supervisor error: {exc}; restarting loop...", flush=True)
+            time.sleep(max(args.hotreload_interval, 0.2))
+        except KeyboardInterrupt:
+            if child is not None:
+                terminate_process(child)
+            print("")
+            return 0
 
 
 if __name__ == "__main__":

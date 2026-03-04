@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import time
 import urllib.error
 import urllib.request
@@ -152,6 +153,59 @@ def parse_clock_to_seconds(display_clock: Any) -> float | None:
     return None
 
 
+def parse_espn_competitors(summary: dict[str, Any]) -> dict[str, Any]:
+    competitions = summary.get("header", {}).get("competitions")
+    if not isinstance(competitions, list) or not competitions:
+        return {
+            "home_name": "",
+            "away_name": "",
+            "home_abbr": "",
+            "away_abbr": "",
+            "home_score": None,
+            "away_score": None,
+        }
+
+    comp0 = competitions[0] if isinstance(competitions[0], dict) else {}
+    competitors = comp0.get("competitors")
+    if not isinstance(competitors, list):
+        competitors = []
+
+    result = {
+        "home_name": "",
+        "away_name": "",
+        "home_abbr": "",
+        "away_abbr": "",
+        "home_score": None,
+        "away_score": None,
+    }
+
+    for row in competitors:
+        if not isinstance(row, dict):
+            continue
+        side = str(row.get("homeAway") or "").lower()
+        team = row.get("team") if isinstance(row.get("team"), dict) else {}
+        name = str(team.get("displayName") or team.get("shortDisplayName") or "").strip()
+        abbr = str(team.get("abbreviation") or "").strip().upper()
+        score = None
+        raw_score = row.get("score")
+        if raw_score is not None:
+            try:
+                score = parse_float(raw_score)
+            except ValueError:
+                score = None
+
+        if side == "home":
+            result["home_name"] = name
+            result["home_abbr"] = abbr
+            result["home_score"] = score
+        elif side == "away":
+            result["away_name"] = name
+            result["away_abbr"] = abbr
+            result["away_score"] = score
+
+    return result
+
+
 def find_latest_home_win_probability(winprobability: Any) -> float | None:
     if not isinstance(winprobability, list):
         return None
@@ -171,30 +225,9 @@ def find_latest_home_win_probability(winprobability: Any) -> float | None:
 
 
 def compute_home_probability_from_score(summary: dict[str, Any]) -> float | None:
-    competitions = summary.get("header", {}).get("competitions")
-    if not isinstance(competitions, list) or not competitions:
-        return None
-    competitors = competitions[0].get("competitors")
-    if not isinstance(competitors, list):
-        return None
-
-    home_score = None
-    away_score = None
-    for team in competitors:
-        if not isinstance(team, dict):
-            continue
-        side = str(team.get("homeAway", "")).lower()
-        score = team.get("score")
-        if score is None:
-            continue
-        try:
-            numeric_score = parse_float(score)
-        except ValueError:
-            continue
-        if side == "home":
-            home_score = numeric_score
-        elif side == "away":
-            away_score = numeric_score
+    teams = parse_espn_competitors(summary)
+    home_score = teams.get("home_score")
+    away_score = teams.get("away_score")
 
     if home_score is None or away_score is None:
         return None
@@ -203,6 +236,30 @@ def compute_home_probability_from_score(summary: dict[str, Any]) -> float | None
     if home_score < away_score:
         return 0.0
     return 0.5
+
+
+def compute_live_home_probability_from_score(summary: dict[str, Any], time_left: float, time_total: float) -> float | None:
+    teams = parse_espn_competitors(summary)
+    home_score = teams.get("home_score")
+    away_score = teams.get("away_score")
+    if home_score is None or away_score is None:
+        return None
+
+    margin = float(home_score) - float(away_score)
+    if abs(margin) < 1e-9:
+        return 0.5
+
+    if time_total <= 0:
+        progress = 0.0
+    else:
+        progress = 1.0 - max(0.0, min(float(time_left) / float(time_total), 1.0))
+
+    # At the start, score margin should matter less; near the end, more.
+    scale = 14.0 - 9.0 * progress
+    scale = max(2.5, scale)
+    z = margin / scale
+    p = 1.0 / (1.0 + math.exp(-z))
+    return max(0.01, min(0.99, p))
 
 
 def get_espn_state(
@@ -260,19 +317,28 @@ def get_espn_state(
             time_left = clock_seconds
 
     time_left = max(0.0, min(time_left, total_time))
+    teams = parse_espn_competitors(summary)
 
     probability_mode = "winprobability"
     home_probability = find_latest_home_win_probability(summary.get("winprobability"))
-    if home_probability is None and completed:
-        home_probability = compute_home_probability_from_score(summary)
-        probability_mode = "final_score_fallback"
-    if home_probability is None and not completed:
-        # Pre-game or unavailable model state: neutral baseline until live probability appears.
-        home_probability = 0.5
-        probability_mode = "neutral_pre_live"
+    if home_probability is None:
+        if completed:
+            home_probability = compute_home_probability_from_score(summary)
+            probability_mode = "final_score_fallback"
+        elif status_state == "in":
+            # Live but no ESPN winprobability available: estimate from score + game progress.
+            home_probability = compute_live_home_probability_from_score(summary, time_left=time_left, time_total=total_time)
+            if home_probability is not None:
+                probability_mode = "score_time_fallback_live"
+        if home_probability is None:
+            # Pre-game or unavailable model state: neutral baseline until live probability appears.
+            home_probability = 0.5
+            probability_mode = "neutral_pre_live"
     if home_probability is None:
         raise ValueError("Unable to derive ESPN home win probability from summary.")
 
+    home_label = str(teams.get("home_abbr") or teams.get("home_name") or "HOME")
+    away_label = str(teams.get("away_abbr") or teams.get("away_name") or "AWAY")
     p_live_yes = home_probability if yes_team == "home" else 1.0 - home_probability
     return {
         "p_live_yes": p_live_yes,
@@ -283,6 +349,13 @@ def get_espn_state(
         "clock_seconds": 0.0 if clock_seconds is None else clock_seconds,
         "status_state": status_state,
         "probability_mode": probability_mode,
+        "home_team": str(teams.get("home_name") or ""),
+        "away_team": str(teams.get("away_name") or ""),
+        "home_abbr": str(teams.get("home_abbr") or ""),
+        "away_abbr": str(teams.get("away_abbr") or ""),
+        "home_score": teams.get("home_score"),
+        "away_score": teams.get("away_score"),
+        "rivalry": f"{away_label} @ {home_label}",
     }
 
 

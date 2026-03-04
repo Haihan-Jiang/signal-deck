@@ -31,6 +31,15 @@ python3 dashboard_server.py --host 127.0.0.1 --port 8787
 
 Open: <http://127.0.0.1:8787>
 
+Hotreload (dev):
+
+```bash
+cd "/Users/haihan/Documents/New project"
+python3 dashboard_server.py --host 127.0.0.1 --port 8787 --hotreload
+```
+
+With `--hotreload`, backend files and `web/index.html` changes trigger auto-restart, and the page auto-refreshes on localhost.
+
 ## Main Files
 
 - `signal_engine.py`: core signal computation

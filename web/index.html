@@ -304,6 +304,9 @@
       font-size: 0.76rem;
       color: var(--muted);
     }
+    .hidden {
+      display: none !important;
+    }
 
     .pill {
       display: inline-block;
@@ -363,7 +366,7 @@
 
       <section class="box">
         <h3>信号设置</h3>
-        <div class="grid-2">
+        <div class="grid-2" id="tradeProviderRow">
           <label>Provider
             <select id="provider">
               <option value="kalshi_espn">kalshi_espn</option>
@@ -377,12 +380,16 @@
             </select>
           </label>
         </div>
-        <label>Market (Kalshi ticker 或 Polymarket id)
+        <label id="tradeMarketLabel">Market (Kalshi ticker 或 Polymarket id)
           <input id="market" placeholder="KXNBAGAME-... 或 553824" />
         </label>
-        <div class="btn-row">
+        <div class="btn-row" id="tradeAutofillRow">
           <button class="btn-aux" id="btnAutofill">自动填充 Market</button>
           <span class="hint" id="autofillHint">先选 ESPN Event，再点自动填充。</span>
+        </div>
+        <div class="btn-row" id="tradeQuickSetupRow">
+          <button class="btn-main" id="btnQuickSetup">一键就绪（自动选赛+配市场）</button>
+          <span class="hint" id="quickSetupHint">优先进行中比赛，自动完成 Event + Market。</span>
         </div>
         <div class="grid-3">
           <label>ESPN Sport
@@ -412,9 +419,13 @@
         </div>
         <div class="btn-row">
           <button class="btn-aux" id="btnLoadGames">加载比赛</button>
-          <label class="check">
+          <label class="check" id="gameAutoFillWrap">
             <input id="gameAutoFill" type="checkbox" checked />
             <span>选中后自动配 Market</span>
+          </label>
+          <label class="check" id="autoSyncMarketWrap">
+            <input id="autoSyncMarket" type="checkbox" checked />
+            <span>切换 Event 自动重配 Market</span>
           </label>
           <span class="hint" id="gamePickerHint">支持多场同时进行时快速切换。</span>
         </div>
@@ -425,7 +436,7 @@
           <label>Timeout(s)
             <input id="timeout" type="number" step="0.1" value="6" />
           </label>
-          <label>Min EV
+          <label id="minEvWrap">Min EV
             <input id="minEv" type="number" step="0.001" value="0.03" />
           </label>
         </div>
@@ -433,9 +444,13 @@
           <input id="requireLive" type="checkbox" checked />
           <span>Require Live (开赛前输出 WAITING)</span>
         </div>
+        <div class="check">
+          <input id="winnerOnly" type="checkbox" checked />
+          <span>仅看输赢（只用实时胜率）</span>
+        </div>
       </section>
 
-      <section class="box">
+      <section class="box" id="costBox">
         <h3>成本与风控</h3>
         <div class="grid-3">
           <label>Fee Open
@@ -493,39 +508,17 @@
       </section>
 
       <section class="box">
-        <h3>发现数据源</h3>
-        <div class="grid-3">
+        <h3>比赛列表</h3>
+        <div class="grid-2">
           <label>Date (YYYYMMDD)
             <input id="discoverDate" placeholder="20260303" />
           </label>
-          <label>State
-            <select id="discoverState">
-              <option value="all">all</option>
-              <option value="pre">pre</option>
-              <option value="in">in</option>
-              <option value="post">post</option>
-            </select>
-          </label>
-          <label>Query
-            <input id="discoverQuery" placeholder="Brooklyn / Stanley Cup" />
-          </label>
+          <div class="hint">默认展示当天全部比赛；不再需要 State / Query。</div>
         </div>
-        <label class="check">
-          <input id="polyNbaOnly" type="checkbox" checked />
-          <span>Polymarket 仅显示 NBA 相关</span>
-        </label>
-        <label class="check">
-          <input id="pairOnly" type="checkbox" checked />
-          <span>仅当前 ESPN 两队相关</span>
-        </label>
-        <div class="hint">多场同时进行时：先在 ESPN 列表点某场“用 Event”，再点找市场。</div>
-        <div class="hint">关键词建议：`GAME`、`SPREAD`、`PTS`、`AST`、`3PT`（数据源主要是英文）。</div>
         <div class="btn-row">
-          <button class="btn-aux" id="btnEspn">找 ESPN</button>
-          <button class="btn-aux" id="btnKalshi">找 Kalshi</button>
-          <button class="btn-aux" id="btnPoly">找 Polymarket</button>
+          <button class="btn-aux" id="btnEspn">加载比赛列表</button>
         </div>
-        <div id="discoverWrap" class="empty">点击上面的按钮加载结果。</div>
+        <div id="discoverWrap" class="empty">点击“加载比赛列表”。</div>
       </section>
 
       <section class="box">
@@ -535,11 +528,11 @@
             <tr>
               <th>Time</th>
               <th>State</th>
-              <th>Action</th>
-              <th>Best EV</th>
-              <th>P Live</th>
-              <th>A Yes/No</th>
-              <th>Info</th>
+              <th id="thAction">Action</th>
+              <th id="thBestEv">Best EV</th>
+              <th id="thPLive">P Live</th>
+              <th id="thPrices">A Yes/No</th>
+              <th>Rivalry</th>
             </tr>
           </thead>
           <tbody id="logBody"></tbody>
@@ -551,7 +544,12 @@
   <script>
     const state = {
       timer: null,
-      historyLimit: 180
+      historyLimit: 180,
+      inFlight: false,
+      lastSyncedEventKey: "",
+      lastAutoSyncAttemptKey: "",
+      hotReloadToken: "",
+      hotReloadTimer: null
     };
 
     const el = {
@@ -564,11 +562,21 @@
       gamePicker: document.getElementById("gamePicker"),
       gamePickerState: document.getElementById("gamePickerState"),
       gameAutoFill: document.getElementById("gameAutoFill"),
+      autoSyncMarket: document.getElementById("autoSyncMarket"),
       gamePickerHint: document.getElementById("gamePickerHint"),
       interval: document.getElementById("interval"),
       timeout: document.getElementById("timeout"),
       minEv: document.getElementById("minEv"),
       requireLive: document.getElementById("requireLive"),
+      winnerOnly: document.getElementById("winnerOnly"),
+      tradeProviderRow: document.getElementById("tradeProviderRow"),
+      tradeMarketLabel: document.getElementById("tradeMarketLabel"),
+      tradeAutofillRow: document.getElementById("tradeAutofillRow"),
+      tradeQuickSetupRow: document.getElementById("tradeQuickSetupRow"),
+      gameAutoFillWrap: document.getElementById("gameAutoFillWrap"),
+      autoSyncMarketWrap: document.getElementById("autoSyncMarketWrap"),
+      minEvWrap: document.getElementById("minEvWrap"),
+      costBox: document.getElementById("costBox"),
       feeOpen: document.getElementById("feeOpen"),
       alpha: document.getElementById("alpha"),
       roundtripCost: document.getElementById("roundtripCost"),
@@ -588,10 +596,6 @@
       mProvider: document.getElementById("mProvider"),
       mMode: document.getElementById("mMode"),
       discoverDate: document.getElementById("discoverDate"),
-      discoverState: document.getElementById("discoverState"),
-      discoverQuery: document.getElementById("discoverQuery"),
-      polyNbaOnly: document.getElementById("polyNbaOnly"),
-      pairOnly: document.getElementById("pairOnly"),
       discoverWrap: document.getElementById("discoverWrap"),
       logBody: document.getElementById("logBody"),
       btnStart: document.getElementById("btnStart"),
@@ -600,10 +604,14 @@
       btnClear: document.getElementById("btnClear"),
       btnLoadGames: document.getElementById("btnLoadGames"),
       btnEspn: document.getElementById("btnEspn"),
-      btnKalshi: document.getElementById("btnKalshi"),
-      btnPoly: document.getElementById("btnPoly"),
       btnAutofill: document.getElementById("btnAutofill"),
-      autofillHint: document.getElementById("autofillHint")
+      autofillHint: document.getElementById("autofillHint"),
+      btnQuickSetup: document.getElementById("btnQuickSetup"),
+      quickSetupHint: document.getElementById("quickSetupHint"),
+      thAction: document.getElementById("thAction"),
+      thBestEv: document.getElementById("thBestEv"),
+      thPLive: document.getElementById("thPLive"),
+      thPrices: document.getElementById("thPrices")
     };
 
     function fmtNum(value, digits = 4) {
@@ -632,6 +640,87 @@
       return new Date().toISOString();
     }
 
+    function applyModeLabels() {
+      if (el.winnerOnly.checked) {
+        el.thAction.textContent = "Guess";
+        el.thBestEv.textContent = "Confidence";
+        el.thPLive.textContent = "P Home/Away";
+        el.thPrices.textContent = "-";
+      } else {
+        el.thAction.textContent = "Action";
+        el.thBestEv.textContent = "Best EV";
+        el.thPLive.textContent = "P Live";
+        el.thPrices.textContent = "A Yes/No";
+      }
+    }
+
+    function setHidden(node, hidden) {
+      if (!node) return;
+      node.classList.toggle("hidden", hidden);
+    }
+
+    function applyModeVisibility() {
+      const winnerMode = el.winnerOnly.checked;
+      setHidden(el.tradeProviderRow, winnerMode);
+      setHidden(el.tradeMarketLabel, winnerMode);
+      setHidden(el.tradeAutofillRow, winnerMode);
+      setHidden(el.tradeQuickSetupRow, winnerMode);
+      setHidden(el.gameAutoFillWrap, winnerMode);
+      setHidden(el.autoSyncMarketWrap, winnerMode);
+      setHidden(el.minEvWrap, winnerMode);
+      setHidden(el.costBox, winnerMode);
+    }
+
+    function isLocalHost() {
+      const host = String(window.location.hostname || "").toLowerCase();
+      return host === "127.0.0.1" || host === "localhost";
+    }
+
+    async function checkHotReload() {
+      if (!isLocalHost()) {
+        return;
+      }
+      try {
+        const data = await apiGet("/api/dev/reload-token");
+        const token = String(data.token || "");
+        if (!token) {
+          return;
+        }
+        if (!state.hotReloadToken) {
+          state.hotReloadToken = token;
+          return;
+        }
+        if (state.hotReloadToken !== token) {
+          window.location.reload();
+        }
+      } catch (_err) {
+        // Ignore transient errors during server restart.
+      }
+    }
+
+    function startHotReloadWatcher() {
+      if (!isLocalHost()) {
+        return;
+      }
+      checkHotReload().catch(() => {});
+      state.hotReloadTimer = setInterval(() => {
+        checkHotReload().catch(() => {});
+      }, 1500);
+    }
+
+    function currentEventKey() {
+      const provider = el.provider.value;
+      const yesTeam = el.yesTeam.value;
+      const eventId = el.espnEventId.value.trim();
+      return `${provider}|${yesTeam}|${eventId}`;
+    }
+
+    function markMarketSyncedForCurrentEvent() {
+      const key = currentEventKey();
+      state.lastSyncedEventKey = key;
+      state.lastAutoSyncAttemptKey = key;
+    }
+
     function getConfig() {
       const account = el.accountEquity.value.trim();
       return {
@@ -656,7 +745,7 @@
     }
 
     async function apiGet(url) {
-      const res = await fetch(url);
+      const res = await fetch(url, { cache: "no-store" });
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error || `HTTP ${res.status}`);
@@ -668,6 +757,22 @@
       const cfg = getConfig();
       const res = await fetch("/api/signal", {
         method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(cfg)
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      return data;
+    }
+
+    async function apiWinner() {
+      const cfg = getConfig();
+      const res = await fetch("/api/winner", {
+        method: "POST",
+        cache: "no-store",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(cfg)
       });
@@ -679,13 +784,17 @@
     }
 
     async function apiAutofill() {
-      const provider = encodeURIComponent(el.provider.value);
+      return apiAutofillBy(el.provider.value, el.espnEventId.value.trim());
+    }
+
+    async function apiAutofillBy(providerValue, eventIdValue) {
       const sport = encodeURIComponent(el.espnSport.value.trim() || "basketball");
       const league = encodeURIComponent(el.espnLeague.value.trim() || "nba");
-      const eventId = encodeURIComponent(el.espnEventId.value.trim());
+      const eventId = encodeURIComponent(eventIdValue);
       const yesTeam = encodeURIComponent(el.yesTeam.value);
       const timeout = encodeURIComponent(String(Number(el.timeout.value || 6)));
-      const url = `/api/autofill?provider=${provider}&sport=${sport}&league=${league}&event_id=${eventId}&yes_team=${yesTeam}&timeout=${timeout}`;
+      const providerEnc = encodeURIComponent(providerValue);
+      const url = `/api/autofill?provider=${providerEnc}&sport=${sport}&league=${league}&event_id=${eventId}&yes_team=${yesTeam}&timeout=${timeout}`;
       return apiGet(url);
     }
 
@@ -702,9 +811,17 @@
         el.actionText.textContent = data.action || "-";
         el.reasonText.textContent = data.reason || "-";
         updateBadge("SIGNAL", "SIGNAL");
+      } else if (data.state === "GUESS") {
+        el.actionText.textContent = data.guess_team || "-";
+        el.reasonText.textContent = `Home ${fmtNum(data.p_home, 3)} / Away ${fmtNum(data.p_away, 3)}`;
+        updateBadge("SIGNAL", "GUESS");
       } else if (data.state === "WAITING") {
         el.actionText.textContent = "WAITING";
-        el.reasonText.textContent = `等待开赛中 (${data.espn_status || "-"})`;
+        if (data.espn_status === "no_market") {
+          el.reasonText.textContent = "当前比赛未匹配到市场（NO MARKET）";
+        } else {
+          el.reasonText.textContent = `等待开赛中 (${data.espn_status || "-"})`;
+        }
         updateBadge("WAITING", "WAITING");
       } else {
         el.actionText.textContent = "ERROR";
@@ -712,28 +829,55 @@
         updateBadge("ERROR", "ERROR");
       }
 
-      el.mPLive.textContent = fmtNum(data.p_live_yes, 4);
-      el.mPEff.textContent = fmtNum(data.p_eff, 4);
-      el.mBestEv.textContent = fmtNum(data.best_ev, 4);
-      el.mPrices.textContent = `${fmtNum(data.a_yes, 3)} / ${fmtNum(data.a_no, 3)}`;
+      if (data.state === "GUESS") {
+        el.mPLive.textContent = `${fmtNum(data.p_home, 3)} / ${fmtNum(data.p_away, 3)}`;
+        el.mPEff.textContent = "-";
+        el.mBestEv.textContent = fmtNum(data.confidence, 4);
+        el.mPrices.textContent = "-";
+      } else {
+        el.mPLive.textContent = fmtNum(data.p_live_yes, 4);
+        el.mPEff.textContent = fmtNum(data.p_eff, 4);
+        el.mBestEv.textContent = fmtNum(data.best_ev, 4);
+        el.mPrices.textContent = `${fmtNum(data.a_yes, 3)} / ${fmtNum(data.a_no, 3)}`;
+      }
       el.mTime.textContent = `${fmtTime(data.time_left)} / ${fmtTime(data.time_total)}`;
       el.mStatus.textContent = data.espn_status || "-";
       el.mProvider.textContent = data.provider || "-";
-      el.mMode.textContent = data.probability_mode || "-";
+      const mode = data.probability_mode || "-";
+      if (mode === "neutral_pre_live") {
+        el.mMode.textContent = "neutral_pre_live (赛前固定 0.5)";
+      } else if (mode === "score_time_fallback_live") {
+        el.mMode.textContent = "score_time_fallback_live";
+      } else {
+        el.mMode.textContent = mode;
+      }
     }
 
     function addLog(data, error = false) {
       const tr = document.createElement("tr");
       const stateText = error ? "ERROR" : (data.state || "-");
-      const actionText = data.action || "-";
+      const winnerMode = !error && data.state === "GUESS";
+      const actionText = winnerMode ? (data.guess_team || "-") : (data.action || "-");
+      const evOrConfidence = winnerMode ? fmtNum(data.confidence, 4) : fmtNum(data.best_ev, 4);
+      const pLiveOrPair = winnerMode
+        ? `${fmtNum(data.p_home, 3)} / ${fmtNum(data.p_away, 3)}`
+        : fmtNum(data.p_live_yes, 4);
+      const pricesText = winnerMode ? "-" : `${fmtNum(data.a_yes, 3)} / ${fmtNum(data.a_no, 3)}`;
+      const rivalry = error
+        ? "-"
+        : (
+          data.rivalry ||
+          ((data.away_abbr && data.home_abbr) ? `${data.away_abbr} @ ${data.home_abbr}` : "") ||
+          ((data.away_team && data.home_team) ? `${data.away_team} @ ${data.home_team}` : "-")
+        );
       tr.innerHTML = `
         <td class="mono">${new Date().toLocaleTimeString()}</td>
         <td>${stateText}</td>
         <td class="mono">${actionText}</td>
-        <td class="mono">${fmtNum(data.best_ev, 4)}</td>
-        <td class="mono">${fmtNum(data.p_live_yes, 4)}</td>
-        <td class="mono">${fmtNum(data.a_yes, 3)} / ${fmtNum(data.a_no, 3)}</td>
-        <td class="tiny">${error ? data.error : (data.reason || data.probability_mode || "-")}</td>
+        <td class="mono">${evOrConfidence}</td>
+        <td class="mono">${pLiveOrPair}</td>
+        <td class="mono">${pricesText}</td>
+        <td class="tiny">${esc(rivalry)}</td>
       `;
       el.logBody.prepend(tr);
       while (el.logBody.children.length > state.historyLimit) {
@@ -742,7 +886,43 @@
     }
 
     async function pollOnce() {
+      if (state.inFlight) {
+        return;
+      }
+      state.inFlight = true;
       try {
+        if (el.winnerOnly.checked) {
+          const data = await apiWinner();
+          updateStatus(data);
+          addLog(data, false);
+          return;
+        }
+
+        await ensureMarketSyncedForEventChange();
+        if (!el.market.value.trim()) {
+          if (el.autoSyncMarket.checked) {
+            try {
+              await quickSetup();
+            } catch (_err) {
+              // Keep fallback handling below.
+            }
+          }
+        }
+        if (!el.market.value.trim()) {
+          updateStatus({
+            state: "WAITING",
+            espn_status: "no_market",
+          });
+          addLog({
+            state: "WAITING",
+            rivalry: "NO MARKET",
+          }, false);
+          const msg = "当前比赛未匹配到市场，已暂停轮询。请点“一键就绪”或手动选择 Market。";
+          el.autofillHint.textContent = msg;
+          stopPolling();
+          el.runState.textContent = "IDLE (NO MARKET)";
+          return;
+        }
         const data = await apiSignal();
         updateStatus(data);
         addLog(data, false);
@@ -750,6 +930,8 @@
         const data = { state: "ERROR", error: String(err) };
         updateStatus(data);
         addLog(data, true);
+      } finally {
+        state.inFlight = false;
       }
     }
 
@@ -788,11 +970,19 @@
       el.discoverWrap.querySelectorAll("[data-fill-market]").forEach((btn) => {
         btn.addEventListener("click", () => {
           el.market.value = btn.getAttribute("data-fill-market") || "";
+          markMarketSyncedForCurrentEvent();
         });
       });
       el.discoverWrap.querySelectorAll("[data-fill-event]").forEach((btn) => {
-        btn.addEventListener("click", () => {
+        btn.addEventListener("click", async () => {
           el.espnEventId.value = btn.getAttribute("data-fill-event") || "";
+          if (el.autoSyncMarket.checked) {
+            try {
+              await autoFillMarket();
+            } catch (err) {
+              el.autofillHint.textContent = `自动重配失败: ${err}`;
+            }
+          }
         });
       });
       el.discoverWrap.querySelectorAll("[data-fill-event-auto]").forEach((btn) => {
@@ -813,21 +1003,173 @@
         throw new Error("请先填写 ESPN Event ID");
       }
       el.autofillHint.textContent = "匹配中...";
-      const data = await apiAutofill();
-
-      if (data.market) {
-        el.market.value = data.market;
-      }
-      if (data.suggested_provider && data.suggested_provider !== el.provider.value) {
-        el.provider.value = data.suggested_provider;
-      }
+      const resolved = await resolveMarketForEvent(eventId, el.provider.value);
+      const data = resolved.result;
+      el.provider.value = resolved.provider;
+      el.market.value = data.market ? String(data.market) : "";
 
       const home = data.event?.home_abbr || "";
       const away = data.event?.away_abbr || "";
       const baseMsg = data.message || (data.matched ? "已匹配" : "未匹配");
-      const providerMsg = data.suggested_provider ? ` 建议 provider=${data.suggested_provider}` : "";
-      el.autofillHint.textContent = `${baseMsg} (${away} vs ${home}).${providerMsg}`;
+      const triedPath = resolved.tried.length ? ` 尝试路径: ${resolved.tried.join(" -> ")}` : "";
+      el.autofillHint.textContent = `${baseMsg} (${away} vs ${home}). provider=${resolved.provider}.${triedPath}`;
+      markMarketSyncedForCurrentEvent();
       return data;
+    }
+
+    async function ensureMarketSyncedForEventChange() {
+      const eventId = el.espnEventId.value.trim();
+      if (!eventId || !el.autoSyncMarket.checked) {
+        return;
+      }
+      const key = currentEventKey();
+      if (state.lastSyncedEventKey === key && el.market.value.trim()) {
+        return;
+      }
+      if (state.lastAutoSyncAttemptKey === key) {
+        return;
+      }
+
+      state.lastAutoSyncAttemptKey = key;
+      el.autofillHint.textContent = "检测到 Event 变化，自动重配 Market...";
+      try {
+        await autoFillMarket();
+      } catch (err) {
+        el.autofillHint.textContent = `自动重配失败: ${err}`;
+      }
+    }
+
+    async function discoverEspnNow(stateValue, limit = 30) {
+      const sport = encodeURIComponent(el.espnSport.value.trim() || "basketball");
+      const league = encodeURIComponent(el.espnLeague.value.trim() || "nba");
+      const stateEnc = encodeURIComponent(stateValue);
+      const url = `/api/discover/espn?sport=${sport}&league=${league}&state=${stateEnc}&limit=${limit}`;
+      const data = await apiGet(url);
+      return Array.isArray(data.items) ? data.items : [];
+    }
+
+    async function discoverKalshiPairGame(eventId) {
+      const sport = encodeURIComponent(el.espnSport.value.trim() || "basketball");
+      const league = encodeURIComponent(el.espnLeague.value.trim() || "nba");
+      const eventEnc = encodeURIComponent(eventId);
+      const data = await apiGet(`/api/discover/kalshi?query=GAME&limit=20&pair_only=1&event_id=${eventEnc}&sport=${sport}&league=${league}`);
+      const items = Array.isArray(data.items) ? data.items : [];
+      const pick =
+        items.find((x) => String(x.ticker || "").toUpperCase().includes("KXNBAGAME")) ||
+        items.find((x) => String(x.ticker || "").toUpperCase().includes("KXNBASPREAD")) ||
+        items[0] ||
+        null;
+      return pick;
+    }
+
+    async function resolveMarketForEvent(eventId, preferredProvider) {
+      const tried = [];
+      const triedProviders = new Set();
+
+      async function tryProvider(providerValue) {
+        if (!providerValue || triedProviders.has(providerValue)) return null;
+        triedProviders.add(providerValue);
+        const result = await apiAutofillBy(providerValue, eventId);
+        tried.push(`${providerValue}:${result.matched ? "matched" : "miss"}`);
+        return { provider: providerValue, result };
+      }
+
+      let candidate = await tryProvider(preferredProvider);
+      if (!candidate) {
+        throw new Error("provider is required.");
+      }
+
+      if (!candidate.result.matched && candidate.result.suggested_provider) {
+        const next = await tryProvider(String(candidate.result.suggested_provider));
+        if (next) {
+          candidate = next;
+        }
+      }
+
+      if (!candidate.result.matched) {
+        const kalshi = await tryProvider("kalshi_espn");
+        if (kalshi && kalshi.result.matched) {
+          candidate = kalshi;
+        }
+      }
+
+      if (!candidate.result.market) {
+        try {
+          const fallback = await discoverKalshiPairGame(eventId);
+          if (fallback && fallback.ticker) {
+            candidate = {
+              provider: "kalshi_espn",
+              result: {
+                ...candidate.result,
+                matched: true,
+                market: String(fallback.ticker),
+                message: `未直接匹配，已用两队过滤兜底：${fallback.ticker}`,
+                suggested_provider: "kalshi_espn",
+              }
+            };
+            tried.push("kalshi_pair_only:matched");
+          }
+        } catch (err) {
+          tried.push(`kalshi_pair_only:error:${String(err)}`);
+        }
+      }
+
+      return {
+        provider: candidate.provider,
+        result: candidate.result,
+        tried,
+      };
+    }
+
+    async function quickSetup() {
+      el.quickSetupHint.textContent = "加载进行中比赛...";
+      const preferredProvider = el.provider.value;
+
+      const liveEvents = await discoverEspnNow("in", 20);
+      const preEvents = liveEvents.length ? [] : await discoverEspnNow("pre", 20);
+      const sourceState = liveEvents.length ? "in" : "pre";
+      const candidates = liveEvents.length ? liveEvents.slice(0, 5) : preEvents.slice(0, 5);
+
+      if (!candidates.length) {
+        throw new Error("当前没有 in/pre 比赛可用于自动配置。");
+      }
+
+      let chosenEvent = candidates[0];
+      let chosenResult = null;
+      for (let i = 0; i < candidates.length; i += 1) {
+        const eventId = String(candidates[i].event_id || "").trim();
+        if (!eventId) continue;
+        el.quickSetupHint.textContent = `尝试第 ${i + 1} 场: ${eventId}`;
+        const current = await resolveMarketForEvent(eventId, preferredProvider);
+        if (current.result.market) {
+          chosenEvent = candidates[i];
+          chosenResult = current;
+          break;
+        }
+        if (!chosenResult) {
+          chosenResult = current;
+        }
+      }
+
+      const eventId = String(chosenEvent.event_id || "").trim();
+      if (!eventId) {
+        throw new Error("自动选择比赛失败。");
+      }
+
+      el.espnEventId.value = eventId;
+      if (chosenResult) {
+        el.provider.value = chosenResult.provider;
+        el.market.value = chosenResult.result.market ? String(chosenResult.result.market) : "";
+        markMarketSyncedForCurrentEvent();
+        const home = String(chosenResult.result.event?.home_abbr || "");
+        const away = String(chosenResult.result.event?.away_abbr || "");
+        const tag = sourceState === "in" ? "进行中" : "未开赛";
+        const marketText = chosenResult.result.market ? `market=${chosenResult.result.market}` : "market=未匹配";
+        const msg = chosenResult.result.message || "";
+        el.quickSetupHint.textContent = `${tag}: ${away} vs ${home} (${eventId})，provider=${chosenResult.provider}，${marketText}`;
+        el.autofillHint.textContent = `${msg} 尝试路径: ${chosenResult.tried.join(" -> ")}`;
+      }
+      el.gamePickerHint.textContent = `已一键配置 Event ${eventId}`;
     }
 
     function renderGamePicker(items) {
@@ -866,7 +1208,10 @@
       }
       el.espnEventId.value = picked;
       el.gamePickerHint.textContent = `已选择 Event ${picked}`;
-      if (el.gameAutoFill.checked) {
+      if (el.winnerOnly.checked) {
+        return;
+      }
+      if (el.gameAutoFill.checked || el.autoSyncMarket.checked) {
         try {
           await autoFillMarket();
         } catch (err) {
@@ -879,9 +1224,7 @@
       const sport = encodeURIComponent(el.espnSport.value.trim() || "basketball");
       const league = encodeURIComponent(el.espnLeague.value.trim() || "nba");
       const date = encodeURIComponent(el.discoverDate.value.trim());
-      const stateValue = encodeURIComponent(el.discoverState.value);
-      const query = encodeURIComponent(el.discoverQuery.value.trim());
-      const url = `/api/discover/espn?sport=${sport}&league=${league}&date=${date}&state=${stateValue}&query=${query}&limit=12`;
+      const url = `/api/discover/espn?sport=${sport}&league=${league}&date=${date}&state=all&query=&limit=20`;
       const data = await apiGet(url);
       renderDiscoverTable(
         [
@@ -889,55 +1232,6 @@
           { label: "When", render: (r) => `<div class="tiny">${r.status || "-"}<div class="mono">${(r.date || "").replace("T", " ").slice(0, 16)}</div></div>` },
           { label: "State", render: (r) => `<span class="pill">${r.state || "-"}</span>` },
           { label: "Use", render: (r) => `<button class="btn-aux" data-fill-event="${r.event_id}">用 Event</button> <button class="btn-aux" data-fill-event-auto="${r.event_id}">用并自动配</button>` }
-        ],
-        data.items || []
-      );
-    }
-
-    async function loadKalshi() {
-      const query = encodeURIComponent(el.discoverQuery.value.trim());
-      let pairParam = "";
-      if (el.pairOnly.checked) {
-        const eventId = el.espnEventId.value.trim();
-        if (!eventId) {
-          throw new Error("开启两队过滤时，请先填写 ESPN Event ID。");
-        }
-        const sport = encodeURIComponent(el.espnSport.value.trim() || "basketball");
-        const league = encodeURIComponent(el.espnLeague.value.trim() || "nba");
-        pairParam = `&pair_only=1&event_id=${encodeURIComponent(eventId)}&sport=${sport}&league=${league}`;
-      }
-      const data = await apiGet(`/api/discover/kalshi?query=${query}&limit=12${pairParam}`);
-      renderDiscoverTable(
-        [
-          { label: "Ticker", render: (r) => `<div class="mono">${r.ticker}</div><div class="tiny">${r.title || ""}</div>` },
-          { label: "Market", render: (r) => `<div class="tiny">Y ${r.yes_bid}/${r.yes_ask} · N ${r.no_bid}/${r.no_ask}</div>` },
-          { label: "Associated", render: (r) => `<div class="tiny mono">${(r.associated_markets || []).slice(0, 2).join("<br>") || "-"}</div>` },
-          { label: "Use", render: (r) => `<button class="btn-aux" data-fill-market="${r.ticker}">用 Ticker</button>` }
-        ],
-        data.items || []
-      );
-    }
-
-    async function loadPolymarket() {
-      const query = encodeURIComponent(el.discoverQuery.value.trim());
-      const nbaOnly = el.polyNbaOnly.checked ? "1" : "0";
-      let pairParam = "";
-      if (el.pairOnly.checked) {
-        const eventId = el.espnEventId.value.trim();
-        if (!eventId) {
-          throw new Error("开启两队过滤时，请先填写 ESPN Event ID。");
-        }
-        const sport = encodeURIComponent(el.espnSport.value.trim() || "basketball");
-        const league = encodeURIComponent(el.espnLeague.value.trim() || "nba");
-        pairParam = `&pair_only=1&event_id=${encodeURIComponent(eventId)}&sport=${sport}&league=${league}`;
-      }
-      const data = await apiGet(`/api/discover/polymarket?query=${query}&limit=12&nba_only=${nbaOnly}${pairParam}`);
-      renderDiscoverTable(
-        [
-          { label: "Market", render: (r) => `<div>${r.question || ""}<div class="tiny mono">${r.id}</div></div>` },
-          { label: "Price", render: (r) => `<div class="tiny mono">${String(r.outcomePrices || "-")}</div>` },
-          { label: "End", render: (r) => `<div class="tiny">${(r.endDate || "").replace("T", " ").slice(0, 16) || "-"}</div>` },
-          { label: "Use", render: (r) => `<button class="btn-aux" data-fill-market="${r.id}">用 ID</button>` }
         ],
         data.items || []
       );
@@ -951,9 +1245,12 @@
     el.gamePicker.addEventListener("change", () => { onGamePickerChange(); });
     el.gamePickerState.addEventListener("change", () => loadGamePicker().catch((err) => { el.gamePickerHint.textContent = `加载失败: ${err}`; }));
     el.btnEspn.addEventListener("click", () => loadEspn().catch((err) => { el.discoverWrap.innerHTML = `<div class="empty">Error: ${err}</div>`; }));
-    el.btnKalshi.addEventListener("click", () => loadKalshi().catch((err) => { el.discoverWrap.innerHTML = `<div class="empty">Error: ${err}</div>`; }));
-    el.btnPoly.addEventListener("click", () => loadPolymarket().catch((err) => { el.discoverWrap.innerHTML = `<div class="empty">Error: ${err}</div>`; }));
     el.btnAutofill.addEventListener("click", () => autoFillMarket().catch((err) => { el.autofillHint.textContent = `自动填充失败: ${err}`; }));
+    el.btnQuickSetup.addEventListener("click", () => quickSetup().catch((err) => { el.quickSetupHint.textContent = `一键就绪失败: ${err}`; }));
+    el.winnerOnly.addEventListener("change", () => {
+      applyModeLabels();
+      applyModeVisibility();
+    });
 
     (function initDate() {
       const d = new Date();
@@ -961,7 +1258,10 @@
       const mm = String(d.getMonth() + 1).padStart(2, "0");
       const dd = String(d.getDate()).padStart(2, "0");
       el.discoverDate.value = `${yyyy}${mm}${dd}`;
+      applyModeLabels();
+      applyModeVisibility();
       loadGamePicker().catch((err) => { el.gamePickerHint.textContent = `加载失败: ${err}`; });
+      startHotReloadWatcher();
     })();
   </script>
 </body>
