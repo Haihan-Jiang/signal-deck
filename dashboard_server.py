@@ -12,11 +12,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -36,6 +37,9 @@ HOTRELOAD_WATCH_FILES = (
     ROOT / "signal_engine.py",
     INDEX_HTML,
 )
+
+HISTORY_GATE_CACHE_TTL_SEC = 15 * 60
+HISTORY_GATE_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 
 
 def file_signature(path: Path) -> str:
@@ -107,6 +111,54 @@ def contains_query(text: str, query: str) -> bool:
     if not query:
         return True
     return query.lower() in text.lower()
+
+
+def _read_competitors_from_competition(comp: dict[str, Any]) -> dict[str, Any]:
+    competitors = comp.get("competitors")
+    if not isinstance(competitors, list):
+        competitors = []
+
+    result: dict[str, Any] = {
+        "home_name": "",
+        "away_name": "",
+        "home_abbr": "",
+        "away_abbr": "",
+        "home_score": None,
+        "away_score": None,
+        "home_winner": None,
+        "away_winner": None,
+    }
+
+    for row in competitors:
+        if not isinstance(row, dict):
+            continue
+        side = str(row.get("homeAway") or "").lower()
+        team = row.get("team") if isinstance(row.get("team"), dict) else {}
+        team_name = str(team.get("displayName") or team.get("shortDisplayName") or "").strip()
+        team_abbr = str(team.get("abbreviation") or "").strip().upper()
+        winner_raw = row.get("winner")
+        winner = bool(winner_raw) if isinstance(winner_raw, bool) else None
+
+        score: float | None = None
+        raw_score = row.get("score")
+        if raw_score is not None:
+            try:
+                score = float(raw_score)
+            except (TypeError, ValueError):
+                score = None
+
+        if side == "home":
+            result["home_name"] = team_name
+            result["home_abbr"] = team_abbr
+            result["home_score"] = score
+            result["home_winner"] = winner
+        elif side == "away":
+            result["away_name"] = team_name
+            result["away_abbr"] = team_abbr
+            result["away_score"] = score
+            result["away_winner"] = winner
+
+    return result
 
 
 NBA_MARKET_TERMS = [
@@ -217,6 +269,12 @@ def discover_espn(sport: str, league: str, date: str, state: str, query: str, li
         status = comp.get("status") if isinstance(comp, dict) else {}
         status_type = status.get("type") if isinstance(status, dict) else {}
         state_raw = str(status_type.get("state") or "").lower() if isinstance(status_type, dict) else ""
+        teams = _read_competitors_from_competition(comp) if isinstance(comp, dict) else {}
+        final_winner = ""
+        if teams.get("home_winner") is True:
+            final_winner = "home"
+        elif teams.get("away_winner") is True:
+            final_winner = "away"
         if state != "all" and state_raw != state:
             continue
         results.append(
@@ -228,6 +286,13 @@ def discover_espn(sport: str, league: str, date: str, state: str, query: str, li
                 "status": status_type.get("shortDetail") if isinstance(status_type, dict) else "",
                 "period": status.get("period") if isinstance(status, dict) else None,
                 "display_clock": status.get("displayClock") if isinstance(status, dict) else None,
+                "home_name": teams.get("home_name"),
+                "away_name": teams.get("away_name"),
+                "home_abbr": teams.get("home_abbr"),
+                "away_abbr": teams.get("away_abbr"),
+                "home_score": teams.get("home_score"),
+                "away_score": teams.get("away_score"),
+                "final_winner": final_winner,
             }
         )
         if len(results) >= limit:
@@ -494,6 +559,589 @@ def get_espn_event_meta(sport: str, league: str, event_id: str) -> dict[str, Any
         "home_abbr": home_abbr,
         "away_abbr": away_abbr,
     }
+
+
+def _parse_score_value(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_clock_display_to_seconds(display_clock: str) -> float | None:
+    text = display_clock.strip()
+    if not text:
+        return None
+    parts = text.split(":")
+    try:
+        if len(parts) == 2:
+            minutes = int(parts[0])
+            seconds = float(parts[1])
+            return minutes * 60.0 + seconds
+        if len(parts) == 1:
+            return float(parts[0])
+    except ValueError:
+        return None
+    return None
+
+
+def _clamp01(value: float) -> float:
+    return max(0.0, min(1.0, value))
+
+
+def _estimate_home_probability_from_margin(margin: float, time_left: float, time_total: float) -> float:
+    if abs(margin) < 1e-9:
+        return 0.5
+    if time_total <= 0:
+        progress = 0.0
+    else:
+        progress = 1.0 - max(0.0, min(float(time_left) / float(time_total), 1.0))
+    scale = 14.0 - 9.0 * progress
+    scale = max(2.5, scale)
+    z = margin / scale
+    p = 1.0 / (1.0 + math.exp(-z))
+    return _clamp01(max(0.01, min(0.99, p)))
+
+
+def _compute_play_time_left(
+    period: int,
+    display_clock: str,
+    period_seconds: float,
+    regulation_periods: int,
+    time_total: float,
+) -> float:
+    if period <= 0:
+        period = 1
+    clock_seconds = _parse_clock_display_to_seconds(display_clock)
+    if clock_seconds is None:
+        # If clock is missing, assume 0 for deterministic replay output.
+        clock_seconds = 0.0
+    if period <= regulation_periods:
+        remaining_periods = max(0, regulation_periods - period)
+        time_left = clock_seconds + remaining_periods * period_seconds
+    else:
+        # Overtime: keep same semantics as live mode.
+        time_left = clock_seconds
+    return max(0.0, min(time_left, time_total))
+
+
+def _extract_summary_match_meta(summary: dict[str, Any], event_id: str) -> dict[str, Any]:
+    competitions = summary.get("header", {}).get("competitions")
+    if not isinstance(competitions, list) or not competitions:
+        raise ValueError("ESPN summary missing competitions.")
+    comp0 = competitions[0] if isinstance(competitions[0], dict) else {}
+    teams = _read_competitors_from_competition(comp0)
+
+    home_score = teams.get("home_score")
+    away_score = teams.get("away_score")
+    final_winner = ""
+    if teams.get("home_winner") is True:
+        final_winner = "home"
+    elif teams.get("away_winner") is True:
+        final_winner = "away"
+    elif isinstance(home_score, (int, float)) and isinstance(away_score, (int, float)):
+        if home_score > away_score:
+            final_winner = "home"
+        elif away_score > home_score:
+            final_winner = "away"
+        else:
+            final_winner = "tie"
+
+    status = comp0.get("status") if isinstance(comp0, dict) else {}
+    status_type = status.get("type") if isinstance(status, dict) else {}
+    state = str(status_type.get("state") or "").lower() if isinstance(status_type, dict) else ""
+    short_detail = str(status_type.get("shortDetail") or "") if isinstance(status_type, dict) else ""
+
+    home_abbr = str(teams.get("home_abbr") or "").upper()
+    away_abbr = str(teams.get("away_abbr") or "").upper()
+    rivalry = f"{away_abbr} @ {home_abbr}".strip(" @")
+
+    return {
+        "event_id": event_id,
+        "state": state,
+        "status": short_detail,
+        "home_name": str(teams.get("home_name") or ""),
+        "away_name": str(teams.get("away_name") or ""),
+        "home_abbr": home_abbr,
+        "away_abbr": away_abbr,
+        "home_score": home_score,
+        "away_score": away_score,
+        "final_winner": final_winner,
+        "rivalry": rivalry,
+    }
+
+
+def _sample_timeline(rows: list[dict[str, Any]], max_points: int) -> list[dict[str, Any]]:
+    if max_points <= 0 or len(rows) <= max_points:
+        return rows
+    step = (len(rows) - 1) / float(max_points - 1)
+    out: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for i in range(max_points):
+        idx = int(round(i * step))
+        idx = max(0, min(len(rows) - 1, idx))
+        if idx in seen:
+            continue
+        seen.add(idx)
+        out.append(rows[idx])
+    if out[-1] is not rows[-1]:
+        out.append(rows[-1])
+    return out
+
+
+def build_history_replay(config: dict[str, Any]) -> dict[str, Any]:
+    sport = str(config.get("espn_sport") or config.get("sport") or "basketball").strip() or "basketball"
+    league = str(config.get("espn_league") or config.get("league") or "nba").strip() or "nba"
+    event_id = str(config.get("espn_event_id") or config.get("event_id") or "").strip()
+    if not event_id:
+        raise ValueError("event_id is required.")
+
+    timeout = parse_float(config.get("timeout"), 8.0)
+    period_seconds = parse_float(config.get("period_seconds"), 720.0)
+    regulation_periods = parse_int(config.get("regulation_periods"), 4)
+    winner_max_time_left = parse_float(config.get("winner_max_time_left"), 360.0)
+    winner_min_lead = parse_float(config.get("winner_min_lead"), 10.0)
+    winner_p_min = parse_float(config.get("winner_p_min"), 0.80)
+    winner_p_max = parse_float(config.get("winner_p_max"), 0.97)
+    winner_min_edge = parse_float(config.get("winner_min_edge"), 0.025)
+    fee_total = parse_float(config.get("fee_total"), 0.02)
+    max_points = max(40, min(parse_int(config.get("max_points"), 220), 900))
+    include_timeline = parse_bool(config.get("include_timeline"), True)
+
+    if period_seconds <= 0:
+        raise ValueError("period_seconds must be > 0.")
+    if regulation_periods <= 0:
+        raise ValueError("regulation_periods must be > 0.")
+    if winner_max_time_left < 0:
+        raise ValueError("winner_max_time_left must be >= 0.")
+    if winner_min_lead < 0:
+        raise ValueError("winner_min_lead must be >= 0.")
+    if winner_min_edge < 0:
+        raise ValueError("winner_min_edge must be >= 0.")
+    if not (0 <= winner_p_min <= 1 and 0 <= winner_p_max <= 1 and winner_p_min <= winner_p_max):
+        raise ValueError("winner_p_min/winner_p_max must satisfy 0 <= min <= max <= 1.")
+
+    summary_url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/summary?event={event_id}"
+    summary = fetch_json(summary_url, timeout=timeout)
+    if not isinstance(summary, dict):
+        raise ValueError("ESPN summary payload must be a JSON object.")
+
+    match_meta = _extract_summary_match_meta(summary, event_id=event_id)
+    plays = summary.get("plays")
+    if not isinstance(plays, list) or not plays:
+        raise ValueError("ESPN summary missing play-by-play data.")
+
+    winprob_map: dict[str, float] = {}
+    winprobability = summary.get("winprobability")
+    if isinstance(winprobability, list):
+        for row in winprobability:
+            if not isinstance(row, dict):
+                continue
+            play_id = str(row.get("playId") or "").strip()
+            if not play_id:
+                continue
+            value = row.get("homeWinPercentage")
+            if value is None:
+                continue
+            try:
+                p_home = float(value)
+            except (TypeError, ValueError):
+                continue
+            if 0.0 <= p_home <= 1.0:
+                winprob_map[play_id] = p_home
+
+    time_total = float(period_seconds * regulation_periods)
+    timeline: list[dict[str, Any]] = []
+    signal_rows: list[dict[str, Any]] = []
+    for idx, play in enumerate(plays):
+        if not isinstance(play, dict):
+            continue
+
+        home_score = _parse_score_value(play.get("homeScore"))
+        away_score = _parse_score_value(play.get("awayScore"))
+        if home_score is None or away_score is None:
+            continue
+
+        period_obj = play.get("period") if isinstance(play.get("period"), dict) else {}
+        period = parse_int(period_obj.get("number"), 1)
+        clock_obj = play.get("clock") if isinstance(play.get("clock"), dict) else {}
+        display_clock = str(clock_obj.get("displayValue") or "")
+        time_left = _compute_play_time_left(
+            period=period,
+            display_clock=display_clock,
+            period_seconds=period_seconds,
+            regulation_periods=regulation_periods,
+            time_total=time_total,
+        )
+        progress = 1.0 - (_clamp01(time_left / time_total) if time_total > 0 else 0.0)
+
+        play_id = str(play.get("id") or play.get("sequenceNumber") or idx)
+        p_home = winprob_map.get(play_id)
+        probability_source = "winprobability"
+        if p_home is None:
+            p_home = _estimate_home_probability_from_margin(home_score - away_score, time_left=time_left, time_total=time_total)
+            probability_source = "score_time_fallback"
+
+        p_home = _clamp01(float(p_home))
+        p_away = 1.0 - p_home
+        margin = home_score - away_score
+        lead = abs(margin)
+
+        guess_side = "tie"
+        guess_team = "TIE"
+        guess_prob = 0.5
+        action = None
+        if margin > 0:
+            guess_side = "home"
+            guess_team = str(match_meta["home_abbr"] or match_meta["home_name"] or "HOME")
+            guess_prob = p_home
+            action = "BUY_HOME"
+        elif margin < 0:
+            guess_side = "away"
+            guess_team = str(match_meta["away_abbr"] or match_meta["away_name"] or "AWAY")
+            guess_prob = p_away
+            action = "BUY_AWAY"
+
+        time_ok = time_left <= winner_max_time_left
+        lead_ok = lead >= winner_min_lead
+        prob_ok = winner_p_min <= guess_prob <= winner_p_max if guess_side in {"home", "away"} else False
+        break_even_buy_price = max(0.0, guess_prob - fee_total)
+        recommended_max_buy_price = max(0.0, break_even_buy_price - winner_min_edge)
+        pass_all = guess_side in {"home", "away"} and time_ok and lead_ok and prob_ok and recommended_max_buy_price > 0.0
+
+        row = {
+            "idx": idx,
+            "play_id": play_id,
+            "period": period,
+            "clock": display_clock,
+            "text": str(play.get("shortDescription") or play.get("text") or ""),
+            "home_score": home_score,
+            "away_score": away_score,
+            "lead": lead,
+            "lead_signed": margin,
+            "time_left": time_left,
+            "time_total": time_total,
+            "progress": progress,
+            "p_home": p_home,
+            "p_away": p_away,
+            "guess_side": guess_side,
+            "guess_team": guess_team,
+            "guess_prob": guess_prob,
+            "action": action,
+            "time_ok": time_ok,
+            "lead_ok": lead_ok,
+            "prob_ok": prob_ok,
+            "pass_all": pass_all,
+            "break_even_buy_price": break_even_buy_price,
+            "recommended_max_buy_price": recommended_max_buy_price,
+            "probability_source": probability_source,
+        }
+        timeline.append(row)
+        if pass_all:
+            signal_rows.append(row)
+
+    if not timeline:
+        raise ValueError("回放失败：比赛没有可用比分时间线。")
+
+    final_winner = str(match_meta.get("final_winner") or "")
+    signal_preview: list[dict[str, Any]] = []
+    signal_hit_count = 0
+    for row in signal_rows:
+        hit = final_winner in {"home", "away"} and row["guess_side"] == final_winner
+        if hit:
+            signal_hit_count += 1
+        signal_preview.append(
+            {
+                "period": row["period"],
+                "clock": row["clock"],
+                "time_left": row["time_left"],
+                "lead": row["lead"],
+                "guess_side": row["guess_side"],
+                "guess_team": row["guess_team"],
+                "guess_prob": row["guess_prob"],
+                "action": row["action"],
+                "recommended_max_buy_price": row["recommended_max_buy_price"],
+                "break_even_buy_price": row["break_even_buy_price"],
+                "hit": hit,
+            }
+        )
+
+    signal_win_rate = signal_hit_count / len(signal_rows) if signal_rows else None
+    first_signal = signal_preview[0] if signal_preview else None
+    best_signal = max(signal_preview, key=lambda x: float(x["recommended_max_buy_price"])) if signal_preview else None
+    recommendation: dict[str, Any]
+    if first_signal is None:
+        recommendation = {
+            "status": "NO_SIGNAL",
+            "reason": "该场比赛未触发你的三项过滤条件。",
+        }
+    else:
+        recommendation = {
+            "status": "BUY",
+            "entry_style": "first_signal",
+            "action": first_signal["action"],
+            "team": first_signal["guess_team"],
+            "team_side": first_signal["guess_side"],
+            "guess_prob": first_signal["guess_prob"],
+            "lead": first_signal["lead"],
+            "time_left": first_signal["time_left"],
+            "recommended_max_buy_price": first_signal["recommended_max_buy_price"],
+            "break_even_buy_price": first_signal["break_even_buy_price"],
+            "historical_result": "WIN" if first_signal["hit"] else "LOSE",
+        }
+
+    payload = {
+        "event_id": event_id,
+        "sport": sport,
+        "league": league,
+        "match": match_meta,
+        "rules": {
+            "winner_max_time_left": winner_max_time_left,
+            "winner_min_lead": winner_min_lead,
+            "winner_p_min": winner_p_min,
+            "winner_p_max": winner_p_max,
+            "winner_min_edge": winner_min_edge,
+            "fee_total": fee_total,
+        },
+        "metrics": {
+            "timeline_points": len(timeline),
+            "signals": len(signal_rows),
+            "signal_hits": signal_hit_count,
+            "signal_win_rate": signal_win_rate,
+            "first_signal": first_signal,
+            "best_signal": best_signal,
+        },
+        "recommendation": recommendation,
+    }
+    if include_timeline:
+        payload["timeline"] = _sample_timeline(timeline, max_points=max_points)
+        payload["signals_preview"] = signal_preview[:20]
+    else:
+        payload["timeline"] = []
+        payload["signals_preview"] = []
+    return payload
+
+
+def _history_gate_cache_key(payload: dict[str, Any]) -> str:
+    compact = json.dumps(payload, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+    return hashlib.sha1(compact.encode("utf-8")).hexdigest()
+
+
+def _recent_date_tokens(days: int, tz_name: str = "America/Los_Angeles") -> list[str]:
+    now = datetime.now(ZoneInfo(tz_name))
+    out: list[str] = []
+    for offset in range(1, days + 1):
+        token = (now - timedelta(days=offset)).strftime("%Y%m%d")
+        out.append(token)
+    return out
+
+
+def build_history_gate(config: dict[str, Any]) -> dict[str, Any]:
+    sport = str(config.get("espn_sport") or config.get("sport") or "basketball").strip() or "basketball"
+    league = str(config.get("espn_league") or config.get("league") or "nba").strip() or "nba"
+    timeout = parse_float(config.get("timeout"), 8.0)
+    lookback_days = max(3, min(parse_int(config.get("lookback_days"), 30), 120))
+    max_games = max(20, min(parse_int(config.get("max_games"), 300), 600))
+    min_games = max(1, min(parse_int(config.get("min_games"), 80), 600))
+    min_trigger_games = max(1, min(parse_int(config.get("min_trigger_games"), 20), 600))
+    min_first_hit_rate = parse_float(config.get("min_first_hit_rate"), 0.93)
+    use_cache = parse_bool(config.get("use_cache"), True)
+
+    if not (0.0 <= min_first_hit_rate <= 1.0):
+        raise ValueError("min_first_hit_rate must be in [0,1].")
+
+    winner_max_time_left = parse_float(config.get("winner_max_time_left"), 360.0)
+    winner_min_lead = parse_float(config.get("winner_min_lead"), 10.0)
+    winner_p_min = parse_float(config.get("winner_p_min"), 0.80)
+    winner_p_max = parse_float(config.get("winner_p_max"), 0.98)
+    winner_min_edge = parse_float(config.get("winner_min_edge"), 0.025)
+    fee_total = parse_float(config.get("fee_total"), 0.02)
+
+    if not (0 <= winner_p_min <= 1 and 0 <= winner_p_max <= 1 and winner_p_min <= winner_p_max):
+        raise ValueError("winner_p_min/winner_p_max must satisfy 0 <= min <= max <= 1.")
+
+    gate_inputs = {
+        "sport": sport,
+        "league": league,
+        "lookback_days": lookback_days,
+        "max_games": max_games,
+        "min_games": min_games,
+        "min_trigger_games": min_trigger_games,
+        "min_first_hit_rate": min_first_hit_rate,
+        "winner_max_time_left": winner_max_time_left,
+        "winner_min_lead": winner_min_lead,
+        "winner_p_min": winner_p_min,
+        "winner_p_max": winner_p_max,
+        "winner_min_edge": winner_min_edge,
+        "fee_total": fee_total,
+    }
+    cache_key = _history_gate_cache_key(gate_inputs)
+    now_ts = time.time()
+    if use_cache:
+        cached = HISTORY_GATE_CACHE.get(cache_key)
+        if cached is not None:
+            cached_ts, cached_payload = cached
+            age = max(0, int(now_ts - cached_ts))
+            if age <= HISTORY_GATE_CACHE_TTL_SEC:
+                payload = dict(cached_payload)
+                payload["cache"] = {
+                    "hit": True,
+                    "age_seconds": age,
+                    "ttl_seconds": HISTORY_GATE_CACHE_TTL_SEC,
+                }
+                return payload
+
+    post_events: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for token in _recent_date_tokens(lookback_days):
+        rows = discover_espn(
+            sport=sport,
+            league=league,
+            date=token,
+            state="post",
+            query="",
+            limit=50,
+        )
+        for row in rows:
+            event_id = str(row.get("event_id") or "").strip()
+            if not event_id or event_id in seen_ids:
+                continue
+            seen_ids.add(event_id)
+            post_events.append(row)
+            if len(post_events) >= max_games:
+                break
+        if len(post_events) >= max_games:
+            break
+
+    games_analyzed = 0
+    trigger_games = 0
+    signals_total = 0
+    first_signal_total = 0
+    first_signal_hits = 0
+    errors = 0
+    sample_first_signals: list[dict[str, Any]] = []
+
+    for row in post_events:
+        event_id = str(row.get("event_id") or "").strip()
+        if not event_id:
+            continue
+        try:
+            replay = build_history_replay(
+                {
+                    "sport": sport,
+                    "league": league,
+                    "event_id": event_id,
+                    "timeout": timeout,
+                    "winner_max_time_left": winner_max_time_left,
+                    "winner_min_lead": winner_min_lead,
+                    "winner_p_min": winner_p_min,
+                    "winner_p_max": winner_p_max,
+                    "winner_min_edge": winner_min_edge,
+                    "fee_total": fee_total,
+                    "max_points": 40,
+                    "include_timeline": False,
+                }
+            )
+        except Exception:
+            errors += 1
+            continue
+
+        games_analyzed += 1
+        metrics = replay.get("metrics") if isinstance(replay.get("metrics"), dict) else {}
+        signal_count = parse_int(metrics.get("signals"), 0)
+        signals_total += signal_count
+        if signal_count > 0:
+            trigger_games += 1
+
+        first_signal = metrics.get("first_signal")
+        if isinstance(first_signal, dict) and first_signal:
+            first_signal_total += 1
+            hit = bool(first_signal.get("hit"))
+            if hit:
+                first_signal_hits += 1
+            if len(sample_first_signals) < 8:
+                match = replay.get("match") if isinstance(replay.get("match"), dict) else {}
+                sample_first_signals.append(
+                    {
+                        "event_id": event_id,
+                        "rivalry": match.get("rivalry") or row.get("name") or event_id,
+                        "time_left": first_signal.get("time_left"),
+                        "lead": first_signal.get("lead"),
+                        "guess_side": first_signal.get("guess_side"),
+                        "guess_prob": first_signal.get("guess_prob"),
+                        "recommended_max_buy_price": first_signal.get("recommended_max_buy_price"),
+                        "hit": hit,
+                    }
+                )
+
+    trigger_rate_game = trigger_games / games_analyzed if games_analyzed > 0 else 0.0
+    first_signal_hit_rate = first_signal_hits / first_signal_total if first_signal_total > 0 else None
+
+    reasons: list[str] = []
+    if games_analyzed < min_games:
+        reasons.append(f"样本不足：{games_analyzed} < min_games {min_games}")
+    if trigger_games < min_trigger_games:
+        reasons.append(f"触发场次不足：{trigger_games} < min_trigger_games {min_trigger_games}")
+    if first_signal_hit_rate is None:
+        reasons.append("历史窗口内没有触发首信号，无法评估命中率。")
+    elif first_signal_hit_rate < min_first_hit_rate:
+        reasons.append(
+            f"首信号命中率不足：{first_signal_hit_rate:.4f} < min_first_hit_rate {min_first_hit_rate:.4f}"
+        )
+
+    passed = not reasons
+    gate_message = "PASS：可启用历史稳健模式。" if passed else "BLOCK：未通过历史门控。"
+
+    payload = {
+        "mode": "robust_history_gate",
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "sport": sport,
+        "league": league,
+        "window": {
+            "lookback_days": lookback_days,
+            "max_games": max_games,
+            "min_games": min_games,
+        },
+        "rules": {
+            "winner_max_time_left": winner_max_time_left,
+            "winner_min_lead": winner_min_lead,
+            "winner_p_min": winner_p_min,
+            "winner_p_max": winner_p_max,
+            "winner_min_edge": winner_min_edge,
+            "fee_total": fee_total,
+        },
+        "metrics": {
+            "games_seen": len(post_events),
+            "games_analyzed": games_analyzed,
+            "errors": errors,
+            "trigger_games": trigger_games,
+            "trigger_rate_game": trigger_rate_game,
+            "signals_total": signals_total,
+            "first_signal_total": first_signal_total,
+            "first_signal_hits": first_signal_hits,
+            "first_signal_hit_rate": first_signal_hit_rate,
+        },
+        "gate": {
+            "passed": passed,
+            "message": gate_message,
+            "reasons": reasons,
+            "min_trigger_games": min_trigger_games,
+            "min_first_hit_rate": min_first_hit_rate,
+        },
+        "samples": sample_first_signals,
+        "cache": {
+            "hit": False,
+            "age_seconds": 0,
+            "ttl_seconds": HISTORY_GATE_CACHE_TTL_SEC,
+        },
+    }
+
+    if use_cache:
+        # Keep cache payload immutable for future reuse.
+        HISTORY_GATE_CACHE[cache_key] = (now_ts, dict(payload))
+    return payload
 
 
 def build_pair_filter(event_meta: dict[str, Any]) -> dict[str, Any]:
@@ -811,10 +1459,33 @@ def build_winner_once(config: dict[str, Any]) -> dict[str, Any]:
     if not espn_event_id:
         raise ValueError("espn_event_id is required.")
 
+    provider = str(config.get("provider") or "").strip()
+    market_id = str(config.get("market") or "").strip()
+    yes_team = str(config.get("yes_team") or "home").lower()
+    if yes_team not in {"home", "away"}:
+        raise ValueError("yes_team must be 'home' or 'away'.")
+
     timeout = parse_float(config.get("timeout"), 6.0)
     require_live = parse_bool(config.get("require_live"), True)
     period_seconds = parse_float(config.get("period_seconds"), 720.0)
     regulation_periods = parse_int(config.get("regulation_periods"), 4)
+    winner_max_time_left = parse_float(config.get("winner_max_time_left"), 360.0)
+    winner_min_lead = parse_float(config.get("winner_min_lead"), 10.0)
+    winner_p_min = parse_float(config.get("winner_p_min"), 0.80)
+    winner_p_max = parse_float(config.get("winner_p_max"), 0.97)
+    winner_min_edge = parse_float(config.get("winner_min_edge"), 0.025)
+    winner_max_buy_price = parse_float(config.get("winner_max_buy_price"), 0.91)
+
+    if winner_max_time_left < 0:
+        raise ValueError("winner_max_time_left must be >= 0.")
+    if winner_min_lead < 0:
+        raise ValueError("winner_min_lead must be >= 0.")
+    if winner_min_edge < 0:
+        raise ValueError("winner_min_edge must be >= 0.")
+    if not (0 <= winner_max_buy_price <= 1):
+        raise ValueError("winner_max_buy_price must be in [0,1].")
+    if not (0 <= winner_p_min <= 1 and 0 <= winner_p_max <= 1 and winner_p_min <= winner_p_max):
+        raise ValueError("winner_p_min/winner_p_max must satisfy 0 <= min <= max <= 1.")
 
     espn = get_espn_state(
         sport=espn_sport,
@@ -826,55 +1497,32 @@ def build_winner_once(config: dict[str, Any]) -> dict[str, Any]:
         regulation_periods=regulation_periods,
     )
 
-    if require_live and espn["status_state"] != "in":
-        return {
-            "espn_event_id": espn_event_id,
-            "state": "WAITING",
-            "espn_status": espn["status_state"],
-            "probability_mode": espn["probability_mode"],
-            "p_home": espn["home_probability"],
-            "p_away": 1.0 - espn["home_probability"],
-            "time_left": espn["time_left"],
-            "time_total": espn["time_total"],
-            "period": espn["period"],
-            "clock_seconds": espn["clock_seconds"],
-            "home_team": espn["home_team"],
-            "away_team": espn["away_team"],
-            "home_abbr": espn["home_abbr"],
-            "away_abbr": espn["away_abbr"],
-            "home_score": espn["home_score"],
-            "away_score": espn["away_score"],
-            "rivalry": espn["rivalry"],
-        }
-
     p_home = float(espn["home_probability"])
     p_away = 1.0 - p_home
-    if p_home > p_away:
-        guess_side = "home"
-        guess_team = str(espn["home_abbr"] or espn["home_team"] or "HOME")
-        guess_prob = p_home
-    elif p_away > p_home:
-        guess_side = "away"
-        guess_team = str(espn["away_abbr"] or espn["away_team"] or "AWAY")
-        guess_prob = p_away
-    else:
-        guess_side = "tie"
-        guess_team = "TOSS_UP"
-        guess_prob = p_home
-
     confidence = abs(p_home - 0.5) * 2.0
 
-    return {
+    home_score_raw = espn.get("home_score")
+    away_score_raw = espn.get("away_score")
+    home_score: float | None
+    away_score: float | None
+    if home_score_raw is None or away_score_raw is None:
+        home_score = None
+        away_score = None
+    else:
+        home_score = float(home_score_raw)
+        away_score = float(away_score_raw)
+    lead: float | None = None
+    if home_score is not None and away_score is not None:
+        lead = abs(home_score - away_score)
+
+    common = {
         "espn_event_id": espn_event_id,
-        "state": "GUESS",
-        "guess_side": guess_side,
-        "guess_team": guess_team,
-        "guess_prob": guess_prob,
-        "confidence": confidence,
-        "p_home": p_home,
-        "p_away": p_away,
+        "provider": provider,
+        "market": market_id,
         "espn_status": espn["status_state"],
         "probability_mode": espn["probability_mode"],
+        "p_home": p_home,
+        "p_away": p_away,
         "time_left": espn["time_left"],
         "time_total": espn["time_total"],
         "period": espn["period"],
@@ -886,6 +1534,110 @@ def build_winner_once(config: dict[str, Any]) -> dict[str, Any]:
         "home_score": espn["home_score"],
         "away_score": espn["away_score"],
         "rivalry": espn["rivalry"],
+        "lead": lead,
+        "confidence": confidence,
+        "winner_rules": {
+            "max_time_left": winner_max_time_left,
+            "min_lead": winner_min_lead,
+            "p_min": winner_p_min,
+            "p_max": winner_p_max,
+            "min_edge": winner_min_edge,
+            "max_buy_price": winner_max_buy_price,
+        },
+    }
+
+    if require_live and espn["status_state"] != "in":
+        return {
+            "state": "WAITING",
+            **common,
+        }
+
+    if home_score is None or away_score is None:
+        return {
+            "state": "NO_TRADE",
+            "reason": "ESPN 暂无比分，无法判断分差。",
+            **common,
+        }
+
+    if home_score > away_score:
+        guess_side = "home"
+        guess_team = str(espn["home_abbr"] or espn["home_team"] or "HOME")
+        guess_prob = p_home
+    elif away_score > home_score:
+        guess_side = "away"
+        guess_team = str(espn["away_abbr"] or espn["away_team"] or "AWAY")
+        guess_prob = p_away
+    else:
+        return {
+            "state": "NO_TRADE",
+            "reason": "当前平分，跳过。",
+            "guess_side": "tie",
+            "guess_team": "TOSS_UP",
+            "guess_prob": p_home,
+            **common,
+        }
+
+    blockers: list[str] = []
+    if espn["time_left"] > winner_max_time_left:
+        blockers.append(f"剩余时间 {espn['time_left']:.0f}s > 阈值 {winner_max_time_left:.0f}s")
+    if lead is None or lead < winner_min_lead:
+        blockers.append(f"分差 {0.0 if lead is None else lead:.0f} < 阈值 {winner_min_lead:.0f}")
+    if not (winner_p_min <= guess_prob <= winner_p_max):
+        blockers.append(f"领先方胜率 {guess_prob:.3f} 不在区间 [{winner_p_min:.3f}, {winner_p_max:.3f}]")
+
+    market: dict[str, Any] | None = None
+    market_error: str | None = None
+    if provider and market_id:
+        try:
+            if provider == "kalshi_espn":
+                market = get_kalshi_prices(market_id, timeout=timeout)
+            elif provider == "polymarket_espn":
+                market = get_polymarket_prices(market_id, timeout=timeout)
+            else:
+                market_error = "未知 provider，无法读取盘口价格。"
+        except Exception as exc:
+            market_error = str(exc)
+
+    a_yes = None if market is None else market.get("a_yes")
+    a_no = None if market is None else market.get("a_no")
+    action = None
+    entry_price = None
+    edge = None
+    if market is not None and isinstance(a_yes, (float, int)) and isinstance(a_no, (float, int)):
+        if guess_side == yes_team:
+            action = "BUY_YES"
+            entry_price = float(a_yes)
+        else:
+            action = "BUY_NO"
+            entry_price = float(a_no)
+        if entry_price > winner_max_buy_price:
+            blockers.append(f"买入价 {entry_price:.4f} > 上限 {winner_max_buy_price:.4f}")
+        edge = guess_prob - entry_price
+        if edge < winner_min_edge:
+            blockers.append(f"边际 {edge:.4f} < 阈值 {winner_min_edge:.4f}")
+
+    payload = {
+        "guess_side": guess_side,
+        "guess_team": guess_team,
+        "guess_prob": guess_prob,
+        "action": action,
+        "a_yes": a_yes,
+        "a_no": a_no,
+        "entry_price": entry_price,
+        "edge": edge,
+        "market_error": market_error,
+        **common,
+    }
+    if blockers:
+        return {
+            "state": "NO_TRADE",
+            "reason": "; ".join(blockers),
+            **payload,
+        }
+    return {
+        "state": "GUESS",
+        "reason": "通过末段过滤，可执行。",
+        **payload,
     }
 
 
@@ -1007,6 +1759,51 @@ class Handler(BaseHTTPRequestHandler):
                     event_id=query_first(query, "event_id", ""),
                     yes_team=query_first(query, "yes_team", "home"),
                     timeout=parse_float(query_first(query, "timeout", "8"), 8.0),
+                )
+                self._send_json(HTTPStatus.OK, payload)
+                return
+
+            if path == "/api/history/replay":
+                payload = build_history_replay(
+                    {
+                        "sport": query_first(query, "sport", "basketball"),
+                        "league": query_first(query, "league", "nba"),
+                        "event_id": query_first(query, "event_id", ""),
+                        "timeout": parse_float(query_first(query, "timeout", "8"), 8.0),
+                        "period_seconds": parse_float(query_first(query, "period_seconds", "720"), 720.0),
+                        "regulation_periods": parse_int(query_first(query, "regulation_periods", "4"), 4),
+                        "winner_max_time_left": parse_float(query_first(query, "winner_max_time_left", "360"), 360.0),
+                        "winner_min_lead": parse_float(query_first(query, "winner_min_lead", "10"), 10.0),
+                        "winner_p_min": parse_float(query_first(query, "winner_p_min", "0.80"), 0.80),
+                        "winner_p_max": parse_float(query_first(query, "winner_p_max", "0.97"), 0.97),
+                        "winner_min_edge": parse_float(query_first(query, "winner_min_edge", "0.025"), 0.025),
+                        "fee_total": parse_float(query_first(query, "fee_total", "0.02"), 0.02),
+                        "max_points": parse_int(query_first(query, "max_points", "220"), 220),
+                        "include_timeline": parse_bool(query_first(query, "include_timeline", "1"), True),
+                    }
+                )
+                self._send_json(HTTPStatus.OK, payload)
+                return
+
+            if path == "/api/history/gate":
+                payload = build_history_gate(
+                    {
+                        "sport": query_first(query, "sport", "basketball"),
+                        "league": query_first(query, "league", "nba"),
+                        "timeout": parse_float(query_first(query, "timeout", "8"), 8.0),
+                        "lookback_days": parse_int(query_first(query, "lookback_days", "30"), 30),
+                        "max_games": parse_int(query_first(query, "max_games", "300"), 300),
+                        "min_games": parse_int(query_first(query, "min_games", "80"), 80),
+                        "min_trigger_games": parse_int(query_first(query, "min_trigger_games", "20"), 20),
+                        "min_first_hit_rate": parse_float(query_first(query, "min_first_hit_rate", "0.93"), 0.93),
+                        "winner_max_time_left": parse_float(query_first(query, "winner_max_time_left", "360"), 360.0),
+                        "winner_min_lead": parse_float(query_first(query, "winner_min_lead", "10"), 10.0),
+                        "winner_p_min": parse_float(query_first(query, "winner_p_min", "0.80"), 0.80),
+                        "winner_p_max": parse_float(query_first(query, "winner_p_max", "0.98"), 0.98),
+                        "winner_min_edge": parse_float(query_first(query, "winner_min_edge", "0.025"), 0.025),
+                        "fee_total": parse_float(query_first(query, "fee_total", "0.02"), 0.02),
+                        "use_cache": parse_bool(query_first(query, "use_cache", "1"), True),
+                    }
                 )
                 self._send_json(HTTPStatus.OK, payload)
                 return
