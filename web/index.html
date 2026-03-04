@@ -243,6 +243,7 @@
     }
 
     .badge.signal { background: #e4f6ef; color: #0f6d4a; border-color: #8fd6ba; }
+    .badge.notrade { background: #fff2dc; color: #8a5a12; border-color: #e6c18a; }
     .badge.wait { background: #fff3da; color: #885715; border-color: #efc17b; }
     .badge.error { background: #ffe6de; color: #9f2d18; border-color: #e99b89; }
 
@@ -273,6 +274,18 @@
       font-size: 0.9rem;
       font-weight: 600;
       color: #193532;
+    }
+
+    .metric .v.pos {
+      color: #0f6d4a;
+    }
+
+    .metric .v.neg {
+      color: #9f2d18;
+    }
+
+    .calc-metrics {
+      grid-template-columns: repeat(3, 1fr);
     }
 
     .discover-list, .log-table {
@@ -331,6 +344,122 @@
       line-height: 1.35;
     }
 
+    .history-detail {
+      margin-top: 8px;
+      display: grid;
+      gap: 10px;
+      background: linear-gradient(160deg, #fcfffd, #eef8f5);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px;
+    }
+
+    .history-head {
+      display: grid;
+      gap: 3px;
+    }
+
+    .history-title {
+      margin: 0;
+      font-size: 1rem;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .history-sub {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+
+    .history-metrics {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .history-metric {
+      border: 1px solid #b8d6cf;
+      border-radius: 9px;
+      background: #fbfefc;
+      padding: 7px;
+    }
+
+    .history-metric .k {
+      margin: 0 0 4px;
+      font-size: 0.68rem;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      text-transform: uppercase;
+    }
+
+    .history-metric .v {
+      margin: 0;
+      font-family: var(--mono);
+      font-size: 0.84rem;
+      font-weight: 600;
+      color: #173f38;
+    }
+
+    .history-reco {
+      border: 1px solid #98c9bb;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #f3fbf7, #f8fdfb);
+      padding: 9px 10px;
+      font-size: 0.84rem;
+      line-height: 1.35;
+    }
+
+    .history-reco strong {
+      color: #0f6d4a;
+    }
+
+    .history-charts {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .chart-card {
+      border: 1px solid #b6d1cb;
+      border-radius: 10px;
+      background: #fbfefc;
+      padding: 7px;
+      display: grid;
+      gap: 5px;
+    }
+
+    .chart-title {
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    .chart-svg {
+      width: 100%;
+      height: 180px;
+      display: block;
+      border-radius: 8px;
+      background:
+        linear-gradient(180deg, rgba(237, 248, 243, 0.7) 0%, rgba(237, 248, 243, 0.1) 100%),
+        repeating-linear-gradient(
+          to right,
+          rgba(90, 130, 121, 0.08),
+          rgba(90, 130, 121, 0.08) 1px,
+          transparent 1px,
+          transparent 42px
+        ),
+        repeating-linear-gradient(
+          to bottom,
+          rgba(90, 130, 121, 0.06),
+          rgba(90, 130, 121, 0.06) 1px,
+          transparent 1px,
+          transparent 30px
+        );
+    }
+
     @media (max-width: 1100px) {
       .page {
         grid-template-columns: 1fr;
@@ -341,6 +470,9 @@
       .metrics {
         grid-template-columns: repeat(2, 1fr);
       }
+      .history-metrics {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
     }
 
     @media (max-width: 640px) {
@@ -348,6 +480,12 @@
         grid-template-columns: 1fr;
       }
       .metrics {
+        grid-template-columns: 1fr;
+      }
+      .history-metrics {
+        grid-template-columns: 1fr;
+      }
+      .history-charts {
         grid-template-columns: 1fr;
       }
       .title {
@@ -402,6 +540,10 @@
             <input id="espnEventId" placeholder="401810741" />
           </label>
         </div>
+        <div class="check" id="simpleModeWrap">
+          <input id="simpleMode" type="checkbox" checked />
+          <span>Robinhood 极简模式（只保留必要操作）</span>
+        </div>
         <div class="grid-2">
           <label>快速选择比赛
             <select id="gamePicker">
@@ -416,6 +558,12 @@
               <option value="post">post（已结束）</option>
             </select>
           </label>
+        </div>
+        <div class="btn-row" id="simpleFlowRow">
+          <button class="btn-main" id="btnSimpleReady">一键选中比赛</button>
+          <button class="btn-aux" id="btnSimpleStrategy">平衡型策略</button>
+          <button class="btn-aux" id="btnRobustModeGateQuick">历史稳健门控</button>
+          <span class="hint" id="simpleFlowHint">极简：先点“平衡型策略”，再点“一键选中比赛”。</span>
         </div>
         <div class="btn-row">
           <button class="btn-aux" id="btnLoadGames">加载比赛</button>
@@ -444,9 +592,99 @@
           <input id="requireLive" type="checkbox" checked />
           <span>Require Live (开赛前输出 WAITING)</span>
         </div>
-        <div class="check">
+        <div class="check" id="winnerOnlyWrap">
           <input id="winnerOnly" type="checkbox" checked />
           <span>仅看输赢（只用实时胜率）</span>
+        </div>
+      </section>
+
+      <section class="box" id="winnerRulesBox">
+        <h3>末段过滤（输赢）</h3>
+        <div class="grid-2">
+          <label>剩余时间上限(s)
+            <input id="winnerMaxTimeLeft" type="number" step="1" value="360" />
+          </label>
+          <label>最小分差
+            <input id="winnerMinLead" type="number" step="1" value="10" />
+          </label>
+        </div>
+        <div class="grid-3">
+          <label>胜率下限
+            <input id="winnerPMin" type="number" step="0.001" value="0.80" />
+          </label>
+          <label>胜率上限
+            <input id="winnerPMax" type="number" step="0.001" value="0.97" />
+          </label>
+          <label>最小边际(可选)
+            <input id="winnerMinEdge" type="number" step="0.001" value="0.025" />
+          </label>
+          <label>买价上限(可选)
+            <input id="winnerMaxBuyPrice" type="number" step="0.001" value="0.91" />
+          </label>
+        </div>
+        <div class="tiny">边际 = 领先方胜率 - 对应买入价。默认平衡型：360s / 10分 / [0.80, 0.97] / min_edge 0.025 / 买价<=0.91。</div>
+        <div class="grid-3">
+          <label>门控回看天数
+            <input id="robustLookbackDays" type="number" step="1" value="30" />
+          </label>
+          <label>最小样本场次
+            <input id="robustMinGames" type="number" step="1" value="80" />
+          </label>
+          <label>最小触发场次
+            <input id="robustMinTriggerGames" type="number" step="1" value="20" />
+          </label>
+          <label>最小首信号命中率
+            <input id="robustMinHitRate" type="number" step="0.001" value="0.93" />
+          </label>
+        </div>
+        <div class="btn-row">
+          <button class="btn-main" id="btnRobustModeGate">历史稳健模式（自动门控）</button>
+          <span class="hint" id="robustGateHint">点击后自动检查近30天历史；不通过将阻止开始轮询。</span>
+        </div>
+        <div class="btn-row">
+          <button class="btn-aux" id="btnFillWinnerTest">填充测试参数</button>
+          <button class="btn-aux" id="btnRunWinnerSelfTest">规则自测(离线)</button>
+          <span class="hint" id="winnerTestHint">不依赖实时比赛，直接验证规则拦截是否生效。</span>
+        </div>
+      </section>
+
+      <section class="box" id="bankrollBox">
+        <h3>资金建议</h3>
+        <div class="grid-3">
+          <label>本金($)
+            <input id="capBankroll" type="number" step="1" value="1000" />
+          </label>
+          <label>胜率估计
+            <input id="capWinRate" type="number" step="0.0001" value="0.9442" />
+          </label>
+          <label>费用估计
+            <input id="capFee" type="number" step="0.0001" value="0.02" />
+          </label>
+        </div>
+        <div class="grid-3">
+          <label>买入价估计
+            <input id="capBuyPrice" type="number" step="0.0001" value="0.90" />
+          </label>
+          <label>单笔风险%
+            <input id="capRiskPct" type="number" step="0.0001" value="0.008" />
+          </label>
+          <label>日止损%
+            <input id="capDailyStopPct" type="number" step="0.0001" value="0.02" />
+          </label>
+        </div>
+        <div class="btn-row">
+          <button class="btn-main" id="btnQuickSetupSimple">一键实验配置</button>
+          <button class="btn-aux" id="btnUseSignalPrice">用当前信号价</button>
+          <button class="btn-aux" id="btnCalcBudget">更新建议</button>
+          <span class="hint" id="budgetHint">默认基于平衡型回测胜率 0.9442，仅作实验估算。</span>
+        </div>
+        <div class="metrics calc-metrics">
+          <div class="metric"><p class="k">Edge</p><p class="v" id="capEdge">-</p></div>
+          <div class="metric"><p class="k">Break-even Price</p><p class="v" id="capBreakeven">-</p></div>
+          <div class="metric"><p class="k">单笔建议投入($)</p><p class="v" id="capStake">-</p></div>
+          <div class="metric"><p class="k">建议张数</p><p class="v" id="capContracts">-</p></div>
+          <div class="metric"><p class="k">单笔期望盈亏($)</p><p class="v" id="capExpectedPnl">-</p></div>
+          <div class="metric"><p class="k">日止损($) / 连亏笔数</p><p class="v" id="capDailyStop">-</p></div>
         </div>
       </section>
 
@@ -521,6 +759,47 @@
         <div id="discoverWrap" class="empty">点击“加载比赛列表”。</div>
       </section>
 
+      <section class="box" id="historyBox">
+        <h3>历史回测（点比赛看建议）</h3>
+        <div class="grid-3">
+          <label>日期 (YYYYMMDD)
+            <input id="historyDate" placeholder="20260303" />
+          </label>
+          <label>图表采样点
+            <input id="historyMaxPoints" type="number" step="1" value="220" />
+          </label>
+          <label>费率(总)
+            <input id="historyFeeTotal" type="number" step="0.001" value="0.02" />
+          </label>
+        </div>
+        <div class="btn-row">
+          <button class="btn-aux" id="btnLoadHistoryGames">加载历史比赛</button>
+          <span class="hint" id="historyHint">点击任意比赛会自动显示胜负、买入建议和图表。</span>
+        </div>
+        <div id="historyGamesWrap" class="empty">先点“加载历史比赛”。</div>
+
+        <div id="historyDetail" class="history-detail hidden">
+          <div class="history-head">
+            <p class="history-title" id="historyMatchTitle">-</p>
+            <p class="history-sub" id="historyFinalResult">-</p>
+          </div>
+          <div class="history-reco" id="historyRecommendation">-</div>
+          <div class="history-sub mono" id="historyRuleSummary">-</div>
+          <div class="history-metrics" id="historyMetrics"></div>
+          <div class="history-charts">
+            <div class="chart-card">
+              <div class="chart-title">Home Win Probability</div>
+              <svg id="historyProbChart" class="chart-svg" viewBox="0 0 760 220" preserveAspectRatio="none"></svg>
+            </div>
+            <div class="chart-card">
+              <div class="chart-title">Lead (Home - Away)</div>
+              <svg id="historyLeadChart" class="chart-svg" viewBox="0 0 760 220" preserveAspectRatio="none"></svg>
+            </div>
+          </div>
+          <div id="historySignalsWrap" class="empty">选择比赛后显示触发明细。</div>
+        </div>
+      </section>
+
       <section class="box">
         <h3>信号日志</h3>
         <table class="log-table" id="logTable">
@@ -549,7 +828,12 @@
       lastSyncedEventKey: "",
       lastAutoSyncAttemptKey: "",
       hotReloadToken: "",
-      hotReloadTimer: null
+      hotReloadTimer: null,
+      lastSignalData: null,
+      historyReplayData: null,
+      robustGateRequired: false,
+      robustGateResult: null,
+      robustGateConfigKey: ""
     };
 
     const el = {
@@ -559,6 +843,13 @@
       espnSport: document.getElementById("espnSport"),
       espnLeague: document.getElementById("espnLeague"),
       espnEventId: document.getElementById("espnEventId"),
+      simpleModeWrap: document.getElementById("simpleModeWrap"),
+      simpleMode: document.getElementById("simpleMode"),
+      simpleFlowRow: document.getElementById("simpleFlowRow"),
+      btnSimpleReady: document.getElementById("btnSimpleReady"),
+      btnSimpleStrategy: document.getElementById("btnSimpleStrategy"),
+      btnRobustModeGateQuick: document.getElementById("btnRobustModeGateQuick"),
+      simpleFlowHint: document.getElementById("simpleFlowHint"),
       gamePicker: document.getElementById("gamePicker"),
       gamePickerState: document.getElementById("gamePickerState"),
       gameAutoFill: document.getElementById("gameAutoFill"),
@@ -568,7 +859,41 @@
       timeout: document.getElementById("timeout"),
       minEv: document.getElementById("minEv"),
       requireLive: document.getElementById("requireLive"),
+      winnerOnlyWrap: document.getElementById("winnerOnlyWrap"),
       winnerOnly: document.getElementById("winnerOnly"),
+      winnerRulesBox: document.getElementById("winnerRulesBox"),
+      winnerMaxTimeLeft: document.getElementById("winnerMaxTimeLeft"),
+      winnerMinLead: document.getElementById("winnerMinLead"),
+      winnerPMin: document.getElementById("winnerPMin"),
+      winnerPMax: document.getElementById("winnerPMax"),
+      winnerMinEdge: document.getElementById("winnerMinEdge"),
+      winnerMaxBuyPrice: document.getElementById("winnerMaxBuyPrice"),
+      robustLookbackDays: document.getElementById("robustLookbackDays"),
+      robustMinGames: document.getElementById("robustMinGames"),
+      robustMinTriggerGames: document.getElementById("robustMinTriggerGames"),
+      robustMinHitRate: document.getElementById("robustMinHitRate"),
+      btnRobustModeGate: document.getElementById("btnRobustModeGate"),
+      robustGateHint: document.getElementById("robustGateHint"),
+      btnFillWinnerTest: document.getElementById("btnFillWinnerTest"),
+      btnRunWinnerSelfTest: document.getElementById("btnRunWinnerSelfTest"),
+      winnerTestHint: document.getElementById("winnerTestHint"),
+      bankrollBox: document.getElementById("bankrollBox"),
+      capBankroll: document.getElementById("capBankroll"),
+      capWinRate: document.getElementById("capWinRate"),
+      capFee: document.getElementById("capFee"),
+      capBuyPrice: document.getElementById("capBuyPrice"),
+      capRiskPct: document.getElementById("capRiskPct"),
+      capDailyStopPct: document.getElementById("capDailyStopPct"),
+      btnQuickSetupSimple: document.getElementById("btnQuickSetupSimple"),
+      btnUseSignalPrice: document.getElementById("btnUseSignalPrice"),
+      btnCalcBudget: document.getElementById("btnCalcBudget"),
+      budgetHint: document.getElementById("budgetHint"),
+      capEdge: document.getElementById("capEdge"),
+      capBreakeven: document.getElementById("capBreakeven"),
+      capStake: document.getElementById("capStake"),
+      capContracts: document.getElementById("capContracts"),
+      capExpectedPnl: document.getElementById("capExpectedPnl"),
+      capDailyStop: document.getElementById("capDailyStop"),
       tradeProviderRow: document.getElementById("tradeProviderRow"),
       tradeMarketLabel: document.getElementById("tradeMarketLabel"),
       tradeAutofillRow: document.getElementById("tradeAutofillRow"),
@@ -597,6 +922,21 @@
       mMode: document.getElementById("mMode"),
       discoverDate: document.getElementById("discoverDate"),
       discoverWrap: document.getElementById("discoverWrap"),
+      historyDate: document.getElementById("historyDate"),
+      historyMaxPoints: document.getElementById("historyMaxPoints"),
+      historyFeeTotal: document.getElementById("historyFeeTotal"),
+      btnLoadHistoryGames: document.getElementById("btnLoadHistoryGames"),
+      historyHint: document.getElementById("historyHint"),
+      historyGamesWrap: document.getElementById("historyGamesWrap"),
+      historyDetail: document.getElementById("historyDetail"),
+      historyMatchTitle: document.getElementById("historyMatchTitle"),
+      historyFinalResult: document.getElementById("historyFinalResult"),
+      historyRecommendation: document.getElementById("historyRecommendation"),
+      historyRuleSummary: document.getElementById("historyRuleSummary"),
+      historyMetrics: document.getElementById("historyMetrics"),
+      historyProbChart: document.getElementById("historyProbChart"),
+      historyLeadChart: document.getElementById("historyLeadChart"),
+      historySignalsWrap: document.getElementById("historySignalsWrap"),
       logBody: document.getElementById("logBody"),
       btnStart: document.getElementById("btnStart"),
       btnStop: document.getElementById("btnStop"),
@@ -617,6 +957,28 @@
     function fmtNum(value, digits = 4) {
       if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
       return Number(value).toFixed(digits);
+    }
+
+    function fmtMoney(value, digits = 2) {
+      if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
+      return `$${Number(value).toFixed(digits)}`;
+    }
+
+    function fmtPct(value, digits = 2) {
+      if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
+      return `${(Number(value) * 100).toFixed(digits)}%`;
+    }
+
+    function fmtSigned(value, digits = 2) {
+      if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
+      const n = Number(value);
+      const prefix = n > 0 ? "+" : "";
+      return `${prefix}${n.toFixed(digits)}`;
+    }
+
+    function toNumber(value, fallback) {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : fallback;
     }
 
     function esc(text) {
@@ -640,12 +1002,42 @@
       return new Date().toISOString();
     }
 
+    function currentRobustGateConfigKey() {
+      return [
+        String(el.espnSport.value || ""),
+        String(el.espnLeague.value || ""),
+        String(el.winnerMaxTimeLeft.value || ""),
+        String(el.winnerMinLead.value || ""),
+        String(el.winnerPMin.value || ""),
+        String(el.winnerPMax.value || ""),
+        String(el.winnerMinEdge.value || ""),
+        String(el.historyFeeTotal.value || ""),
+        String(el.robustLookbackDays.value || ""),
+        String(el.robustMinGames.value || ""),
+        String(el.robustMinTriggerGames.value || ""),
+        String(el.robustMinHitRate.value || ""),
+      ].join("|");
+    }
+
+    function invalidateRobustGate(reason = "") {
+      state.robustGateResult = null;
+      state.robustGateConfigKey = "";
+      if (!state.robustGateRequired) {
+        return;
+      }
+      if (reason) {
+        el.robustGateHint.textContent = `门控已失效：${reason}，请重新点击“历史稳健模式（自动门控）”。`;
+      } else {
+        el.robustGateHint.textContent = "门控已失效，请重新点击“历史稳健模式（自动门控）”。";
+      }
+    }
+
     function applyModeLabels() {
       if (el.winnerOnly.checked) {
-        el.thAction.textContent = "Guess";
-        el.thBestEv.textContent = "Confidence";
+        el.thAction.textContent = "Decision";
+        el.thBestEv.textContent = "Edge/Conf";
         el.thPLive.textContent = "P Home/Away";
-        el.thPrices.textContent = "-";
+        el.thPrices.textContent = "A Yes/No";
       } else {
         el.thAction.textContent = "Action";
         el.thBestEv.textContent = "Best EV";
@@ -660,15 +1052,28 @@
     }
 
     function applyModeVisibility() {
+      const simpleMode = Boolean(el.simpleMode && el.simpleMode.checked);
+      if (simpleMode) {
+        el.winnerOnly.checked = true;
+        el.requireLive.checked = true;
+        el.winnerOnly.disabled = true;
+      } else {
+        el.winnerOnly.disabled = false;
+      }
+
       const winnerMode = el.winnerOnly.checked;
-      setHidden(el.tradeProviderRow, winnerMode);
-      setHidden(el.tradeMarketLabel, winnerMode);
-      setHidden(el.tradeAutofillRow, winnerMode);
-      setHidden(el.tradeQuickSetupRow, winnerMode);
-      setHidden(el.gameAutoFillWrap, winnerMode);
-      setHidden(el.autoSyncMarketWrap, winnerMode);
-      setHidden(el.minEvWrap, winnerMode);
-      setHidden(el.costBox, winnerMode);
+      setHidden(el.simpleFlowRow, !simpleMode);
+      setHidden(el.winnerOnlyWrap, simpleMode);
+      setHidden(el.tradeProviderRow, winnerMode || simpleMode);
+      setHidden(el.tradeMarketLabel, winnerMode || simpleMode);
+      setHidden(el.tradeAutofillRow, winnerMode || simpleMode);
+      setHidden(el.tradeQuickSetupRow, winnerMode || simpleMode);
+      setHidden(el.gameAutoFillWrap, winnerMode || simpleMode);
+      setHidden(el.autoSyncMarketWrap, winnerMode || simpleMode);
+      setHidden(el.minEvWrap, winnerMode || simpleMode);
+      setHidden(el.costBox, winnerMode || simpleMode);
+      setHidden(el.winnerRulesBox, !winnerMode || simpleMode);
+      setHidden(el.bankrollBox, !winnerMode || simpleMode);
     }
 
     function isLocalHost() {
@@ -740,8 +1145,404 @@
         account_equity: account ? Number(account) : null,
         per_trade_risk_pct: Number(el.riskPct.value || 0.0025),
         daily_stop_pct: 0.01,
+        winner_max_time_left: Number(el.winnerMaxTimeLeft.value || 360),
+        winner_min_lead: Number(el.winnerMinLead.value || 10),
+        winner_p_min: Number(el.winnerPMin.value || 0.80),
+        winner_p_max: Number(el.winnerPMax.value || 0.97),
+        winner_min_edge: Number(el.winnerMinEdge.value || 0.025),
+        winner_max_buy_price: Number(el.winnerMaxBuyPrice.value || 0.91),
         ts: nowStamp()
       };
+    }
+
+    function clamp01(value) {
+      return Math.max(0, Math.min(1, Number(value)));
+    }
+
+    function updateBudgetCalc() {
+      const bankroll = Math.max(0, toNumber(el.capBankroll.value, 1000));
+      const winRate = clamp01(toNumber(el.capWinRate.value, 0.9442));
+      const fee = Math.max(0, toNumber(el.capFee.value, 0.02));
+      const buyPrice = Math.max(0.0001, Math.min(0.9999, toNumber(el.capBuyPrice.value, 0.90)));
+      const riskPct = Math.max(0, toNumber(el.capRiskPct.value, 0.008));
+      const dailyStopPct = Math.max(0, toNumber(el.capDailyStopPct.value, 0.02));
+
+      const edge = winRate - buyPrice - fee;
+      const breakevenPrice = Math.max(0, winRate - fee);
+      const maxBuyPriceRule = Math.max(0.0001, Math.min(0.9999, toNumber(el.winnerMaxBuyPrice.value, 0.91)));
+      const stake = bankroll * riskPct;
+      const lossPerContract = Math.max(0.0001, Math.min(1, buyPrice + fee));
+      const contracts = Math.max(0, Math.floor(stake / lossPerContract));
+      const expectedPnl = stake * (edge / buyPrice);
+      const dailyStop = bankroll * dailyStopPct;
+      const maxLossTrades = stake > 0 ? Math.floor(dailyStop / stake) : 0;
+
+      el.capEdge.textContent = fmtPct(edge, 2);
+      el.capEdge.classList.toggle("pos", edge > 0);
+      el.capEdge.classList.toggle("neg", edge < 0);
+      el.capBreakeven.textContent = fmtNum(breakevenPrice, 4);
+      el.capStake.textContent = fmtMoney(stake, 2);
+      el.capContracts.textContent = String(contracts);
+      el.capExpectedPnl.textContent = fmtMoney(expectedPnl, 2);
+      el.capExpectedPnl.classList.toggle("pos", expectedPnl > 0);
+      el.capExpectedPnl.classList.toggle("neg", expectedPnl < 0);
+      el.capDailyStop.textContent = `${fmtMoney(dailyStop, 2)} / ${maxLossTrades}`;
+
+      if (edge <= 0) {
+        el.budgetHint.textContent = "当前参数的期望值<=0，建议降低买入价或调整过滤条件。";
+      } else if (buyPrice > maxBuyPriceRule) {
+        el.budgetHint.textContent = `当前买价 ${buyPrice.toFixed(4)} 高于策略上限 ${maxBuyPriceRule.toFixed(4)}。`;
+      } else {
+        el.budgetHint.textContent = `当前单笔期望为正（Edge ${fmtPct(edge, 2)}），仍需注意滑点和手续费波动。`;
+      }
+    }
+
+    function applyQuickExperimentPreset() {
+      state.robustGateRequired = false;
+      invalidateRobustGate();
+      el.winnerOnly.checked = true;
+      el.requireLive.checked = true;
+      el.espnSport.value = "basketball";
+      el.espnLeague.value = "nba";
+      el.gamePickerState.value = "in";
+      el.interval.value = "2";
+      el.timeout.value = "6";
+
+      el.winnerMaxTimeLeft.value = "360";
+      el.winnerMinLead.value = "10";
+      el.winnerPMin.value = "0.80";
+      el.winnerPMax.value = "0.97";
+      el.winnerMinEdge.value = "0.025";
+      el.winnerMaxBuyPrice.value = "0.91";
+
+      el.capBankroll.value = "1000";
+      el.capWinRate.value = "0.9442";
+      el.capFee.value = "0.02";
+      el.capBuyPrice.value = "0.90";
+      el.capRiskPct.value = "0.008";
+      el.capDailyStopPct.value = "0.02";
+
+      applyModeLabels();
+      applyModeVisibility();
+      updateBudgetCalc();
+      el.budgetHint.textContent = "已应用简化配置：选比赛后可直接开始轮询。";
+      el.robustGateHint.textContent = "点击“历史稳健模式（自动门控）”可启用门控拦截。";
+      loadGamePicker().catch((err) => { el.gamePickerHint.textContent = `加载失败: ${err}`; });
+    }
+
+    function applyBalancedStrategyPreset() {
+      state.robustGateRequired = false;
+      invalidateRobustGate();
+      el.winnerOnly.checked = true;
+      el.requireLive.checked = true;
+      el.winnerMaxTimeLeft.value = "360";
+      el.winnerMinLead.value = "10";
+      el.winnerPMin.value = "0.80";
+      el.winnerPMax.value = "0.97";
+      el.winnerMinEdge.value = "0.025";
+      el.winnerMaxBuyPrice.value = "0.91";
+      el.capWinRate.value = "0.9442";
+      el.capBuyPrice.value = "0.90";
+      el.capFee.value = "0.02";
+      applyModeLabels();
+      applyModeVisibility();
+      updateBudgetCalc();
+      el.simpleFlowHint.textContent = "已应用平衡型策略：360s/10分/[0.80,0.97]/min_edge0.025/买价<=0.91。";
+      el.budgetHint.textContent = "平衡型策略已生效，建议买价控制在 0.91 以下。";
+      el.robustGateHint.textContent = "已切换为非门控模式。需要门控时请点击“历史稳健模式（自动门控）”。";
+    }
+
+    async function applyRobustModeAndGate(forceRefresh = false) {
+      el.winnerOnly.checked = true;
+      el.requireLive.checked = true;
+      el.espnSport.value = "basketball";
+      el.espnLeague.value = "nba";
+      el.winnerMaxTimeLeft.value = "360";
+      el.winnerMinLead.value = "10";
+      el.winnerPMin.value = "0.80";
+      el.winnerPMax.value = "0.98";
+      el.winnerMinEdge.value = "0.025";
+      el.winnerMaxBuyPrice.value = "0.91";
+      el.historyFeeTotal.value = "0.02";
+      el.capFee.value = "0.02";
+      applyModeLabels();
+      applyModeVisibility();
+
+      state.robustGateRequired = true;
+      state.robustGateResult = null;
+      state.robustGateConfigKey = "";
+      el.robustGateHint.textContent = "历史门控检查中（近30天）...";
+      el.simpleFlowHint.textContent = "历史门控检查中，请稍候...";
+      el.runState.textContent = "CHECKING GATE";
+
+      const configKey = currentRobustGateConfigKey();
+      const data = await apiHistoryGate(forceRefresh);
+      state.robustGateResult = data;
+      state.robustGateConfigKey = configKey;
+
+      const metrics = data.metrics || {};
+      const gate = data.gate || {};
+      const triggerGames = Number(metrics.trigger_games || 0);
+      const games = Number(metrics.games_analyzed || 0);
+      const triggerRate = Number(metrics.trigger_rate_game || 0);
+      const hitRate = metrics.first_signal_hit_rate;
+      if (hitRate !== null && hitRate !== undefined && !Number.isNaN(Number(hitRate))) {
+        el.capWinRate.value = Number(hitRate).toFixed(4);
+      }
+      updateBudgetCalc();
+
+      if (gate.passed) {
+        el.robustGateHint.textContent = `PASS：${triggerGames}/${games} 场触发（${fmtPct(triggerRate, 2)}），首信号命中 ${fmtPct(hitRate, 2)}。可开始轮询。`;
+        if (!state.timer) {
+          el.runState.textContent = "READY (GATE PASS)";
+        }
+        el.simpleFlowHint.textContent = "历史稳健门控已通过：先选比赛，再开始轮询。";
+      } else {
+        const reasonText = Array.isArray(gate.reasons) && gate.reasons.length ? gate.reasons.join("；") : (gate.message || "未通过");
+        stopPolling();
+        el.runState.textContent = "BLOCKED BY GATE";
+        el.robustGateHint.textContent = `BLOCK：${reasonText}`;
+        el.simpleFlowHint.textContent = `历史稳健门控未通过：${reasonText}`;
+      }
+    }
+
+    async function simpleReady() {
+      el.simpleFlowHint.textContent = "加载进行中比赛...";
+      el.winnerOnly.checked = true;
+      el.requireLive.checked = true;
+      applyModeLabels();
+      applyModeVisibility();
+
+      const liveEvents = await discoverEspnNow("in", 20);
+      const preEvents = liveEvents.length ? [] : await discoverEspnNow("pre", 20);
+      const source = liveEvents.length ? "in" : "pre";
+      const pick = (liveEvents.length ? liveEvents : preEvents)[0];
+      if (!pick) {
+        throw new Error("当前没有可用比赛。");
+      }
+
+      const eventId = String(pick.event_id || "").trim();
+      if (!eventId) {
+        throw new Error("比赛缺少 event_id。");
+      }
+      el.espnEventId.value = eventId;
+      try {
+        await loadGamePicker();
+        el.gamePicker.value = eventId;
+      } catch (_err) {
+        // Ignore picker refresh errors; event id is already set.
+      }
+      const stateText = source === "in" ? "进行中" : "未开赛";
+      el.simpleFlowHint.textContent = `已选择${stateText}：${pick.name || eventId}，现在点“开始轮询”。`;
+    }
+
+    function useCurrentSignalPriceForBudget() {
+      const data = state.lastSignalData;
+      if (!data || typeof data !== "object") {
+        el.budgetHint.textContent = "暂无可用信号，先点“单次”或“开始轮询”。";
+        return;
+      }
+
+      let price = null;
+      if (data.action === "BUY_YES" && data.a_yes !== null && data.a_yes !== undefined && !Number.isNaN(Number(data.a_yes))) {
+        price = Number(data.a_yes);
+      } else if (data.action === "BUY_NO" && data.a_no !== null && data.a_no !== undefined && !Number.isNaN(Number(data.a_no))) {
+        price = Number(data.a_no);
+      } else if (
+        data.a_yes !== null &&
+        data.a_yes !== undefined &&
+        data.a_no !== null &&
+        data.a_no !== undefined &&
+        !Number.isNaN(Number(data.a_yes)) &&
+        !Number.isNaN(Number(data.a_no))
+      ) {
+        const guessSide = String(data.guess_side || "").toLowerCase();
+        price = guessSide === String(el.yesTeam.value || "home") ? Number(data.a_yes) : Number(data.a_no);
+      }
+
+      if (price === null || Number.isNaN(price)) {
+        el.budgetHint.textContent = "当前信号没有可用价格，先配置 Market 或等待价格返回。";
+        return;
+      }
+
+      const safe = Math.max(0.0001, Math.min(0.9999, price));
+      el.capBuyPrice.value = safe.toFixed(4);
+      updateBudgetCalc();
+      el.budgetHint.textContent = `已使用当前信号价格 ${safe.toFixed(4)}。`;
+    }
+
+    function fillWinnerTestData() {
+      el.winnerOnly.checked = true;
+      applyModeLabels();
+      applyModeVisibility();
+
+      el.espnSport.value = "basketball";
+      el.espnLeague.value = "nba";
+      if (!el.espnEventId.value.trim()) {
+        el.espnEventId.value = "401810741";
+      }
+      el.provider.value = "kalshi_espn";
+      el.yesTeam.value = "home";
+      el.requireLive.checked = false;
+
+      el.winnerMaxTimeLeft.value = "360";
+      el.winnerMinLead.value = "10";
+      el.winnerPMin.value = "0.80";
+      el.winnerPMax.value = "0.97";
+      el.winnerMinEdge.value = "0.025";
+      el.winnerMaxBuyPrice.value = "0.91";
+
+      el.interval.value = "2";
+      el.timeout.value = "6";
+      el.capWinRate.value = "0.9442";
+      el.capBuyPrice.value = "0.90";
+      el.capFee.value = "0.02";
+      el.capRiskPct.value = "0.008";
+      el.capDailyStopPct.value = "0.02";
+
+      el.winnerTestHint.textContent = "已填充测试参数：360s / 10分 / [0.80, 0.97] / min_edge 0.025 / 买价<=0.91。";
+      updateBudgetCalc();
+    }
+
+    function evaluateWinnerSelfCase(caseItem, cfg) {
+      const pHome = clamp01(caseItem.p_home);
+      const pAway = clamp01(1 - pHome);
+      const guessSide = caseItem.guess_side === "away" ? "away" : "home";
+      const guessTeam = guessSide === "away" ? "TEST_AWAY" : "TEST_HOME";
+      const guessProb = guessSide === "away" ? pAway : pHome;
+      const timeLeft = Math.max(0, Number(caseItem.time_left));
+      const timeTotal = Math.max(timeLeft, Number(caseItem.time_total || 2880));
+      const lead = Math.max(0, Number(caseItem.lead));
+
+      const blockers = [];
+      if (timeLeft > Number(cfg.winner_max_time_left)) {
+        blockers.push(`剩余时间 ${timeLeft.toFixed(0)}s > 阈值 ${Number(cfg.winner_max_time_left).toFixed(0)}s`);
+      }
+      if (lead < Number(cfg.winner_min_lead)) {
+        blockers.push(`分差 ${lead.toFixed(0)} < 阈值 ${Number(cfg.winner_min_lead).toFixed(0)}`);
+      }
+      if (!(Number(cfg.winner_p_min) <= guessProb && guessProb <= Number(cfg.winner_p_max))) {
+        blockers.push(`领先方胜率 ${guessProb.toFixed(3)} 不在区间 [${Number(cfg.winner_p_min).toFixed(3)}, ${Number(cfg.winner_p_max).toFixed(3)}]`);
+      }
+
+      let action = null;
+      let entryPrice = null;
+      let edge = null;
+      const hasEntry = caseItem.entry_price !== null && caseItem.entry_price !== undefined && !Number.isNaN(Number(caseItem.entry_price));
+      if (hasEntry) {
+        entryPrice = clamp01(caseItem.entry_price);
+        action = guessSide === cfg.yes_team ? "BUY_YES" : "BUY_NO";
+        if (entryPrice > Number(cfg.winner_max_buy_price)) {
+          blockers.push(`买入价 ${entryPrice.toFixed(4)} > 上限 ${Number(cfg.winner_max_buy_price).toFixed(4)}`);
+        }
+        edge = guessProb - entryPrice;
+        if (edge < Number(cfg.winner_min_edge)) {
+          blockers.push(`边际 ${edge.toFixed(4)} < 阈值 ${Number(cfg.winner_min_edge).toFixed(4)}`);
+        }
+      }
+
+      const stateText = blockers.length ? "NO_TRADE" : "GUESS";
+      return {
+        state: stateText,
+        reason: blockers.length ? blockers.join("; ") : "通过末段过滤，可执行。",
+        guess_side: guessSide,
+        guess_team: guessTeam,
+        guess_prob: guessProb,
+        action,
+        edge,
+        confidence: Math.abs(pHome - 0.5) * 2.0,
+        p_home: pHome,
+        p_away: pAway,
+        a_yes: hasEntry && cfg.yes_team === "home" ? entryPrice : (hasEntry ? clamp01(1 - entryPrice) : null),
+        a_no: hasEntry && cfg.yes_team === "home" ? clamp01(1 - entryPrice) : (hasEntry ? entryPrice : null),
+        time_left: timeLeft,
+        time_total: timeTotal,
+        espn_status: "in",
+        probability_mode: "selftest",
+        lead,
+        rivalry: `${caseItem.label || "SELFTEST"} (${guessSide.toUpperCase()})`,
+      };
+    }
+
+    function runWinnerSelfTest() {
+      if (!el.winnerOnly.checked) {
+        el.winnerOnly.checked = true;
+        applyModeLabels();
+        applyModeVisibility();
+      }
+      const cfg = getConfig();
+      const maxTime = Number(cfg.winner_max_time_left || 360);
+      const minLead = Number(cfg.winner_min_lead || 10);
+      const pMin = Number(cfg.winner_p_min || 0.80);
+      const pMax = Number(cfg.winner_p_max || 0.97);
+      const minEdge = Number(cfg.winner_min_edge || 0.025);
+      const pPass = clamp01((pMin + pMax) / 2);
+      const pHigh = clamp01(Math.min(0.99, pMax + 0.05));
+      const testEntryPass = clamp01(Math.max(0.01, pPass - minEdge - 0.02));
+      const testEntryFail = clamp01(Math.max(0.01, pPass - minEdge + 0.005));
+
+      const cases = [
+        {
+          label: "CASE_PASS",
+          guess_side: "home",
+          p_home: pPass,
+          time_left: Math.max(1, maxTime - 30),
+          time_total: 2880,
+          lead: minLead + 3,
+          entry_price: testEntryPass,
+        },
+        {
+          label: "CASE_TIME_FAIL",
+          guess_side: "home",
+          p_home: pPass,
+          time_left: maxTime + 90,
+          time_total: 2880,
+          lead: minLead + 2,
+          entry_price: testEntryPass,
+        },
+        {
+          label: "CASE_LEAD_FAIL",
+          guess_side: "away",
+          p_home: clamp01(1 - pPass),
+          time_left: Math.max(1, maxTime - 20),
+          time_total: 2880,
+          lead: Math.max(0, minLead - 2),
+          entry_price: testEntryPass,
+        },
+        {
+          label: "CASE_PROB_FAIL",
+          guess_side: "home",
+          p_home: pHigh,
+          time_left: Math.max(1, maxTime - 10),
+          time_total: 2880,
+          lead: minLead + 4,
+          entry_price: testEntryPass,
+        },
+        {
+          label: "CASE_EDGE_FAIL",
+          guess_side: "home",
+          p_home: pPass,
+          time_left: Math.max(1, maxTime - 5),
+          time_total: 2880,
+          lead: minLead + 1,
+          entry_price: testEntryFail,
+        },
+      ];
+
+      let passCount = 0;
+      let last = null;
+      for (const item of cases) {
+        const row = evaluateWinnerSelfCase(item, cfg);
+        if (row.state === "GUESS") {
+          passCount += 1;
+        }
+        last = row;
+        addLog(row, false);
+      }
+      if (last) {
+        updateStatus(last);
+      }
+      el.winnerTestHint.textContent = `自测完成：${passCount}/${cases.length} 条通过。日志里可查看每条拦截原因。`;
     }
 
     async function apiGet(url) {
@@ -798,23 +1599,292 @@
       return apiGet(url);
     }
 
+    async function apiHistoryReplay(eventId) {
+      const sport = encodeURIComponent(el.espnSport.value.trim() || "basketball");
+      const league = encodeURIComponent(el.espnLeague.value.trim() || "nba");
+      const eventEnc = encodeURIComponent(eventId);
+      const timeout = encodeURIComponent(String(Number(el.timeout.value || 6)));
+      const maxPoints = encodeURIComponent(String(Math.max(40, Number(el.historyMaxPoints.value || 220))));
+      const feeTotal = encodeURIComponent(String(Math.max(0, Number(el.historyFeeTotal.value || 0.02))));
+      const winnerMaxTime = encodeURIComponent(String(Number(el.winnerMaxTimeLeft.value || 360)));
+      const winnerLead = encodeURIComponent(String(Number(el.winnerMinLead.value || 10)));
+      const winnerPMin = encodeURIComponent(String(Number(el.winnerPMin.value || 0.8)));
+      const winnerPMax = encodeURIComponent(String(Number(el.winnerPMax.value || 0.97)));
+      const winnerEdge = encodeURIComponent(String(Number(el.winnerMinEdge.value || 0.025)));
+      const url = `/api/history/replay?sport=${sport}&league=${league}&event_id=${eventEnc}&timeout=${timeout}&winner_max_time_left=${winnerMaxTime}&winner_min_lead=${winnerLead}&winner_p_min=${winnerPMin}&winner_p_max=${winnerPMax}&winner_min_edge=${winnerEdge}&fee_total=${feeTotal}&max_points=${maxPoints}`;
+      return apiGet(url);
+    }
+
+    async function apiHistoryGate(forceRefresh = false) {
+      const sport = encodeURIComponent(el.espnSport.value.trim() || "basketball");
+      const league = encodeURIComponent(el.espnLeague.value.trim() || "nba");
+      const timeout = encodeURIComponent(String(Number(el.timeout.value || 6)));
+      const lookbackDays = encodeURIComponent(String(Math.max(3, Number(el.robustLookbackDays.value || 30))));
+      const minGames = encodeURIComponent(String(Math.max(1, Number(el.robustMinGames.value || 80))));
+      const minTriggerGames = encodeURIComponent(String(Math.max(1, Number(el.robustMinTriggerGames.value || 20))));
+      const minHitRate = encodeURIComponent(String(Math.max(0, Math.min(1, Number(el.robustMinHitRate.value || 0.93)))));
+      const winnerMaxTime = encodeURIComponent(String(Number(el.winnerMaxTimeLeft.value || 360)));
+      const winnerLead = encodeURIComponent(String(Number(el.winnerMinLead.value || 10)));
+      const winnerPMin = encodeURIComponent(String(Number(el.winnerPMin.value || 0.8)));
+      const winnerPMax = encodeURIComponent(String(Number(el.winnerPMax.value || 0.98)));
+      const winnerEdge = encodeURIComponent(String(Number(el.winnerMinEdge.value || 0.025)));
+      const feeTotal = encodeURIComponent(String(Math.max(0, Number(el.historyFeeTotal.value || 0.02))));
+      const useCache = forceRefresh ? "0" : "1";
+      const url = `/api/history/gate?sport=${sport}&league=${league}&timeout=${timeout}&lookback_days=${lookbackDays}&min_games=${minGames}&min_trigger_games=${minTriggerGames}&min_first_hit_rate=${minHitRate}&winner_max_time_left=${winnerMaxTime}&winner_min_lead=${winnerLead}&winner_p_min=${winnerPMin}&winner_p_max=${winnerPMax}&winner_min_edge=${winnerEdge}&fee_total=${feeTotal}&use_cache=${useCache}`;
+      return apiGet(url);
+    }
+
+    function buildSvgLinePath(points, xFn, yFn) {
+      if (!points.length) return "";
+      return points.map((p, idx) => {
+        const x = xFn(p).toFixed(2);
+        const y = yFn(p).toFixed(2);
+        return `${idx === 0 ? "M" : "L"}${x},${y}`;
+      }).join(" ");
+    }
+
+    function renderHistoryProbChart(timeline) {
+      if (!Array.isArray(timeline) || !timeline.length) {
+        el.historyProbChart.innerHTML = "";
+        return;
+      }
+      const width = 760;
+      const height = 220;
+      const pad = 24;
+      const x = (p) => pad + clamp01(p.progress) * (width - pad * 2);
+      const y = (p) => height - pad - clamp01(p.p_home) * (height - pad * 2);
+      const path = buildSvgLinePath(timeline, x, y);
+      const yMid = height - pad - 0.5 * (height - pad * 2);
+      const signals = timeline.filter((p) => p.pass_all).slice(-80);
+      const dots = signals.map((p) => {
+        const cx = x(p).toFixed(2);
+        const cy = y(p).toFixed(2);
+        const fill = p.guess_side === "home" ? "#0f7f67" : "#d55b44";
+        return `<circle cx="${cx}" cy="${cy}" r="2.8" fill="${fill}" opacity="0.9" />`;
+      }).join("");
+
+      el.historyProbChart.innerHTML = `
+        <line x1="${pad}" y1="${yMid.toFixed(2)}" x2="${width - pad}" y2="${yMid.toFixed(2)}" stroke="#8fb7ae" stroke-width="1" stroke-dasharray="5 4" />
+        <path d="${path}" fill="none" stroke="#0f6d4a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+        ${dots}
+        <text x="${pad}" y="${height - 6}" fill="#4f6965" font-size="11">开场</text>
+        <text x="${width - pad}" y="${height - 6}" fill="#4f6965" font-size="11" text-anchor="end">终场</text>
+        <text x="${pad}" y="14" fill="#4f6965" font-size="11">P(home)</text>
+      `;
+    }
+
+    function renderHistoryLeadChart(timeline) {
+      if (!Array.isArray(timeline) || !timeline.length) {
+        el.historyLeadChart.innerHTML = "";
+        return;
+      }
+      const width = 760;
+      const height = 220;
+      const pad = 24;
+      const maxAbsLead = Math.max(
+        6,
+        ...timeline.map((p) => Math.abs(Number(p.lead_signed || 0)))
+      );
+      const x = (p) => pad + clamp01(p.progress) * (width - pad * 2);
+      const y = (p) => height / 2 - (Number(p.lead_signed || 0) / maxAbsLead) * ((height - pad * 2) / 2);
+      const path = buildSvgLinePath(timeline, x, y);
+      const yZero = y({ lead_signed: 0 });
+      const signals = timeline.filter((p) => p.pass_all).slice(-80);
+      const dots = signals.map((p) => {
+        const cx = x(p).toFixed(2);
+        const cy = y(p).toFixed(2);
+        const fill = p.guess_side === "home" ? "#0f7f67" : "#d55b44";
+        return `<circle cx="${cx}" cy="${cy}" r="2.8" fill="${fill}" opacity="0.9" />`;
+      }).join("");
+
+      el.historyLeadChart.innerHTML = `
+        <line x1="${pad}" y1="${yZero.toFixed(2)}" x2="${width - pad}" y2="${yZero.toFixed(2)}" stroke="#8fb7ae" stroke-width="1" stroke-dasharray="5 4" />
+        <path d="${path}" fill="none" stroke="#355f9c" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" />
+        ${dots}
+        <text x="${pad}" y="14" fill="#4f6965" font-size="11">Home - Away</text>
+        <text x="${width - pad}" y="14" fill="#4f6965" font-size="11" text-anchor="end">max |lead|=${maxAbsLead.toFixed(0)}</text>
+      `;
+    }
+
+    function renderHistorySignals(signals) {
+      if (!Array.isArray(signals) || !signals.length) {
+        el.historySignalsWrap.innerHTML = `<div class="empty">该场没有触发点（按当前过滤规则）。</div>`;
+        return;
+      }
+      const rows = signals.slice(0, 12).map((s) => {
+        const side = s.guess_side === "home" ? "HOME" : "AWAY";
+        const hitText = s.hit ? "WIN" : "LOSE";
+        const hitColor = s.hit ? "#0f6d4a" : "#9f2d18";
+        return `
+          <tr>
+            <td class="mono">Q${esc(s.period)} ${esc(s.clock || "-")}</td>
+            <td class="mono">${esc(s.action || side)}</td>
+            <td class="mono">${fmtNum(s.guess_prob, 3)}</td>
+            <td class="mono">${fmtNum(s.lead, 0)}</td>
+            <td class="mono">${fmtNum(s.recommended_max_buy_price, 4)}</td>
+            <td class="mono" style="color:${hitColor};">${hitText}</td>
+          </tr>
+        `;
+      }).join("");
+      el.historySignalsWrap.innerHTML = `
+        <table class="discover-list">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Action</th>
+              <th>Guess P</th>
+              <th>Lead</th>
+              <th>Max Buy</th>
+              <th>Result</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+    }
+
+    function renderHistoryReplay(data) {
+      state.historyReplayData = data;
+      const match = data.match || {};
+      const metrics = data.metrics || {};
+      const reco = data.recommendation || {};
+      const rules = data.rules || {};
+      const away = match.away_abbr || match.away_name || "AWAY";
+      const home = match.home_abbr || match.home_name || "HOME";
+      const homeScore = match.home_score;
+      const awayScore = match.away_score;
+      const finalWinner = String(match.final_winner || "").toUpperCase();
+      const scoreText = (homeScore !== null && homeScore !== undefined && awayScore !== null && awayScore !== undefined)
+        ? `${away} ${fmtNum(awayScore, 0)} : ${fmtNum(homeScore, 0)} ${home}`
+        : `${away} vs ${home}`;
+
+      el.historyDetail.classList.remove("hidden");
+      el.historyMatchTitle.textContent = `${away} @ ${home} (${data.event_id || "-"})`;
+      el.historyFinalResult.textContent = `Final: ${scoreText} | Winner: ${finalWinner || "-"}`;
+
+      if (reco.status === "BUY") {
+        el.historyRecommendation.innerHTML = `<strong>建议买入：</strong>${esc(reco.action || "BUY")} ${esc(reco.team || "-")}，建议买价 <= ${fmtNum(reco.recommended_max_buy_price, 4)}，break-even <= ${fmtNum(reco.break_even_buy_price, 4)}。历史结果：${esc(reco.historical_result || "-")}。`;
+      } else {
+        el.historyRecommendation.innerHTML = `<strong>本场无建议买入。</strong>${esc(reco.reason || "没有触发条件。")}`;
+      }
+
+      el.historyRuleSummary.textContent = `规则: time<=${fmtNum(rules.winner_max_time_left, 0)}s, lead>=${fmtNum(rules.winner_min_lead, 0)}, p∈[${fmtNum(rules.winner_p_min, 3)}, ${fmtNum(rules.winner_p_max, 3)}], min_edge=${fmtNum(rules.winner_min_edge, 3)}, fee=${fmtNum(rules.fee_total, 3)}`;
+
+      const metricRows = [
+        { k: "Timeline", v: String(metrics.timeline_points || 0) },
+        { k: "Signals", v: String(metrics.signals || 0) },
+        { k: "Signal Hit", v: `${metrics.signal_hits || 0}` },
+        { k: "Signal Win Rate", v: fmtPct(metrics.signal_win_rate, 2) },
+        { k: "First Signal", v: metrics.first_signal ? `Q${metrics.first_signal.period} ${metrics.first_signal.clock || "-"}` : "-" },
+        { k: "First Max Buy", v: metrics.first_signal ? fmtNum(metrics.first_signal.recommended_max_buy_price, 4) : "-" },
+        { k: "Best Max Buy", v: metrics.best_signal ? fmtNum(metrics.best_signal.recommended_max_buy_price, 4) : "-" },
+        { k: "Best Guess P", v: metrics.best_signal ? fmtNum(metrics.best_signal.guess_prob, 3) : "-" },
+      ];
+      el.historyMetrics.innerHTML = metricRows.map((m) => `<div class="history-metric"><p class="k">${esc(m.k)}</p><p class="v">${esc(m.v)}</p></div>`).join("");
+
+      const timeline = Array.isArray(data.timeline) ? data.timeline : [];
+      renderHistoryProbChart(timeline);
+      renderHistoryLeadChart(timeline);
+      renderHistorySignals(Array.isArray(data.signals_preview) ? data.signals_preview : []);
+    }
+
+    async function loadHistoryReplay(eventId, label = "") {
+      if (!eventId) {
+        throw new Error("event_id is required");
+      }
+      el.historyHint.textContent = `回放中: ${label || eventId}`;
+      const data = await apiHistoryReplay(eventId);
+      renderHistoryReplay(data);
+      const signals = Number(data?.metrics?.signals || 0);
+      el.historyHint.textContent = `回放完成: ${label || eventId}，触发 ${signals} 次。`;
+    }
+
+    function renderHistoryGames(items) {
+      if (!Array.isArray(items) || !items.length) {
+        el.historyGamesWrap.innerHTML = `<div class="empty">这个日期没有已结束比赛（post）。</div>`;
+        return;
+      }
+      const rows = items.map((r) => {
+        const eventId = String(r.event_id || "");
+        const name = String(r.name || "");
+        const away = String(r.away_abbr || r.away_name || "AWAY");
+        const home = String(r.home_abbr || r.home_name || "HOME");
+        const awayScore = r.away_score;
+        const homeScore = r.home_score;
+        const resultText = (awayScore !== null && awayScore !== undefined && homeScore !== null && homeScore !== undefined)
+          ? `${away} ${fmtNum(awayScore, 0)} : ${fmtNum(homeScore, 0)} ${home}`
+          : "-";
+        return `
+          <tr>
+            <td><div>${esc(name)}</div><div class="tiny mono">${esc(eventId)}</div></td>
+            <td class="mono">${resultText}</td>
+            <td><button class="btn-main" data-history-event="${esc(eventId)}" data-history-name="${esc(name)}">回放</button></td>
+          </tr>
+        `;
+      }).join("");
+      el.historyGamesWrap.innerHTML = `
+        <table class="discover-list">
+          <thead>
+            <tr>
+              <th>比赛</th>
+              <th>终场</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+
+      el.historyGamesWrap.querySelectorAll("[data-history-event]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const eventId = String(btn.getAttribute("data-history-event") || "").trim();
+          const name = String(btn.getAttribute("data-history-name") || "").trim();
+          el.espnEventId.value = eventId;
+          loadHistoryReplay(eventId, name).catch((err) => {
+            el.historyHint.textContent = `回放失败: ${err}`;
+          });
+        });
+      });
+    }
+
+    async function loadHistoryGames() {
+      const sport = encodeURIComponent(el.espnSport.value.trim() || "basketball");
+      const league = encodeURIComponent(el.espnLeague.value.trim() || "nba");
+      const date = encodeURIComponent(el.historyDate.value.trim());
+      el.historyHint.textContent = "加载历史比赛中...";
+      const url = `/api/discover/espn?sport=${sport}&league=${league}&date=${date}&state=post&limit=50`;
+      const data = await apiGet(url);
+      const items = Array.isArray(data.items) ? data.items : [];
+      renderHistoryGames(items);
+      el.historyHint.textContent = `已加载 ${items.length} 场已结束比赛，点“回放”即可看建议和图表。`;
+    }
+
     function updateBadge(kind, text) {
       el.stateBadge.className = "badge";
       if (kind === "SIGNAL") el.stateBadge.classList.add("signal");
+      else if (kind === "NO_TRADE") el.stateBadge.classList.add("notrade");
       else if (kind === "ERROR") el.stateBadge.classList.add("error");
       else el.stateBadge.classList.add("wait");
       el.stateBadge.textContent = text;
     }
 
     function updateStatus(data) {
+      if (data && typeof data === "object" && data.state && data.state !== "ERROR") {
+        state.lastSignalData = data;
+      }
       if (data.state === "SIGNAL") {
         el.actionText.textContent = data.action || "-";
         el.reasonText.textContent = data.reason || "-";
         updateBadge("SIGNAL", "SIGNAL");
       } else if (data.state === "GUESS") {
-        el.actionText.textContent = data.guess_team || "-";
-        el.reasonText.textContent = `Home ${fmtNum(data.p_home, 3)} / Away ${fmtNum(data.p_away, 3)}`;
+        el.actionText.textContent = data.action || data.guess_team || "-";
+        const summary = `Home ${fmtNum(data.p_home, 3)} / Away ${fmtNum(data.p_away, 3)}`;
+        el.reasonText.textContent = data.reason ? `${data.reason} | ${summary}` : summary;
         updateBadge("SIGNAL", "GUESS");
+      } else if (data.state === "NO_TRADE") {
+        el.actionText.textContent = "NO_TRADE";
+        el.reasonText.textContent = data.reason || "规则未通过";
+        updateBadge("NO_TRADE", "NO_TRADE");
       } else if (data.state === "WAITING") {
         el.actionText.textContent = "WAITING";
         if (data.espn_status === "no_market") {
@@ -829,11 +1899,20 @@
         updateBadge("ERROR", "ERROR");
       }
 
-      if (data.state === "GUESS") {
+      if (data.state === "GUESS" || data.state === "NO_TRADE") {
         el.mPLive.textContent = `${fmtNum(data.p_home, 3)} / ${fmtNum(data.p_away, 3)}`;
-        el.mPEff.textContent = "-";
-        el.mBestEv.textContent = fmtNum(data.confidence, 4);
-        el.mPrices.textContent = "-";
+        el.mPEff.textContent = data.lead === null || data.lead === undefined ? "-" : `${Number(data.lead).toFixed(0)}`;
+        const edgeVal = data.edge;
+        const hasEdge = edgeVal !== null && edgeVal !== undefined && !Number.isNaN(Number(edgeVal));
+        el.mBestEv.textContent = hasEdge ? fmtNum(edgeVal, 4) : fmtNum(data.confidence, 4);
+        const hasPrices =
+          data.a_yes !== null &&
+          data.a_yes !== undefined &&
+          data.a_no !== null &&
+          data.a_no !== undefined &&
+          !Number.isNaN(Number(data.a_yes)) &&
+          !Number.isNaN(Number(data.a_no));
+        el.mPrices.textContent = hasPrices ? `${fmtNum(data.a_yes, 3)} / ${fmtNum(data.a_no, 3)}` : "-";
       } else {
         el.mPLive.textContent = fmtNum(data.p_live_yes, 4);
         el.mPEff.textContent = fmtNum(data.p_eff, 4);
@@ -851,18 +1930,32 @@
       } else {
         el.mMode.textContent = mode;
       }
+      updateBudgetCalc();
     }
 
     function addLog(data, error = false) {
       const tr = document.createElement("tr");
       const stateText = error ? "ERROR" : (data.state || "-");
-      const winnerMode = !error && data.state === "GUESS";
-      const actionText = winnerMode ? (data.guess_team || "-") : (data.action || "-");
-      const evOrConfidence = winnerMode ? fmtNum(data.confidence, 4) : fmtNum(data.best_ev, 4);
+      const winnerMode = !error && (data.state === "GUESS" || data.state === "NO_TRADE");
+      const actionText = winnerMode ? (data.state === "GUESS" ? (data.action || data.guess_team || "-") : "NO_TRADE") : (data.action || "-");
+      const winnerEdge = data.edge;
+      const hasWinnerEdge = winnerEdge !== null && winnerEdge !== undefined && !Number.isNaN(Number(winnerEdge));
+      const evOrConfidence = winnerMode
+        ? (hasWinnerEdge ? fmtNum(winnerEdge, 4) : fmtNum(data.confidence, 4))
+        : fmtNum(data.best_ev, 4);
       const pLiveOrPair = winnerMode
         ? `${fmtNum(data.p_home, 3)} / ${fmtNum(data.p_away, 3)}`
         : fmtNum(data.p_live_yes, 4);
-      const pricesText = winnerMode ? "-" : `${fmtNum(data.a_yes, 3)} / ${fmtNum(data.a_no, 3)}`;
+      const winnerHasPrices =
+        data.a_yes !== null &&
+        data.a_yes !== undefined &&
+        data.a_no !== null &&
+        data.a_no !== undefined &&
+        !Number.isNaN(Number(data.a_yes)) &&
+        !Number.isNaN(Number(data.a_no));
+      const pricesText = winnerMode
+        ? (winnerHasPrices ? `${fmtNum(data.a_yes, 3)} / ${fmtNum(data.a_no, 3)}` : "- / -")
+        : `${fmtNum(data.a_yes, 3)} / ${fmtNum(data.a_no, 3)}`;
       const rivalry = error
         ? "-"
         : (
@@ -945,6 +2038,21 @@
 
     function startPolling() {
       stopPolling();
+      if (state.robustGateRequired) {
+        const cfgKey = currentRobustGateConfigKey();
+        if (!state.robustGateResult || state.robustGateConfigKey !== cfgKey) {
+          invalidateRobustGate("参数变化");
+          el.runState.textContent = "BLOCKED BY GATE";
+          return;
+        }
+        const gate = state.robustGateResult.gate || {};
+        if (!gate.passed) {
+          const reasonText = Array.isArray(gate.reasons) && gate.reasons.length ? gate.reasons.join("；") : (gate.message || "门控未通过");
+          el.robustGateHint.textContent = `BLOCK：${reasonText}`;
+          el.runState.textContent = "BLOCKED BY GATE";
+          return;
+        }
+      }
       const intervalMs = Math.max(300, Number(el.interval.value || 2) * 1000);
       el.runState.textContent = `RUNNING ${intervalMs / 1000}s`;
       pollOnce();
@@ -1244,12 +2352,73 @@
     el.btnLoadGames.addEventListener("click", () => loadGamePicker().catch((err) => { el.gamePickerHint.textContent = `加载失败: ${err}`; }));
     el.gamePicker.addEventListener("change", () => { onGamePickerChange(); });
     el.gamePickerState.addEventListener("change", () => loadGamePicker().catch((err) => { el.gamePickerHint.textContent = `加载失败: ${err}`; }));
+    el.historyDate.addEventListener("change", () => loadHistoryGames().catch((err) => { el.historyHint.textContent = `加载失败: ${err}`; }));
     el.btnEspn.addEventListener("click", () => loadEspn().catch((err) => { el.discoverWrap.innerHTML = `<div class="empty">Error: ${err}</div>`; }));
+    el.btnLoadHistoryGames.addEventListener("click", () => loadHistoryGames().catch((err) => { el.historyHint.textContent = `加载失败: ${err}`; }));
     el.btnAutofill.addEventListener("click", () => autoFillMarket().catch((err) => { el.autofillHint.textContent = `自动填充失败: ${err}`; }));
     el.btnQuickSetup.addEventListener("click", () => quickSetup().catch((err) => { el.quickSetupHint.textContent = `一键就绪失败: ${err}`; }));
+    el.btnSimpleReady.addEventListener("click", () => simpleReady().catch((err) => { el.simpleFlowHint.textContent = `失败: ${err}`; }));
+    el.btnSimpleStrategy.addEventListener("click", applyBalancedStrategyPreset);
+    el.btnRobustModeGateQuick.addEventListener("click", () => applyRobustModeAndGate(false).catch((err) => {
+      state.robustGateRequired = true;
+      state.robustGateResult = null;
+      state.robustGateConfigKey = "";
+      el.simpleFlowHint.textContent = `历史门控失败: ${err}`;
+      el.robustGateHint.textContent = `门控失败: ${err}`;
+      el.runState.textContent = "BLOCKED BY GATE";
+    }));
+    el.btnRobustModeGate.addEventListener("click", () => applyRobustModeAndGate(false).catch((err) => {
+      state.robustGateRequired = true;
+      state.robustGateResult = null;
+      state.robustGateConfigKey = "";
+      el.robustGateHint.textContent = `门控失败: ${err}`;
+      el.runState.textContent = "BLOCKED BY GATE";
+    }));
+    el.btnQuickSetupSimple.addEventListener("click", applyQuickExperimentPreset);
+    el.btnUseSignalPrice.addEventListener("click", useCurrentSignalPriceForBudget);
+    el.btnCalcBudget.addEventListener("click", updateBudgetCalc);
+    el.btnFillWinnerTest.addEventListener("click", fillWinnerTestData);
+    el.btnRunWinnerSelfTest.addEventListener("click", runWinnerSelfTest);
+    [
+      el.capBankroll,
+      el.capWinRate,
+      el.capFee,
+      el.capBuyPrice,
+      el.capRiskPct,
+      el.capDailyStopPct,
+    ].forEach((node) => {
+      node.addEventListener("input", updateBudgetCalc);
+    });
+    [
+      el.winnerMaxTimeLeft,
+      el.winnerMinLead,
+      el.winnerPMin,
+      el.winnerPMax,
+      el.winnerMinEdge,
+      el.historyFeeTotal,
+      el.robustLookbackDays,
+      el.robustMinGames,
+      el.robustMinTriggerGames,
+      el.robustMinHitRate,
+    ].forEach((node) => {
+      node.addEventListener("input", () => {
+        if (state.robustGateRequired) {
+          invalidateRobustGate("参数变化");
+        }
+      });
+    });
     el.winnerOnly.addEventListener("change", () => {
       applyModeLabels();
       applyModeVisibility();
+      updateBudgetCalc();
+    });
+    el.simpleMode.addEventListener("change", () => {
+      applyModeLabels();
+      applyModeVisibility();
+      updateBudgetCalc();
+      if (el.simpleMode.checked) {
+        el.simpleFlowHint.textContent = "极简：先点“平衡型策略”，再点“一键选中比赛”，最后开始轮询。";
+      }
     });
 
     (function initDate() {
@@ -1258,9 +2427,16 @@
       const mm = String(d.getMonth() + 1).padStart(2, "0");
       const dd = String(d.getDate()).padStart(2, "0");
       el.discoverDate.value = `${yyyy}${mm}${dd}`;
+      const y = new Date(d.getTime() - 24 * 3600 * 1000);
+      const yyyy2 = y.getFullYear();
+      const mm2 = String(y.getMonth() + 1).padStart(2, "0");
+      const dd2 = String(y.getDate()).padStart(2, "0");
+      el.historyDate.value = `${yyyy2}${mm2}${dd2}`;
       applyModeLabels();
       applyModeVisibility();
       loadGamePicker().catch((err) => { el.gamePickerHint.textContent = `加载失败: ${err}`; });
+      loadHistoryGames().catch((err) => { el.historyHint.textContent = `加载失败: ${err}`; });
+      updateBudgetCalc();
       startHotReloadWatcher();
     })();
   </script>
