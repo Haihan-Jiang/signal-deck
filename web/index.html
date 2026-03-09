@@ -848,6 +848,10 @@
         <h3>Dry Run 记录</h3>
         <div class="btn-row">
           <button class="btn-aux" id="btnLoadDryrun">刷新记录</button>
+          <label class="check">
+            <input id="dryrunTriggeredOnly" type="checkbox" />
+            <span>只看最近触发比赛</span>
+          </label>
           <span class="hint" id="dryrunHint">显示最近 dry-run 文本快照和 Excel 记录。</span>
         </div>
         <div class="dryrun-links">
@@ -890,6 +894,7 @@
       hotReloadTimer: null,
       lastSignalData: null,
       historyReplayData: null,
+      lastDryrunRows: [],
       robustGateRequired: false,
       robustGateResult: null,
       robustGateConfigKey: ""
@@ -997,6 +1002,7 @@
       historyLeadChart: document.getElementById("historyLeadChart"),
       historySignalsWrap: document.getElementById("historySignalsWrap"),
       btnLoadDryrun: document.getElementById("btnLoadDryrun"),
+      dryrunTriggeredOnly: document.getElementById("dryrunTriggeredOnly"),
       dryrunHint: document.getElementById("dryrunHint"),
       dryrunText: document.getElementById("dryrunText"),
       dryrunTableWrap: document.getElementById("dryrunTableWrap"),
@@ -1929,12 +1935,27 @@
       el.historyHint.textContent = `已加载 ${items.length} 场已结束比赛，点“回放”即可看建议和图表。`;
     }
 
+    function filteredDryrunRows(rows) {
+      if (!el.dryrunTriggeredOnly.checked) {
+        return rows;
+      }
+      return rows.filter((row) => {
+        const rowType = String(row.row_type || "").toLowerCase();
+        const stateText = String(row.state || "").toUpperCase();
+        return rowType === "game" && stateText === "GUESS";
+      });
+    }
+
     function renderDryrunTable(rows) {
-      if (!Array.isArray(rows) || !rows.length) {
-        el.dryrunTableWrap.innerHTML = `<div class="empty">暂无 dry-run 记录。</div>`;
+      const visibleRows = filteredDryrunRows(rows);
+      if (!Array.isArray(visibleRows) || !visibleRows.length) {
+        const message = el.dryrunTriggeredOnly.checked
+          ? "最近记录里没有触发比赛。"
+          : "暂无 dry-run 记录。";
+        el.dryrunTableWrap.innerHTML = `<div class="empty">${message}</div>`;
         return;
       }
-      const body = rows.map((row) => {
+      const body = visibleRows.map((row) => {
         const rivalry = row.rivalry || row.event_id || row.row_key || "-";
         const action = row.suggested_action || row.action || "-";
         const price = row.target_max_buy_price || row.recommended_max_buy_price || "-";
@@ -1974,13 +1995,18 @@
       const files = data.files || {};
       const meta = data.meta || {};
       const rows = Array.isArray(data.rows) ? data.rows : [];
+      state.lastDryrunRows = rows;
       el.linkDryrunCsv.href = files.csv || "/logs/dryrun_signals.csv";
       el.linkDryrunTxt.href = files.txt || "/logs/dryrun_latest.txt";
       el.linkDryrunCron.href = files.cron_log || "/logs/dryrun_cron.log";
       el.dryrunText.textContent = data.txt || "暂无 dry-run 文本快照。";
       renderDryrunTable(rows);
+      const visibleCount = filteredDryrunRows(rows).length;
       const csvUpdated = meta.csv_mtime ? new Date(Number(meta.csv_mtime) * 1000).toLocaleString() : "-";
-      el.dryrunHint.textContent = `CSV ${meta.csv_exists ? "已生成" : "未生成"}，最近更新时间 ${csvUpdated}，当前展示 ${rows.length} 条记录。`;
+      const scopeText = el.dryrunTriggeredOnly.checked
+        ? `当前显示 ${visibleCount}/${rows.length} 条（仅触发）`
+        : `当前显示 ${rows.length} 条记录`;
+      el.dryrunHint.textContent = `CSV ${meta.csv_exists ? "已生成" : "未生成"}，最近更新时间 ${csvUpdated}，${scopeText}。`;
     }
 
     function updateBadge(kind, text) {
@@ -2480,6 +2506,16 @@
     el.btnEspn.addEventListener("click", () => loadEspn().catch((err) => { el.discoverWrap.innerHTML = `<div class="empty">Error: ${err}</div>`; }));
     el.btnLoadHistoryGames.addEventListener("click", () => loadHistoryGames().catch((err) => { el.historyHint.textContent = `加载失败: ${err}`; }));
     el.btnLoadDryrun.addEventListener("click", () => loadDryrun().catch((err) => { el.dryrunHint.textContent = `加载失败: ${err}`; }));
+    el.dryrunTriggeredOnly.addEventListener("change", () => {
+      renderDryrunTable(state.lastDryrunRows);
+      const visibleCount = filteredDryrunRows(state.lastDryrunRows).length;
+      const totalCount = Array.isArray(state.lastDryrunRows) ? state.lastDryrunRows.length : 0;
+      if (el.dryrunTriggeredOnly.checked) {
+        el.dryrunHint.textContent = `当前显示 ${visibleCount}/${totalCount} 条（仅触发比赛）。`;
+      } else {
+        el.dryrunHint.textContent = `当前显示 ${totalCount} 条记录。`;
+      }
+    });
     el.btnAutofill.addEventListener("click", () => autoFillMarket().catch((err) => { el.autofillHint.textContent = `自动填充失败: ${err}`; }));
     el.btnQuickSetup.addEventListener("click", () => quickSetup().catch((err) => { el.quickSetupHint.textContent = `一键就绪失败: ${err}`; }));
     el.btnSimpleReady.addEventListener("click", () => simpleReady().catch((err) => { el.simpleFlowHint.textContent = `失败: ${err}`; }));
