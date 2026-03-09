@@ -344,6 +344,50 @@
       line-height: 1.35;
     }
 
+    .dryrun-links {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .link-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 9px;
+      border-radius: 999px;
+      border: 1px solid #a9c8c0;
+      background: #eef6f3;
+      color: #21443e;
+      font-size: 0.78rem;
+      text-decoration: none;
+      font-weight: 600;
+    }
+
+    .link-chip:hover {
+      background: #e4f1ec;
+    }
+
+    .dryrun-pre {
+      margin: 0;
+      padding: 10px;
+      border-radius: 10px;
+      border: 1px solid #bfd7d1;
+      background: #fcfdfb;
+      font-family: var(--mono);
+      font-size: 0.76rem;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 240px;
+      overflow: auto;
+    }
+
+    .table-wrap {
+      overflow: auto;
+    }
+
     .history-detail {
       margin-top: 8px;
       display: grid;
@@ -800,6 +844,21 @@
         </div>
       </section>
 
+      <section class="box" id="dryrunBox">
+        <h3>Dry Run 记录</h3>
+        <div class="btn-row">
+          <button class="btn-aux" id="btnLoadDryrun">刷新记录</button>
+          <span class="hint" id="dryrunHint">显示最近 dry-run 文本快照和 Excel 记录。</span>
+        </div>
+        <div class="dryrun-links">
+          <a class="link-chip" id="linkDryrunCsv" href="/logs/dryrun_signals.csv" target="_blank" rel="noreferrer">打开 CSV</a>
+          <a class="link-chip" id="linkDryrunTxt" href="/logs/dryrun_latest.txt" target="_blank" rel="noreferrer">打开 TXT</a>
+          <a class="link-chip" id="linkDryrunCron" href="/logs/dryrun_cron.log" target="_blank" rel="noreferrer">打开 Cron Log</a>
+        </div>
+        <pre class="dryrun-pre" id="dryrunText">加载中...</pre>
+        <div class="table-wrap" id="dryrunTableWrap"></div>
+      </section>
+
       <section class="box">
         <h3>信号日志</h3>
         <table class="log-table" id="logTable">
@@ -937,6 +996,13 @@
       historyProbChart: document.getElementById("historyProbChart"),
       historyLeadChart: document.getElementById("historyLeadChart"),
       historySignalsWrap: document.getElementById("historySignalsWrap"),
+      btnLoadDryrun: document.getElementById("btnLoadDryrun"),
+      dryrunHint: document.getElementById("dryrunHint"),
+      dryrunText: document.getElementById("dryrunText"),
+      dryrunTableWrap: document.getElementById("dryrunTableWrap"),
+      linkDryrunCsv: document.getElementById("linkDryrunCsv"),
+      linkDryrunTxt: document.getElementById("linkDryrunTxt"),
+      linkDryrunCron: document.getElementById("linkDryrunCron"),
       logBody: document.getElementById("logBody"),
       btnStart: document.getElementById("btnStart"),
       btnStop: document.getElementById("btnStop"),
@@ -1634,6 +1700,10 @@
       return apiGet(url);
     }
 
+    async function apiDryrunLatest(limit = 30) {
+      return apiGet(`/api/dryrun/latest?limit=${encodeURIComponent(String(limit))}`);
+    }
+
     function buildSvgLinePath(points, xFn, yFn) {
       if (!points.length) return "";
       return points.map((p, idx) => {
@@ -1857,6 +1927,60 @@
       const items = Array.isArray(data.items) ? data.items : [];
       renderHistoryGames(items);
       el.historyHint.textContent = `已加载 ${items.length} 场已结束比赛，点“回放”即可看建议和图表。`;
+    }
+
+    function renderDryrunTable(rows) {
+      if (!Array.isArray(rows) || !rows.length) {
+        el.dryrunTableWrap.innerHTML = `<div class="empty">暂无 dry-run 记录。</div>`;
+        return;
+      }
+      const body = rows.map((row) => {
+        const rivalry = row.rivalry || row.event_id || row.row_key || "-";
+        const action = row.suggested_action || row.action || "-";
+        const price = row.target_max_buy_price || row.recommended_max_buy_price || "-";
+        return `
+          <tr>
+            <td class="mono">${esc((row.run_ts || "").replace("T", " ").slice(5, 19) || "-")}</td>
+            <td>${esc(row.row_type || "-")}</td>
+            <td>${esc(row.state || "-")}</td>
+            <td class="tiny">${esc(rivalry)}</td>
+            <td class="mono">${esc(action)}</td>
+            <td class="mono">${esc(price)}</td>
+            <td class="tiny">${esc(row.reason || "-")}</td>
+          </tr>
+        `;
+      }).join("");
+      el.dryrunTableWrap.innerHTML = `
+        <table class="discover-list">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Type</th>
+              <th>State</th>
+              <th>Rivalry</th>
+              <th>Action</th>
+              <th>Target Buy</th>
+              <th>Reason</th>
+            </tr>
+          </thead>
+          <tbody>${body}</tbody>
+        </table>
+      `;
+    }
+
+    async function loadDryrun() {
+      el.dryrunHint.textContent = "加载 dry-run 记录...";
+      const data = await apiDryrunLatest(24);
+      const files = data.files || {};
+      const meta = data.meta || {};
+      const rows = Array.isArray(data.rows) ? data.rows : [];
+      el.linkDryrunCsv.href = files.csv || "/logs/dryrun_signals.csv";
+      el.linkDryrunTxt.href = files.txt || "/logs/dryrun_latest.txt";
+      el.linkDryrunCron.href = files.cron_log || "/logs/dryrun_cron.log";
+      el.dryrunText.textContent = data.txt || "暂无 dry-run 文本快照。";
+      renderDryrunTable(rows);
+      const csvUpdated = meta.csv_mtime ? new Date(Number(meta.csv_mtime) * 1000).toLocaleString() : "-";
+      el.dryrunHint.textContent = `CSV ${meta.csv_exists ? "已生成" : "未生成"}，最近更新时间 ${csvUpdated}，当前展示 ${rows.length} 条记录。`;
     }
 
     function updateBadge(kind, text) {
@@ -2355,6 +2479,7 @@
     el.historyDate.addEventListener("change", () => loadHistoryGames().catch((err) => { el.historyHint.textContent = `加载失败: ${err}`; }));
     el.btnEspn.addEventListener("click", () => loadEspn().catch((err) => { el.discoverWrap.innerHTML = `<div class="empty">Error: ${err}</div>`; }));
     el.btnLoadHistoryGames.addEventListener("click", () => loadHistoryGames().catch((err) => { el.historyHint.textContent = `加载失败: ${err}`; }));
+    el.btnLoadDryrun.addEventListener("click", () => loadDryrun().catch((err) => { el.dryrunHint.textContent = `加载失败: ${err}`; }));
     el.btnAutofill.addEventListener("click", () => autoFillMarket().catch((err) => { el.autofillHint.textContent = `自动填充失败: ${err}`; }));
     el.btnQuickSetup.addEventListener("click", () => quickSetup().catch((err) => { el.quickSetupHint.textContent = `一键就绪失败: ${err}`; }));
     el.btnSimpleReady.addEventListener("click", () => simpleReady().catch((err) => { el.simpleFlowHint.textContent = `失败: ${err}`; }));
@@ -2436,6 +2561,7 @@
       applyModeVisibility();
       loadGamePicker().catch((err) => { el.gamePickerHint.textContent = `加载失败: ${err}`; });
       loadHistoryGames().catch((err) => { el.historyHint.textContent = `加载失败: ${err}`; });
+      loadDryrun().catch((err) => { el.dryrunHint.textContent = `加载失败: ${err}`; });
       updateBudgetCalc();
       startHotReloadWatcher();
     })();

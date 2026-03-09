@@ -10,6 +10,7 @@ Then open:
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import json
 import math
@@ -31,6 +32,10 @@ from signal_engine import compute_signal
 
 ROOT = Path(__file__).resolve().parent
 INDEX_HTML = ROOT / "web" / "index.html"
+LOG_DIR = ROOT / "logs"
+DRYRUN_CSV = LOG_DIR / "dryrun_signals.csv"
+DRYRUN_TXT = LOG_DIR / "dryrun_latest.txt"
+DRYRUN_CRON_LOG = LOG_DIR / "dryrun_cron.log"
 HOTRELOAD_WATCH_FILES = (
     ROOT / "dashboard_server.py",
     ROOT / "live_experiment_signal.py",
@@ -1144,6 +1149,32 @@ def build_history_gate(config: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def read_dryrun_latest(limit: int = 40) -> dict[str, Any]:
+    rows: list[dict[str, str]] = []
+    if DRYRUN_CSV.exists():
+        with DRYRUN_CSV.open("r", encoding="utf-8", newline="") as fh:
+            reader = csv.DictReader(fh)
+            rows = [dict(row) for row in reader]
+    if limit > 0:
+        rows = rows[-limit:]
+    rows.reverse()
+
+    txt = ""
+    if DRYRUN_TXT.exists():
+        txt = DRYRUN_TXT.read_text(encoding="utf-8")
+
+    return {
+        "txt": txt,
+        "rows": rows,
+        "csv_exists": DRYRUN_CSV.exists(),
+        "txt_exists": DRYRUN_TXT.exists(),
+        "csv_mtime": DRYRUN_CSV.stat().st_mtime if DRYRUN_CSV.exists() else None,
+        "txt_mtime": DRYRUN_TXT.stat().st_mtime if DRYRUN_TXT.exists() else None,
+        "csv_size": DRYRUN_CSV.stat().st_size if DRYRUN_CSV.exists() else 0,
+        "txt_size": DRYRUN_TXT.stat().st_size if DRYRUN_TXT.exists() else 0,
+    }
+
+
 def build_pair_filter(event_meta: dict[str, Any]) -> dict[str, Any]:
     home_terms = set(_team_terms(event_meta["home_name"]))
     away_terms = set(_team_terms(event_meta["away_name"]))
@@ -1475,6 +1506,7 @@ def build_winner_once(config: dict[str, Any]) -> dict[str, Any]:
     winner_p_max = parse_float(config.get("winner_p_max"), 0.97)
     winner_min_edge = parse_float(config.get("winner_min_edge"), 0.025)
     winner_max_buy_price = parse_float(config.get("winner_max_buy_price"), 0.91)
+    fee_total = parse_float(config.get("fee_total"), 0.02)
 
     if winner_max_time_left < 0:
         raise ValueError("winner_max_time_left must be >= 0.")
@@ -1484,6 +1516,8 @@ def build_winner_once(config: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("winner_min_edge must be >= 0.")
     if not (0 <= winner_max_buy_price <= 1):
         raise ValueError("winner_max_buy_price must be in [0,1].")
+    if fee_total < 0:
+        raise ValueError("fee_total must be >= 0.")
     if not (0 <= winner_p_min <= 1 and 0 <= winner_p_max <= 1 and winner_p_min <= winner_p_max):
         raise ValueError("winner_p_min/winner_p_max must satisfy 0 <= min <= max <= 1.")
 
@@ -1543,6 +1577,7 @@ def build_winner_once(config: dict[str, Any]) -> dict[str, Any]:
             "p_max": winner_p_max,
             "min_edge": winner_min_edge,
             "max_buy_price": winner_max_buy_price,
+            "fee_total": fee_total,
         },
     }
 
@@ -1574,8 +1609,17 @@ def build_winner_once(config: dict[str, Any]) -> dict[str, Any]:
             "guess_side": "tie",
             "guess_team": "TOSS_UP",
             "guess_prob": p_home,
+            "suggested_action": None,
+            "break_even_buy_price": None,
+            "recommended_max_buy_price": None,
+            "target_max_buy_price": None,
             **common,
         }
+
+    suggested_action = "BUY_HOME" if guess_side == "home" else "BUY_AWAY"
+    break_even_buy_price = max(0.0, guess_prob - fee_total)
+    recommended_max_buy_price = max(0.0, break_even_buy_price - winner_min_edge)
+    target_max_buy_price = min(winner_max_buy_price, recommended_max_buy_price)
 
     blockers: list[str] = []
     if espn["time_left"] > winner_max_time_left:
@@ -1620,11 +1664,15 @@ def build_winner_once(config: dict[str, Any]) -> dict[str, Any]:
         "guess_side": guess_side,
         "guess_team": guess_team,
         "guess_prob": guess_prob,
+        "suggested_action": suggested_action,
         "action": action,
         "a_yes": a_yes,
         "a_no": a_no,
         "entry_price": entry_price,
         "edge": edge,
+        "break_even_buy_price": break_even_buy_price,
+        "recommended_max_buy_price": recommended_max_buy_price,
+        "target_max_buy_price": target_max_buy_price,
         "market_error": market_error,
         **common,
     }
@@ -1665,6 +1713,14 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _send_bytes(self, status: int, data: bytes, content_type: str) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
@@ -1680,6 +1736,53 @@ class Handler(BaseHTTPRequestHandler):
 
             if path == "/api/health":
                 self._send_json(HTTPStatus.OK, {"ok": True})
+                return
+
+            if path == "/api/dryrun/latest":
+                payload = read_dryrun_latest(
+                    limit=max(1, min(parse_int(query_first(query, "limit", "30"), 30), 200))
+                )
+                self._send_json(
+                    HTTPStatus.OK,
+                    {
+                        "txt": payload["txt"],
+                        "rows": payload["rows"],
+                        "files": {
+                            "csv": "/logs/dryrun_signals.csv",
+                            "txt": "/logs/dryrun_latest.txt",
+                            "cron_log": "/logs/dryrun_cron.log",
+                        },
+                        "meta": {
+                            "csv_exists": payload["csv_exists"],
+                            "txt_exists": payload["txt_exists"],
+                            "csv_mtime": payload["csv_mtime"],
+                            "txt_mtime": payload["txt_mtime"],
+                            "csv_size": payload["csv_size"],
+                            "txt_size": payload["txt_size"],
+                        },
+                    },
+                )
+                return
+
+            if path == "/logs/dryrun_signals.csv":
+                if not DRYRUN_CSV.exists():
+                    self._send_json(HTTPStatus.NOT_FOUND, {"error": "dryrun_signals.csv not found"})
+                    return
+                self._send_bytes(HTTPStatus.OK, DRYRUN_CSV.read_bytes(), "text/csv; charset=utf-8")
+                return
+
+            if path == "/logs/dryrun_latest.txt":
+                if not DRYRUN_TXT.exists():
+                    self._send_json(HTTPStatus.NOT_FOUND, {"error": "dryrun_latest.txt not found"})
+                    return
+                self._send_bytes(HTTPStatus.OK, DRYRUN_TXT.read_bytes(), "text/plain; charset=utf-8")
+                return
+
+            if path == "/logs/dryrun_cron.log":
+                if not DRYRUN_CRON_LOG.exists():
+                    self._send_json(HTTPStatus.NOT_FOUND, {"error": "dryrun_cron.log not found"})
+                    return
+                self._send_bytes(HTTPStatus.OK, DRYRUN_CRON_LOG.read_bytes(), "text/plain; charset=utf-8")
                 return
 
             if path == "/api/dev/reload-token":
