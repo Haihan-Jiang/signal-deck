@@ -17,6 +17,8 @@ import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
 from dashboard_server import build_history_gate, build_winner_once, discover_espn
@@ -116,6 +118,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--trade-state-path", type=Path, default=DEFAULT_TRADE_STATE_PATH)
     parser.add_argument("--contracts", type=float, default=None, help="Fixed theoretical contracts per trade.")
     parser.add_argument("--trade-budget", type=float, default=DEFAULT_TRADE_BUDGET, help="Theoretical max loss budget per trade.")
+    parser.add_argument("--telegram-bot-token", default=os.environ.get("SIGNAL_DECK_TELEGRAM_BOT_TOKEN", ""))
+    parser.add_argument("--telegram-chat-id", default=os.environ.get("SIGNAL_DECK_TELEGRAM_CHAT_ID", ""))
     parser.add_argument("--timezone", default="America/Los_Angeles")
     parser.add_argument("--disable-gate", action="store_true", help="Skip history gate and just record snapshots.")
     parser.set_defaults(require_live=True, fallback_pre=True)
@@ -143,6 +147,18 @@ def normalize_reason(value: Any) -> str:
     if value is None:
         return ""
     return " ".join(str(value).splitlines()).strip()
+
+
+def display_action_label(action: Any, guess_team: Any) -> str:
+    action_text = str(action or "").strip().upper()
+    team_text = str(guess_team or "").strip().upper()
+    if not action_text:
+        return ""
+    if action_text == "BUY_HOME" and team_text:
+        return f"BUY {team_text}"
+    if action_text == "BUY_AWAY" and team_text:
+        return f"BUY {team_text}"
+    return action_text
 
 
 def make_signature(row: dict[str, str]) -> str:
@@ -435,6 +451,54 @@ def build_trade_close_row(
     }
 
 
+def telegram_enabled(args: argparse.Namespace) -> bool:
+    return bool(str(args.telegram_bot_token).strip() and str(args.telegram_chat_id).strip())
+
+
+def build_telegram_signal_text(run_ts: str, args: argparse.Namespace, result: dict[str, Any], contracts: float) -> str:
+    rivalry = str(result.get("rivalry") or result.get("espn_event_id") or "-")
+    score = f"{fmt_num(result.get('away_score'), 0) or '-'} - {fmt_num(result.get('home_score'), 0) or '-'}"
+    action_label = display_action_label(result.get("suggested_action"), result.get("guess_team")) or "-"
+    lines = [
+        "Signal Deck Alert",
+        "strategy=max_profit_95",
+        f"game={rivalry}",
+        f"state={result.get('state') or '-'}",
+        f"action={action_label}",
+        f"guess_team={result.get('guess_team') or '-'}",
+        f"guess_prob={fmt_num(result.get('guess_prob'), 4) or '-'}",
+        f"lead={fmt_num(result.get('lead'), 0) or '-'}",
+        f"time_left={fmt_num(result.get('time_left'), 0) or '-'}s",
+        f"score(away-home)={score}",
+        f"target_max_buy={fmt_num(result.get('target_max_buy_price'), 4) or '-'}",
+        f"contracts={fmt_num(contracts, 2) or '-'}",
+        f"reason={normalize_reason(result.get('reason')) or '-'}",
+        f"run_ts={run_ts}",
+    ]
+    return "\n".join(lines)
+
+
+def send_telegram_message(args: argparse.Namespace, text: str) -> None:
+    if not telegram_enabled(args):
+        return
+    token = str(args.telegram_bot_token).strip()
+    chat_id = str(args.telegram_chat_id).strip()
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = urlencode(
+        {
+            "chat_id": chat_id,
+            "text": text,
+            "disable_web_page_preview": "true",
+        }
+    ).encode("utf-8")
+    request = Request(url, data=payload, headers={"Content-Type": "application/x-www-form-urlencoded"})
+    with urlopen(request, timeout=args.timeout) as response:
+        raw = response.read().decode("utf-8")
+    reply = json.loads(raw)
+    if not isinstance(reply, dict) or not reply.get("ok"):
+        raise RuntimeError(f"Telegram sendMessage failed: {raw}")
+
+
 def settle_open_positions(
     args: argparse.Namespace,
     run_ts: str,
@@ -489,8 +553,9 @@ def open_new_positions(
     results: list[dict[str, Any]],
     open_positions: dict[str, dict[str, Any]],
     closed_event_ids: set[str],
-) -> list[dict[str, str]]:
+) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
     rows: list[dict[str, str]] = []
+    opened_signals: list[dict[str, Any]] = []
     for result in results:
         event_id = str(result.get("espn_event_id") or "").strip()
         if not event_id or event_id in open_positions or event_id in closed_event_ids:
@@ -530,7 +595,13 @@ def open_new_positions(
         }
         open_positions[event_id] = position
         rows.append(build_trade_open_row(run_ts, position))
-    return rows
+        opened_signals.append(
+            {
+                "position": position,
+                "result": result,
+            }
+        )
+    return rows, opened_signals
 
 
 def discover_candidate_events(args: argparse.Namespace) -> tuple[list[dict[str, Any]], str]:
@@ -643,7 +714,7 @@ def write_snapshot_text(
             lines.append(
                 f"{row['rivalry'] or row['event_id']} | "
                 f"state={row['state']} | "
-                f"suggested={row['suggested_action'] or '-'} | "
+                f"suggested={display_action_label(row['suggested_action'], row['guess_team']) or '-'} | "
                 f"guess_p={row['guess_prob'] or '-'} | "
                 f"lead={row['lead'] or '-'} | "
                 f"time_left={row['time_left'] or '-'} | "
@@ -713,7 +784,30 @@ def main() -> int:
             rows.append(row)
             game_rows.append(row)
             game_results.append(result)
-        trade_rows.extend(open_new_positions(args, run_ts, game_results, open_positions, closed_event_ids))
+        new_trade_rows, opened_signals = open_new_positions(args, run_ts, game_results, open_positions, closed_event_ids)
+        trade_rows.extend(new_trade_rows)
+        for item in opened_signals:
+            position = item.get("position") if isinstance(item.get("position"), dict) else {}
+            result = item.get("result") if isinstance(item.get("result"), dict) else {}
+            try:
+                send_telegram_message(
+                    args,
+                    build_telegram_signal_text(
+                        run_ts,
+                        args,
+                        result,
+                        float(position.get("contracts") or 0.0),
+                    ),
+                )
+            except Exception as exc:
+                rows.append(
+                    build_system_row(
+                        run_ts,
+                        args,
+                        f"TELEGRAM_ERROR:{position.get('event_id') or result.get('espn_event_id') or ''}",
+                        str(exc),
+                    )
+                )
         write_snapshot_text(args.txt_path, run_ts, args, gate_payload, game_rows, event_state)
 
     previous_rows = load_state(args.state_path)

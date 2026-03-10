@@ -610,8 +610,10 @@
         <div class="btn-row" id="simpleFlowRow">
           <button class="btn-main" id="btnSimpleReady">一键选中比赛</button>
           <button class="btn-aux" id="btnSimpleStrategy">平衡型策略</button>
+          <button class="btn-aux" id="btnMaxProfitStrategy">最大利润版</button>
+          <button class="btn-aux" id="btnSteadyProfitStrategy">更稳版</button>
           <button class="btn-aux" id="btnRobustModeGateQuick">历史稳健门控</button>
-          <span class="hint" id="simpleFlowHint">极简：先点“平衡型策略”，再点“一键选中比赛”。</span>
+          <span class="hint" id="simpleFlowHint">极简：先选策略，再点“一键选中比赛”。</span>
         </div>
         <div class="btn-row">
           <button class="btn-aux" id="btnLoadGames">加载比赛</button>
@@ -928,6 +930,8 @@
       simpleFlowRow: document.getElementById("simpleFlowRow"),
       btnSimpleReady: document.getElementById("btnSimpleReady"),
       btnSimpleStrategy: document.getElementById("btnSimpleStrategy"),
+      btnMaxProfitStrategy: document.getElementById("btnMaxProfitStrategy"),
+      btnSteadyProfitStrategy: document.getElementById("btnSteadyProfitStrategy"),
       btnRobustModeGateQuick: document.getElementById("btnRobustModeGateQuick"),
       simpleFlowHint: document.getElementById("simpleFlowHint"),
       gamePicker: document.getElementById("gamePicker"),
@@ -1331,25 +1335,61 @@
     }
 
     function applyBalancedStrategyPreset() {
+      applyWinnerPreset({
+        maxTimeLeft: 360,
+        minLead: 10,
+        pMin: 0.80,
+        pMax: 0.97,
+        capWinRate: 0.9442,
+        simpleHint: "已应用平衡型策略：360s/10分/[0.80,0.97]/min_edge0.025/买价<=0.91。",
+        budgetHint: "平衡型策略已生效，建议买价控制在 0.91 以下。",
+      });
+    }
+
+    function applyWinnerPreset(preset) {
       state.robustGateRequired = false;
       invalidateRobustGate();
       el.winnerOnly.checked = true;
       el.requireLive.checked = true;
-      el.winnerMaxTimeLeft.value = "360";
-      el.winnerMinLead.value = "10";
-      el.winnerPMin.value = "0.80";
-      el.winnerPMax.value = "0.97";
+      el.winnerMaxTimeLeft.value = String(Number(preset.maxTimeLeft || 360));
+      el.winnerMinLead.value = String(Number(preset.minLead || 10));
+      el.winnerPMin.value = Number(preset.pMin || 0.80).toFixed(2);
+      el.winnerPMax.value = Number(preset.pMax || 0.97).toFixed(2);
       el.winnerMinEdge.value = "0.025";
       el.winnerMaxBuyPrice.value = "0.91";
-      el.capWinRate.value = "0.9442";
+      el.capWinRate.value = Number(preset.capWinRate || 0.9442).toFixed(4);
       el.capBuyPrice.value = "0.90";
       el.capFee.value = "0.02";
       applyModeLabels();
       applyModeVisibility();
       updateBudgetCalc();
-      el.simpleFlowHint.textContent = "已应用平衡型策略：360s/10分/[0.80,0.97]/min_edge0.025/买价<=0.91。";
-      el.budgetHint.textContent = "平衡型策略已生效，建议买价控制在 0.91 以下。";
+      el.simpleFlowHint.textContent = String(preset.simpleHint || "已应用策略。");
+      el.budgetHint.textContent = String(preset.budgetHint || "策略已生效。");
       el.robustGateHint.textContent = "已切换为非门控模式。需要门控时请点击“历史稳健模式（自动门控）”。";
+    }
+
+    function applyMaxProfitStrategyPreset() {
+      applyWinnerPreset({
+        maxTimeLeft: 180,
+        minLead: 6,
+        pMin: 0.80,
+        pMax: 1.00,
+        capWinRate: 0.9939,
+        simpleHint: "已应用最大利润版：180s/6分/[0.80,1.00]。近30天回放 165 场触发，164 胜 1 负。",
+        budgetHint: "最大利润版已生效。历史净利润最高，但触发更密集，不代表未来还能保持同样命中。",
+      });
+    }
+
+    function applySteadyProfitStrategyPreset() {
+      applyWinnerPreset({
+        maxTimeLeft: 240,
+        minLead: 10,
+        pMin: 0.80,
+        pMax: 1.00,
+        capWinRate: 1.0000,
+        simpleHint: "已应用更稳版：240s/10分/[0.80,1.00]。近30天回放 130 场触发，历史样本内 130 胜 0 负。",
+        budgetHint: "更稳版已生效。历史样本更干净，但 100% 只代表过去一个月，不代表未来不会回撤。",
+      });
     }
 
     async function applyRobustModeAndGate(forceRefresh = false) {
@@ -2677,6 +2717,8 @@
     el.btnQuickSetup.addEventListener("click", () => quickSetup().catch((err) => { el.quickSetupHint.textContent = `一键就绪失败: ${err}`; }));
     el.btnSimpleReady.addEventListener("click", () => simpleReady().catch((err) => { el.simpleFlowHint.textContent = `失败: ${err}`; }));
     el.btnSimpleStrategy.addEventListener("click", applyBalancedStrategyPreset);
+    el.btnMaxProfitStrategy.addEventListener("click", applyMaxProfitStrategyPreset);
+    el.btnSteadyProfitStrategy.addEventListener("click", applySteadyProfitStrategyPreset);
     el.btnRobustModeGateQuick.addEventListener("click", () => applyRobustModeAndGate(false).catch((err) => {
       state.robustGateRequired = true;
       state.robustGateResult = null;
@@ -2735,7 +2777,7 @@
       applyModeVisibility();
       updateBudgetCalc();
       if (el.simpleMode.checked) {
-        el.simpleFlowHint.textContent = "极简：先点“平衡型策略”，再点“一键选中比赛”，最后开始轮询。";
+        el.simpleFlowHint.textContent = "极简：先选策略（平衡型 / 最大利润版 / 更稳版），再点“一键选中比赛”，最后开始轮询。";
       }
     });
 

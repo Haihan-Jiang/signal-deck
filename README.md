@@ -45,6 +45,7 @@ With `--hotreload`, backend files and `web/index.html` changes trigger auto-rest
 - `signal_engine.py`: core signal computation
 - `realtime_signal.py`: generic JSON endpoint polling signal runner
 - `live_experiment_signal.py`: provider-specific realtime runner (`kalshi_espn`, `polymarket_espn`)
+- `dryrun_recorder.py`: scheduled dry-run recorder and Telegram alert sender
 - `discover_sources.py`: discover ESPN/Kalshi/Polymarket IDs
 - `dashboard_server.py`: local web API + dashboard host
 - `web/index.html`: dashboard UI
@@ -54,6 +55,50 @@ With `--hotreload`, backend files and `web/index.html` changes trigger auto-rest
 1. In dashboard, load/select an ESPN event.
 2. Autofill market for the selected provider.
 3. Keep `Require Live` enabled if you only want in-game signals.
+
+## Telegram Alerts
+
+The scheduled runner can send phone alerts through Telegram Bot when a new
+`GUESS` signal opens under the current strategy preset.
+
+Setup:
+
+1. Create a bot with `@BotFather` and get the bot token.
+2. Send `/start` to the bot from the Telegram account that should receive alerts.
+3. Get your `chat_id` with:
+
+```bash
+curl "https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates"
+```
+
+4. Put the credentials into `~/.signal-deck/runtime/telegram.env`:
+
+```bash
+export SIGNAL_DECK_TELEGRAM_BOT_TOKEN="<YOUR_TOKEN>"
+export SIGNAL_DECK_TELEGRAM_CHAT_ID="<YOUR_CHAT_ID>"
+```
+
+The launchd dry-run wrapper reads that file automatically.
+
+## Telegram Commands
+
+There is also a separate Telegram bot command service for group/private chat
+replies. It supports:
+
+- `/start`
+- `/help`
+- `/status`
+- `/lastsignal`
+- `/botstatus`
+
+Install or refresh the bot service with:
+
+```bash
+./install_telegram_bot_launchd.sh
+```
+
+The bot service reads the same `~/.signal-deck/runtime/telegram.env` file and
+replies from groups or private chats through Telegram `getUpdates`.
 4. Start polling.
 
 ## CLI Examples
