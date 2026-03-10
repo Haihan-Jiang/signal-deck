@@ -13,19 +13,24 @@ import argparse
 import csv
 import hashlib
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from dashboard_server import build_history_gate, build_winner_once, discover_espn
+from live_experiment_signal import get_espn_state
 
 
 ROOT = Path(__file__).resolve().parent
-DEFAULT_LOG_DIR = ROOT / "logs"
+DEFAULT_LOG_DIR = Path(os.environ.get("SIGNAL_DECK_LOG_DIR", str(Path.home() / ".signal-deck" / "logs"))).expanduser()
 DEFAULT_CSV_PATH = DEFAULT_LOG_DIR / "dryrun_signals.csv"
 DEFAULT_TXT_PATH = DEFAULT_LOG_DIR / "dryrun_latest.txt"
 DEFAULT_STATE_PATH = DEFAULT_LOG_DIR / "dryrun_state.json"
+DEFAULT_TRADE_CSV_PATH = DEFAULT_LOG_DIR / "dryrun_trades.csv"
+DEFAULT_TRADE_STATE_PATH = DEFAULT_LOG_DIR / "dryrun_trade_state.json"
+DEFAULT_TRADE_BUDGET = 100.0
 
 CSV_COLUMNS = [
     "run_ts",
@@ -59,6 +64,29 @@ CSV_COLUMNS = [
     "gate_first_signal_hit_rate",
 ]
 
+TRADE_COLUMNS = [
+    "run_ts",
+    "trade_phase",
+    "event_id",
+    "rivalry",
+    "espn_status",
+    "guess_side",
+    "guess_team",
+    "suggested_action",
+    "contracts",
+    "entry_price",
+    "fee_total",
+    "opened_at",
+    "closed_at",
+    "result",
+    "final_winner",
+    "home_score",
+    "away_score",
+    "pnl_per_contract",
+    "total_pnl",
+    "reason",
+]
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Record dry-run winner signals to CSV/TXT.")
@@ -84,6 +112,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--csv-path", type=Path, default=DEFAULT_CSV_PATH)
     parser.add_argument("--txt-path", type=Path, default=DEFAULT_TXT_PATH)
     parser.add_argument("--state-path", type=Path, default=DEFAULT_STATE_PATH)
+    parser.add_argument("--trade-csv-path", type=Path, default=DEFAULT_TRADE_CSV_PATH)
+    parser.add_argument("--trade-state-path", type=Path, default=DEFAULT_TRADE_STATE_PATH)
+    parser.add_argument("--contracts", type=float, default=None, help="Fixed theoretical contracts per trade.")
+    parser.add_argument("--trade-budget", type=float, default=DEFAULT_TRADE_BUDGET, help="Theoretical max loss budget per trade.")
     parser.add_argument("--timezone", default="America/Los_Angeles")
     parser.add_argument("--disable-gate", action="store_true", help="Skip history gate and just record snapshots.")
     parser.set_defaults(require_live=True, fallback_pre=True)
@@ -150,6 +182,19 @@ def append_rows(csv_path: Path, rows: list[dict[str, str]]) -> None:
     write_header = not csv_path.exists()
     with csv_path.open("a", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=CSV_COLUMNS)
+        if write_header:
+            writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+
+def append_trade_rows(csv_path: Path, rows: list[dict[str, str]]) -> None:
+    if not rows:
+        return
+    ensure_parent(csv_path)
+    write_header = not csv_path.exists()
+    with csv_path.open("a", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=TRADE_COLUMNS)
         if write_header:
             writer.writeheader()
         for row in rows:
@@ -276,6 +321,218 @@ def build_game_row(
     return row
 
 
+def load_trade_state(path: Path) -> tuple[dict[str, dict[str, Any]], set[str]]:
+    if not path.exists():
+        return {}, set()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}, set()
+    if not isinstance(payload, dict):
+        return {}, set()
+
+    raw_open_positions = payload.get("open_positions")
+    open_positions: dict[str, dict[str, Any]] = {}
+    if isinstance(raw_open_positions, dict):
+        for key, value in raw_open_positions.items():
+            if isinstance(value, dict):
+                open_positions[str(key)] = dict(value)
+
+    raw_closed = payload.get("closed_event_ids")
+    closed_event_ids: set[str] = set()
+    if isinstance(raw_closed, list):
+        for value in raw_closed:
+            closed_event_ids.add(str(value))
+    return open_positions, closed_event_ids
+
+
+def save_trade_state(
+    path: Path,
+    open_positions: dict[str, dict[str, Any]],
+    closed_event_ids: set[str],
+    settings: dict[str, Any] | None = None,
+) -> None:
+    ensure_parent(path)
+    payload = {
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "open_positions": open_positions,
+        "closed_event_ids": sorted(closed_event_ids),
+    }
+    if settings:
+        payload["settings"] = settings
+    path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+
+
+def resolve_final_winner(home_score: Any, away_score: Any) -> str:
+    try:
+        if home_score is None or away_score is None:
+            return ""
+        home = float(home_score)
+        away = float(away_score)
+    except (TypeError, ValueError):
+        return ""
+    if home > away:
+        return "home"
+    if away > home:
+        return "away"
+    return "tie"
+
+
+def build_trade_open_row(run_ts: str, position: dict[str, Any]) -> dict[str, str]:
+    return {
+        "run_ts": run_ts,
+        "trade_phase": "OPEN",
+        "event_id": str(position.get("event_id") or ""),
+        "rivalry": str(position.get("rivalry") or ""),
+        "espn_status": str(position.get("espn_status") or ""),
+        "guess_side": str(position.get("guess_side") or ""),
+        "guess_team": str(position.get("guess_team") or ""),
+        "suggested_action": str(position.get("suggested_action") or ""),
+        "contracts": fmt_num(position.get("contracts"), 2),
+        "entry_price": fmt_num(position.get("entry_price"), 4),
+        "fee_total": fmt_num(position.get("fee_total"), 4),
+        "opened_at": str(position.get("opened_at") or run_ts),
+        "closed_at": "",
+        "result": "OPEN",
+        "final_winner": "",
+        "home_score": fmt_num(position.get("home_score"), 0),
+        "away_score": fmt_num(position.get("away_score"), 0),
+        "pnl_per_contract": "",
+        "total_pnl": "",
+        "reason": "首个 GUESS 信号，按 target_max_buy_price 进行理论开仓。",
+    }
+
+
+def build_trade_close_row(
+    run_ts: str,
+    position: dict[str, Any],
+    espn: dict[str, Any],
+    result: str,
+    pnl_per_contract: float,
+    total_pnl: float,
+) -> dict[str, str]:
+    return {
+        "run_ts": run_ts,
+        "trade_phase": "CLOSE",
+        "event_id": str(position.get("event_id") or ""),
+        "rivalry": str(position.get("rivalry") or espn.get("rivalry") or ""),
+        "espn_status": str(espn.get("status_state") or ""),
+        "guess_side": str(position.get("guess_side") or ""),
+        "guess_team": str(position.get("guess_team") or ""),
+        "suggested_action": str(position.get("suggested_action") or ""),
+        "contracts": fmt_num(position.get("contracts"), 2),
+        "entry_price": fmt_num(position.get("entry_price"), 4),
+        "fee_total": fmt_num(position.get("fee_total"), 4),
+        "opened_at": str(position.get("opened_at") or ""),
+        "closed_at": run_ts,
+        "result": result,
+        "final_winner": resolve_final_winner(espn.get("home_score"), espn.get("away_score")),
+        "home_score": fmt_num(espn.get("home_score"), 0),
+        "away_score": fmt_num(espn.get("away_score"), 0),
+        "pnl_per_contract": fmt_num(pnl_per_contract, 4),
+        "total_pnl": fmt_num(total_pnl, 4),
+        "reason": "比赛结束，按终场比分进行理论结算。",
+    }
+
+
+def settle_open_positions(
+    args: argparse.Namespace,
+    run_ts: str,
+    open_positions: dict[str, dict[str, Any]],
+    closed_event_ids: set[str],
+) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    to_close: list[str] = []
+    for event_id, position in list(open_positions.items()):
+        try:
+            espn = get_espn_state(
+                sport=args.sport,
+                league=args.league,
+                event_id=event_id,
+                timeout=args.timeout,
+                yes_team="home",
+                period_seconds=720.0,
+                regulation_periods=4,
+            )
+        except Exception:
+            continue
+        if str(espn.get("status_state") or "").lower() != "post":
+            continue
+
+        final_winner = resolve_final_winner(espn.get("home_score"), espn.get("away_score"))
+        guess_side = str(position.get("guess_side") or "")
+        entry_price = float(position.get("entry_price") or 0.0)
+        fee_total = float(position.get("fee_total") or args.fee_total)
+        contracts = float(position.get("contracts") or args.contracts)
+        if final_winner in {"home", "away"}:
+            trade_result = "WIN" if guess_side == final_winner else "LOSS"
+            if trade_result == "WIN":
+                pnl_per_contract = 1.0 - entry_price - fee_total
+            else:
+                pnl_per_contract = -entry_price - fee_total
+        else:
+            trade_result = "VOID"
+            pnl_per_contract = 0.0
+        total_pnl = pnl_per_contract * contracts
+        rows.append(build_trade_close_row(run_ts, position, espn, trade_result, pnl_per_contract, total_pnl))
+        to_close.append(event_id)
+        closed_event_ids.add(event_id)
+
+    for event_id in to_close:
+        open_positions.pop(event_id, None)
+    return rows
+
+
+def open_new_positions(
+    args: argparse.Namespace,
+    run_ts: str,
+    results: list[dict[str, Any]],
+    open_positions: dict[str, dict[str, Any]],
+    closed_event_ids: set[str],
+) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for result in results:
+        event_id = str(result.get("espn_event_id") or "").strip()
+        if not event_id or event_id in open_positions or event_id in closed_event_ids:
+            continue
+        if str(result.get("state") or "").upper() != "GUESS":
+            continue
+        target_max_buy_price = result.get("target_max_buy_price")
+        try:
+            entry_price = float(target_max_buy_price)
+        except (TypeError, ValueError):
+            continue
+        if entry_price <= 0:
+            continue
+        max_loss_per_contract = entry_price + args.fee_total
+        if max_loss_per_contract <= 0:
+            continue
+        if args.contracts is not None:
+            contracts = float(args.contracts)
+        else:
+            contracts = float(int(args.trade_budget // max_loss_per_contract))
+        if contracts <= 0:
+            continue
+
+        position = {
+            "event_id": event_id,
+            "rivalry": str(result.get("rivalry") or ""),
+            "espn_status": str(result.get("espn_status") or ""),
+            "guess_side": str(result.get("guess_side") or ""),
+            "guess_team": str(result.get("guess_team") or ""),
+            "suggested_action": str(result.get("suggested_action") or ""),
+            "contracts": contracts,
+            "entry_price": entry_price,
+            "fee_total": args.fee_total,
+            "opened_at": run_ts,
+            "home_score": result.get("home_score"),
+            "away_score": result.get("away_score"),
+        }
+        open_positions[event_id] = position
+        rows.append(build_trade_open_row(run_ts, position))
+    return rows
+
+
 def discover_candidate_events(args: argparse.Namespace) -> tuple[list[dict[str, Any]], str]:
     live_items = discover_espn(
         sport=args.sport,
@@ -398,11 +655,24 @@ def write_snapshot_text(
 
 def main() -> int:
     args = build_parser().parse_args()
+    if args.contracts is not None and args.contracts <= 0:
+        raise ValueError("contracts must be > 0.")
+    if args.trade_budget <= 0:
+        raise ValueError("trade_budget must be > 0.")
     run_ts = now_local_iso(args.timezone)
 
     gate_payload: dict[str, Any] | None = None
     rows: list[dict[str, str]] = []
+    trade_rows: list[dict[str, str]] = []
     event_state = "in"
+    open_positions, closed_event_ids = load_trade_state(args.trade_state_path)
+    trade_settings = {
+        "sizing_mode": "fixed_contracts" if args.contracts is not None else "trade_budget",
+        "contracts": args.contracts,
+        "trade_budget": args.trade_budget,
+        "fee_total": args.fee_total,
+    }
+    trade_rows.extend(settle_open_positions(args, run_ts, open_positions, closed_event_ids))
 
     if not args.disable_gate:
         gate_payload = build_gate_payload(args)
@@ -414,8 +684,13 @@ def main() -> int:
             current_rows = {row["row_key"]: make_signature(row) for row in rows}
             changed_rows = [row for row in rows if previous_rows.get(row["row_key"]) != current_rows[row["row_key"]]]
             append_rows(args.csv_path, changed_rows)
+            append_trade_rows(args.trade_csv_path, trade_rows)
             save_state(args.state_path, current_rows)
-            print(f"[{run_ts}] gate blocked, wrote {len(changed_rows)} changed row(s)")
+            save_trade_state(args.trade_state_path, open_positions, closed_event_ids, settings=trade_settings)
+            print(
+                f"[{run_ts}] gate blocked, wrote {len(changed_rows)} changed row(s), "
+                f"trade_rows={len(trade_rows)}"
+            )
             return 0
 
     events, event_state = discover_candidate_events(args)
@@ -424,6 +699,7 @@ def main() -> int:
         write_snapshot_text(args.txt_path, run_ts, args, gate_payload, [], event_state)
     else:
         game_rows: list[dict[str, str]] = []
+        game_results: list[dict[str, Any]] = []
         for item in events:
             event_id = str(item.get("event_id") or "").strip()
             if not event_id:
@@ -436,14 +712,21 @@ def main() -> int:
             row = build_game_row(run_ts, args, result, gate_payload)
             rows.append(row)
             game_rows.append(row)
+            game_results.append(result)
+        trade_rows.extend(open_new_positions(args, run_ts, game_results, open_positions, closed_event_ids))
         write_snapshot_text(args.txt_path, run_ts, args, gate_payload, game_rows, event_state)
 
     previous_rows = load_state(args.state_path)
     current_rows = {row["row_key"]: make_signature(row) for row in rows}
     changed_rows = [row for row in rows if previous_rows.get(row["row_key"]) != current_rows[row["row_key"]]]
     append_rows(args.csv_path, changed_rows)
+    append_trade_rows(args.trade_csv_path, trade_rows)
     save_state(args.state_path, current_rows)
-    print(f"[{run_ts}] events={len(rows)} changed_rows={len(changed_rows)} csv={args.csv_path}")
+    save_trade_state(args.trade_state_path, open_positions, closed_event_ids, settings=trade_settings)
+    print(
+        f"[{run_ts}] events={len(rows)} changed_rows={len(changed_rows)} "
+        f"trade_rows={len(trade_rows)} csv={args.csv_path}"
+    )
     return 0
 
 

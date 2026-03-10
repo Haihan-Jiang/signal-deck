@@ -384,6 +384,10 @@
       overflow: auto;
     }
 
+    .dryrun-pnl-metrics {
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+    }
+
     .table-wrap {
       overflow: auto;
     }
@@ -849,6 +853,10 @@
         <div class="btn-row">
           <button class="btn-aux" id="btnLoadDryrun">刷新记录</button>
           <label class="check">
+            <input id="dryrunAutoRefresh" type="checkbox" checked />
+            <span>AJAX 自动刷新（10s）</span>
+          </label>
+          <label class="check">
             <input id="dryrunTriggeredOnly" type="checkbox" />
             <span>只看最近触发比赛</span>
           </label>
@@ -856,10 +864,14 @@
         </div>
         <div class="dryrun-links">
           <a class="link-chip" id="linkDryrunCsv" href="/logs/dryrun_signals.csv" target="_blank" rel="noreferrer">打开 CSV</a>
+          <a class="link-chip" id="linkDryrunTrades" href="/logs/dryrun_trades.csv" target="_blank" rel="noreferrer">打开 Trades CSV</a>
           <a class="link-chip" id="linkDryrunTxt" href="/logs/dryrun_latest.txt" target="_blank" rel="noreferrer">打开 TXT</a>
           <a class="link-chip" id="linkDryrunCron" href="/logs/dryrun_cron.log" target="_blank" rel="noreferrer">打开 Cron Log</a>
         </div>
+        <div class="metrics dryrun-pnl-metrics" id="dryrunPnlMetrics"></div>
+        <div class="hint" id="dryrunPnlHint">理论盈亏按每笔 $100 dry-run 预算计算，成交价使用 `target_max_buy_price`，成本使用 `fee_total`。</div>
         <pre class="dryrun-pre" id="dryrunText">加载中...</pre>
+        <div class="table-wrap" id="dryrunTradesWrap"></div>
         <div class="table-wrap" id="dryrunTableWrap"></div>
       </section>
 
@@ -895,6 +907,10 @@
       lastSignalData: null,
       historyReplayData: null,
       lastDryrunRows: [],
+      lastDryrunTrades: [],
+      dryrunRefreshTimer: null,
+      dryrunRefreshInFlight: false,
+      dryrunLastLoadedAt: 0,
       robustGateRequired: false,
       robustGateResult: null,
       robustGateConfigKey: ""
@@ -1002,11 +1018,16 @@
       historyLeadChart: document.getElementById("historyLeadChart"),
       historySignalsWrap: document.getElementById("historySignalsWrap"),
       btnLoadDryrun: document.getElementById("btnLoadDryrun"),
+      dryrunAutoRefresh: document.getElementById("dryrunAutoRefresh"),
       dryrunTriggeredOnly: document.getElementById("dryrunTriggeredOnly"),
       dryrunHint: document.getElementById("dryrunHint"),
+      dryrunPnlHint: document.getElementById("dryrunPnlHint"),
       dryrunText: document.getElementById("dryrunText"),
+      dryrunPnlMetrics: document.getElementById("dryrunPnlMetrics"),
+      dryrunTradesWrap: document.getElementById("dryrunTradesWrap"),
       dryrunTableWrap: document.getElementById("dryrunTableWrap"),
       linkDryrunCsv: document.getElementById("linkDryrunCsv"),
+      linkDryrunTrades: document.getElementById("linkDryrunTrades"),
       linkDryrunTxt: document.getElementById("linkDryrunTxt"),
       linkDryrunCron: document.getElementById("linkDryrunCron"),
       logBody: document.getElementById("logBody"),
@@ -1034,6 +1055,13 @@
     function fmtMoney(value, digits = 2) {
       if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
       return `$${Number(value).toFixed(digits)}`;
+    }
+
+    function fmtSignedMoney(value, digits = 2) {
+      if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
+      const n = Number(value);
+      const sign = n > 0 ? "+" : n < 0 ? "-" : "";
+      return `${sign}$${Math.abs(n).toFixed(digits)}`;
     }
 
     function fmtPct(value, digits = 2) {
@@ -1946,6 +1974,81 @@
       });
     }
 
+    function renderDryrunPnlSummary(trades) {
+      const summary = trades && typeof trades === "object" ? (trades.summary || {}) : {};
+      const netPnl = Number(summary.net_pnl || 0);
+      const grossProfit = Number(summary.gross_profit || 0);
+      const grossLoss = Number(summary.gross_loss || 0);
+      const tradeBudget = summary.trade_budget;
+      const sizingMode = String(summary.sizing_mode || "");
+      if (sizingMode === "trade_budget" && tradeBudget !== null && tradeBudget !== undefined && !Number.isNaN(Number(tradeBudget))) {
+        el.dryrunPnlHint.textContent = `理论盈亏按每笔 ${fmtMoney(tradeBudget, 0)} dry-run 预算计算，成交价使用 target_max_buy_price，成本使用 fee_total。`;
+      } else if (sizingMode === "fixed_contracts" && summary.contracts !== null && summary.contracts !== undefined && !Number.isNaN(Number(summary.contracts))) {
+        el.dryrunPnlHint.textContent = `理论盈亏按每笔 ${fmtNum(summary.contracts, 2)} 张 dry-run 合约计算，成交价使用 target_max_buy_price，成本使用 fee_total。`;
+      } else {
+        el.dryrunPnlHint.textContent = "理论盈亏按 dry-run 默认资金规则计算，成交价使用 target_max_buy_price，成本使用 fee_total。";
+      }
+      const cards = [
+        { k: "累计净盈亏", v: fmtSignedMoney(netPnl), cls: netPnl > 0 ? "pos" : netPnl < 0 ? "neg" : "" },
+        { k: "累计盈利", v: fmtSignedMoney(grossProfit), cls: grossProfit > 0 ? "pos" : "" },
+        { k: "累计亏损", v: fmtSignedMoney(grossLoss), cls: grossLoss < 0 ? "neg" : "" },
+        { k: "已结算", v: String(Number(summary.closed_trades || 0)), cls: "" },
+        { k: "胜 / 负", v: `${Number(summary.wins || 0)} / ${Number(summary.losses || 0)}`, cls: "" },
+        { k: "胜率 / 未结算", v: `${fmtPct(summary.win_rate, 2)} / ${Number(summary.open_positions || 0)}`, cls: "" },
+      ];
+      el.dryrunPnlMetrics.innerHTML = cards.map((item) => `
+        <div class="metric">
+          <p class="k">${esc(item.k)}</p>
+          <p class="v ${item.cls}">${esc(item.v)}</p>
+        </div>
+      `).join("");
+    }
+
+    function renderDryrunTrades(rows) {
+      if (!Array.isArray(rows) || !rows.length) {
+        el.dryrunTradesWrap.innerHTML = `<div class="empty">暂无理论盈亏流水。</div>`;
+        return;
+      }
+      const body = rows.map((row) => {
+        const phase = String(row.trade_phase || "-").toUpperCase();
+        const result = String(row.result || "-").toUpperCase();
+        const pnlValue = row.total_pnl;
+        const pnlNum = Number(pnlValue);
+        const pnlClass = Number.isFinite(pnlNum) ? (pnlNum > 0 ? "pos" : pnlNum < 0 ? "neg" : "") : "";
+        const hasScores = row.home_score !== undefined && row.home_score !== "" && row.away_score !== undefined && row.away_score !== "";
+        const score = hasScores ? `${row.away_score} @ ${row.home_score}` : "-";
+        return `
+          <tr>
+            <td class="mono">${esc((row.run_ts || "").replace("T", " ").slice(5, 19) || "-")}</td>
+            <td class="mono">${esc(phase)}</td>
+            <td class="tiny">${esc(row.rivalry || row.event_id || "-")}</td>
+            <td class="mono">${esc(row.suggested_action || "-")}</td>
+            <td class="mono">${esc(row.entry_price || "-")}</td>
+            <td class="mono">${esc(result)}</td>
+            <td class="mono ${pnlClass}">${esc(fmtSignedMoney(pnlValue, 2))}</td>
+            <td class="mono">${esc(score)}</td>
+          </tr>
+        `;
+      }).join("");
+      el.dryrunTradesWrap.innerHTML = `
+        <table class="discover-list">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Phase</th>
+              <th>Rivalry</th>
+              <th>Action</th>
+              <th>Entry</th>
+              <th>Result</th>
+              <th>PnL</th>
+              <th>Score</th>
+            </tr>
+          </thead>
+          <tbody>${body}</tbody>
+        </table>
+      `;
+    }
+
     function renderDryrunTable(rows) {
       const visibleRows = filteredDryrunRows(rows);
       if (!Array.isArray(visibleRows) || !visibleRows.length) {
@@ -1989,24 +2092,67 @@
       `;
     }
 
-    async function loadDryrun() {
-      el.dryrunHint.textContent = "加载 dry-run 记录...";
-      const data = await apiDryrunLatest(24);
-      const files = data.files || {};
-      const meta = data.meta || {};
-      const rows = Array.isArray(data.rows) ? data.rows : [];
-      state.lastDryrunRows = rows;
-      el.linkDryrunCsv.href = files.csv || "/logs/dryrun_signals.csv";
-      el.linkDryrunTxt.href = files.txt || "/logs/dryrun_latest.txt";
-      el.linkDryrunCron.href = files.cron_log || "/logs/dryrun_cron.log";
-      el.dryrunText.textContent = data.txt || "暂无 dry-run 文本快照。";
-      renderDryrunTable(rows);
-      const visibleCount = filteredDryrunRows(rows).length;
-      const csvUpdated = meta.csv_mtime ? new Date(Number(meta.csv_mtime) * 1000).toLocaleString() : "-";
-      const scopeText = el.dryrunTriggeredOnly.checked
-        ? `当前显示 ${visibleCount}/${rows.length} 条（仅触发）`
-        : `当前显示 ${rows.length} 条记录`;
-      el.dryrunHint.textContent = `CSV ${meta.csv_exists ? "已生成" : "未生成"}，最近更新时间 ${csvUpdated}，${scopeText}。`;
+    async function loadDryrun(options = {}) {
+      const silent = Boolean(options.silent);
+      const source = String(options.source || "manual");
+      if (state.dryrunRefreshInFlight) {
+        return;
+      }
+      state.dryrunRefreshInFlight = true;
+      if (!silent) {
+        el.dryrunHint.textContent = "加载 dry-run 记录...";
+      }
+      try {
+        const data = await apiDryrunLatest(24);
+        const files = data.files || {};
+        const meta = data.meta || {};
+        const rows = Array.isArray(data.rows) ? data.rows : [];
+        const trades = data.trades || {};
+        const tradeRows = Array.isArray(trades.rows) ? trades.rows : [];
+        state.lastDryrunRows = rows;
+        state.lastDryrunTrades = tradeRows;
+        state.dryrunLastLoadedAt = Date.now();
+        el.linkDryrunCsv.href = files.csv || "/logs/dryrun_signals.csv";
+        el.linkDryrunTrades.href = files.trades_csv || "/logs/dryrun_trades.csv";
+        el.linkDryrunTxt.href = files.txt || "/logs/dryrun_latest.txt";
+        el.linkDryrunCron.href = files.cron_log || "/logs/dryrun_cron.log";
+        el.dryrunText.textContent = data.txt || "暂无 dry-run 文本快照。";
+        renderDryrunPnlSummary(trades);
+        renderDryrunTrades(tradeRows);
+        renderDryrunTable(rows);
+        const visibleCount = filteredDryrunRows(rows).length;
+        const csvUpdated = meta.csv_mtime ? new Date(Number(meta.csv_mtime) * 1000).toLocaleString() : "-";
+        const tradesUpdated = meta.trades_csv_mtime ? new Date(Number(meta.trades_csv_mtime) * 1000).toLocaleString() : "-";
+        const scopeText = el.dryrunTriggeredOnly.checked
+          ? `当前显示 ${visibleCount}/${rows.length} 条（仅触发）`
+          : `当前显示 ${rows.length} 条记录`;
+        const autoText = source === "auto" ? `AJAX 自动刷新于 ${new Date(state.dryrunLastLoadedAt).toLocaleTimeString()}；` : "";
+        el.dryrunHint.textContent = `${autoText}CSV ${meta.csv_exists ? "已生成" : "未生成"}，最近更新时间 ${csvUpdated}；Trades ${meta.trades_csv_exists ? "已生成" : "未生成"}，最近更新时间 ${tradesUpdated}；${scopeText}。`;
+      } finally {
+        state.dryrunRefreshInFlight = false;
+      }
+    }
+
+    function stopDryrunAutoRefresh() {
+      if (state.dryrunRefreshTimer) {
+        clearInterval(state.dryrunRefreshTimer);
+        state.dryrunRefreshTimer = null;
+      }
+    }
+
+    function startDryrunAutoRefresh() {
+      stopDryrunAutoRefresh();
+      if (!el.dryrunAutoRefresh.checked) {
+        return;
+      }
+      state.dryrunRefreshTimer = setInterval(() => {
+        if (document.hidden || state.dryrunRefreshInFlight) {
+          return;
+        }
+        loadDryrun({ silent: true, source: "auto" }).catch((err) => {
+          el.dryrunHint.textContent = `自动刷新失败: ${err}`;
+        });
+      }, 10000);
     }
 
     function updateBadge(kind, text) {
@@ -2506,6 +2652,17 @@
     el.btnEspn.addEventListener("click", () => loadEspn().catch((err) => { el.discoverWrap.innerHTML = `<div class="empty">Error: ${err}</div>`; }));
     el.btnLoadHistoryGames.addEventListener("click", () => loadHistoryGames().catch((err) => { el.historyHint.textContent = `加载失败: ${err}`; }));
     el.btnLoadDryrun.addEventListener("click", () => loadDryrun().catch((err) => { el.dryrunHint.textContent = `加载失败: ${err}`; }));
+    el.dryrunAutoRefresh.addEventListener("change", () => {
+      if (el.dryrunAutoRefresh.checked) {
+        startDryrunAutoRefresh();
+        loadDryrun({ silent: true, source: "auto" }).catch((err) => {
+          el.dryrunHint.textContent = `自动刷新失败: ${err}`;
+        });
+      } else {
+        stopDryrunAutoRefresh();
+        el.dryrunHint.textContent = "已关闭 AJAX 自动刷新。";
+      }
+    });
     el.dryrunTriggeredOnly.addEventListener("change", () => {
       renderDryrunTable(state.lastDryrunRows);
       const visibleCount = filteredDryrunRows(state.lastDryrunRows).length;
@@ -2600,7 +2757,16 @@
       loadDryrun().catch((err) => { el.dryrunHint.textContent = `加载失败: ${err}`; });
       updateBudgetCalc();
       startHotReloadWatcher();
+      startDryrunAutoRefresh();
     })();
+
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && el.dryrunAutoRefresh.checked) {
+        loadDryrun({ silent: true, source: "auto" }).catch((err) => {
+          el.dryrunHint.textContent = `自动刷新失败: ${err}`;
+        });
+      }
+    });
   </script>
 </body>
 </html>

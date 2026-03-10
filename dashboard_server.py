@@ -14,6 +14,7 @@ import csv
 import hashlib
 import json
 import math
+import os
 import re
 import subprocess
 import sys
@@ -32,10 +33,12 @@ from signal_engine import compute_signal
 
 ROOT = Path(__file__).resolve().parent
 INDEX_HTML = ROOT / "web" / "index.html"
-LOG_DIR = ROOT / "logs"
+LOG_DIR = Path(os.environ.get("SIGNAL_DECK_LOG_DIR", str(Path.home() / ".signal-deck" / "logs"))).expanduser()
 DRYRUN_CSV = LOG_DIR / "dryrun_signals.csv"
 DRYRUN_TXT = LOG_DIR / "dryrun_latest.txt"
 DRYRUN_CRON_LOG = LOG_DIR / "dryrun_cron.log"
+DRYRUN_TRADE_CSV = LOG_DIR / "dryrun_trades.csv"
+DRYRUN_TRADE_STATE = LOG_DIR / "dryrun_trade_state.json"
 HOTRELOAD_WATCH_FILES = (
     ROOT / "dashboard_server.py",
     ROOT / "live_experiment_signal.py",
@@ -1166,12 +1169,16 @@ def read_dryrun_latest(limit: int = 40) -> dict[str, Any]:
     return {
         "txt": txt,
         "rows": rows,
+        "trades": read_dryrun_trades(limit=max(1, min(limit, 100))),
         "csv_exists": DRYRUN_CSV.exists(),
         "txt_exists": DRYRUN_TXT.exists(),
         "csv_mtime": DRYRUN_CSV.stat().st_mtime if DRYRUN_CSV.exists() else None,
         "txt_mtime": DRYRUN_TXT.stat().st_mtime if DRYRUN_TXT.exists() else None,
         "csv_size": DRYRUN_CSV.stat().st_size if DRYRUN_CSV.exists() else 0,
         "txt_size": DRYRUN_TXT.stat().st_size if DRYRUN_TXT.exists() else 0,
+        "trades_csv_exists": DRYRUN_TRADE_CSV.exists(),
+        "trades_csv_mtime": DRYRUN_TRADE_CSV.stat().st_mtime if DRYRUN_TRADE_CSV.exists() else None,
+        "trades_csv_size": DRYRUN_TRADE_CSV.stat().st_size if DRYRUN_TRADE_CSV.exists() else 0,
     }
 
 
@@ -1187,6 +1194,95 @@ def build_pair_filter(event_meta: dict[str, Any]) -> dict[str, Any]:
         "away_terms": sorted(away_terms),
         "home_abbr": str(event_meta["home_abbr"]).upper(),
         "away_abbr": str(event_meta["away_abbr"]).upper(),
+    }
+
+
+def _read_trade_state() -> dict[str, Any]:
+    if not DRYRUN_TRADE_STATE.exists():
+        return {}
+    try:
+        payload = json.loads(DRYRUN_TRADE_STATE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _to_float_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def read_dryrun_trades(limit: int = 20) -> dict[str, Any]:
+    rows: list[dict[str, str]] = []
+    if DRYRUN_TRADE_CSV.exists():
+        with DRYRUN_TRADE_CSV.open("r", encoding="utf-8", newline="") as fh:
+            reader = csv.DictReader(fh)
+            rows = [dict(row) for row in reader]
+
+    recent_rows = rows[-limit:] if limit > 0 else rows[:]
+    recent_rows.reverse()
+
+    closed_trades = 0
+    wins = 0
+    losses = 0
+    voids = 0
+    gross_profit = 0.0
+    gross_loss = 0.0
+    net_pnl = 0.0
+
+    for row in rows:
+        if str(row.get("trade_phase") or "").upper() != "CLOSE":
+            continue
+        closed_trades += 1
+        result = str(row.get("result") or "").upper()
+        if result == "WIN":
+            wins += 1
+        elif result == "LOSS":
+            losses += 1
+        elif result == "VOID":
+            voids += 1
+        total_pnl = _to_float_or_none(row.get("total_pnl")) or 0.0
+        net_pnl += total_pnl
+        if total_pnl > 0:
+            gross_profit += total_pnl
+        elif total_pnl < 0:
+            gross_loss += total_pnl
+
+    trade_state = _read_trade_state()
+    raw_open_positions = trade_state.get("open_positions")
+    open_positions = len(raw_open_positions) if isinstance(raw_open_positions, dict) else 0
+    settings = trade_state.get("settings") if isinstance(trade_state.get("settings"), dict) else {}
+
+    settled_decisions = wins + losses
+    win_rate = wins / settled_decisions if settled_decisions > 0 else None
+    avg_pnl = net_pnl / closed_trades if closed_trades > 0 else None
+
+    return {
+        "rows": recent_rows,
+        "summary": {
+            "closed_trades": closed_trades,
+            "wins": wins,
+            "losses": losses,
+            "voids": voids,
+            "open_positions": open_positions,
+            "gross_profit": gross_profit,
+            "gross_loss": gross_loss,
+            "net_pnl": net_pnl,
+            "avg_pnl": avg_pnl,
+            "win_rate": win_rate,
+            "trade_budget": _to_float_or_none(settings.get("trade_budget")),
+            "contracts": _to_float_or_none(settings.get("contracts")),
+            "sizing_mode": str(settings.get("sizing_mode") or ""),
+        },
     }
 
 
@@ -1747,10 +1843,12 @@ class Handler(BaseHTTPRequestHandler):
                     {
                         "txt": payload["txt"],
                         "rows": payload["rows"],
+                        "trades": payload["trades"],
                         "files": {
                             "csv": "/logs/dryrun_signals.csv",
                             "txt": "/logs/dryrun_latest.txt",
                             "cron_log": "/logs/dryrun_cron.log",
+                            "trades_csv": "/logs/dryrun_trades.csv",
                         },
                         "meta": {
                             "csv_exists": payload["csv_exists"],
@@ -1759,6 +1857,9 @@ class Handler(BaseHTTPRequestHandler):
                             "txt_mtime": payload["txt_mtime"],
                             "csv_size": payload["csv_size"],
                             "txt_size": payload["txt_size"],
+                            "trades_csv_exists": payload["trades_csv_exists"],
+                            "trades_csv_mtime": payload["trades_csv_mtime"],
+                            "trades_csv_size": payload["trades_csv_size"],
                         },
                     },
                 )
@@ -1783,6 +1884,13 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_json(HTTPStatus.NOT_FOUND, {"error": "dryrun_cron.log not found"})
                     return
                 self._send_bytes(HTTPStatus.OK, DRYRUN_CRON_LOG.read_bytes(), "text/plain; charset=utf-8")
+                return
+
+            if path == "/logs/dryrun_trades.csv":
+                if not DRYRUN_TRADE_CSV.exists():
+                    self._send_json(HTTPStatus.NOT_FOUND, {"error": "dryrun_trades.csv not found"})
+                    return
+                self._send_bytes(HTTPStatus.OK, DRYRUN_TRADE_CSV.read_bytes(), "text/csv; charset=utf-8")
                 return
 
             if path == "/api/dev/reload-token":
