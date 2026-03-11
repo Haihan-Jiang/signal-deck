@@ -76,9 +76,18 @@ curl "https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates"
 ```bash
 export SIGNAL_DECK_TELEGRAM_BOT_TOKEN="<YOUR_TOKEN>"
 export SIGNAL_DECK_TELEGRAM_CHAT_ID="<YOUR_CHAT_ID>"
+export SIGNAL_DECK_TELEGRAM_CHAT_IDS="<PERSONAL_OR_GROUP_IDS_COMMA_SEPARATED>"
 ```
 
 The launchd dry-run wrapper reads that file automatically.
+
+The scheduled alert interval is controlled by `install_dryrun_launchd.sh`.
+It runs as a persistent background loop. Default is `5s`, and you can override it
+when reinstalling:
+
+```bash
+SIGNAL_DECK_LOOP_INTERVAL=10 ./install_dryrun_launchd.sh
+```
 
 ## Telegram Commands
 
@@ -90,6 +99,7 @@ replies. It supports:
 - `/status`
 - `/lastsignal`
 - `/botstatus`
+- `/chatid`
 
 Install or refresh the bot service with:
 

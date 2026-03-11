@@ -120,6 +120,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--trade-budget", type=float, default=DEFAULT_TRADE_BUDGET, help="Theoretical max loss budget per trade.")
     parser.add_argument("--telegram-bot-token", default=os.environ.get("SIGNAL_DECK_TELEGRAM_BOT_TOKEN", ""))
     parser.add_argument("--telegram-chat-id", default=os.environ.get("SIGNAL_DECK_TELEGRAM_CHAT_ID", ""))
+    parser.add_argument("--telegram-chat-ids", default=os.environ.get("SIGNAL_DECK_TELEGRAM_CHAT_IDS", ""))
     parser.add_argument("--timezone", default="America/Los_Angeles")
     parser.add_argument("--disable-gate", action="store_true", help="Skip history gate and just record snapshots.")
     parser.set_defaults(require_live=True, fallback_pre=True)
@@ -451,8 +452,28 @@ def build_trade_close_row(
     }
 
 
+def parse_telegram_targets(value: Any) -> list[str]:
+    if value is None:
+        return []
+    text = str(value).replace("\n", ",")
+    parts = [item.strip() for item in text.split(",")]
+    return [item for item in parts if item]
+
+
+def resolve_telegram_chat_ids(args: argparse.Namespace) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in [getattr(args, "telegram_chat_ids", ""), getattr(args, "telegram_chat_id", "")]:
+        for item in parse_telegram_targets(raw):
+            if item in seen:
+                continue
+            seen.add(item)
+            out.append(item)
+    return out
+
+
 def telegram_enabled(args: argparse.Namespace) -> bool:
-    return bool(str(args.telegram_bot_token).strip() and str(args.telegram_chat_id).strip())
+    return bool(str(args.telegram_bot_token).strip() and resolve_telegram_chat_ids(args))
 
 
 def build_telegram_signal_text(run_ts: str, args: argparse.Namespace, result: dict[str, Any], contracts: float) -> str:
@@ -482,21 +503,24 @@ def send_telegram_message(args: argparse.Namespace, text: str) -> None:
     if not telegram_enabled(args):
         return
     token = str(args.telegram_bot_token).strip()
-    chat_id = str(args.telegram_chat_id).strip()
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = urlencode(
-        {
-            "chat_id": chat_id,
-            "text": text,
-            "disable_web_page_preview": "true",
-        }
-    ).encode("utf-8")
-    request = Request(url, data=payload, headers={"Content-Type": "application/x-www-form-urlencoded"})
-    with urlopen(request, timeout=args.timeout) as response:
-        raw = response.read().decode("utf-8")
-    reply = json.loads(raw)
-    if not isinstance(reply, dict) or not reply.get("ok"):
-        raise RuntimeError(f"Telegram sendMessage failed: {raw}")
+    errors: list[str] = []
+    for chat_id in resolve_telegram_chat_ids(args):
+        payload = urlencode(
+            {
+                "chat_id": chat_id,
+                "text": text,
+                "disable_web_page_preview": "true",
+            }
+        ).encode("utf-8")
+        request = Request(url, data=payload, headers={"Content-Type": "application/x-www-form-urlencoded"})
+        with urlopen(request, timeout=args.timeout) as response:
+            raw = response.read().decode("utf-8")
+        reply = json.loads(raw)
+        if not isinstance(reply, dict) or not reply.get("ok"):
+            errors.append(f"{chat_id}: {raw}")
+    if errors:
+        raise RuntimeError("Telegram sendMessage failed: " + " | ".join(errors))
 
 
 def settle_open_positions(

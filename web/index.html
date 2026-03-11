@@ -915,7 +915,9 @@
       dryrunLastLoadedAt: 0,
       robustGateRequired: false,
       robustGateResult: null,
-      robustGateConfigKey: ""
+      robustGateConfigKey: "",
+      lastRealtimeTelegramNotifyKey: "",
+      realtimeTelegramNotifyInFlight: false
     };
 
     const el = {
@@ -1724,6 +1726,72 @@
       return data;
     }
 
+    async function apiTelegramNotifySignal(payload) {
+      const res = await fetch("/api/telegram/notify-signal", {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      return data;
+    }
+
+    function realtimeTelegramNotifyKey(data) {
+      const eventId = String(data.espn_event_id || data.event_id || "").trim();
+      const guessSide = String(data.guess_side || "").trim().toLowerCase();
+      const guessTeam = String(data.guess_team || "").trim().toUpperCase();
+      return [eventId, guessSide, guessTeam].filter(Boolean).join("|");
+    }
+
+    async function maybeNotifyRealtimeTelegram(data) {
+      if (!el.winnerOnly.checked) {
+        return;
+      }
+      if (!data || typeof data !== "object" || String(data.state || "").toUpperCase() !== "GUESS") {
+        return;
+      }
+      const key = realtimeTelegramNotifyKey(data);
+      if (!key) {
+        return;
+      }
+      if (state.lastRealtimeTelegramNotifyKey === key || state.realtimeTelegramNotifyInFlight) {
+        return;
+      }
+      state.realtimeTelegramNotifyInFlight = true;
+      try {
+        const payload = {
+          espn_event_id: data.espn_event_id || "",
+          rivalry: data.rivalry || "",
+          state: data.state || "",
+          guess_side: data.guess_side || "",
+          guess_team: data.guess_team || "",
+          guess_prob: data.guess_prob,
+          lead: data.lead,
+          time_left: data.time_left,
+          target_max_buy_price: data.target_max_buy_price,
+          reason: data.reason || "",
+          dedupe_key: key,
+          cooldown_sec: 900,
+          timeout: Number(el.timeout.value || 6),
+          ts: nowStamp(),
+        };
+        const reply = await apiTelegramNotifySignal(payload);
+        if (!reply.skipped) {
+          state.lastRealtimeTelegramNotifyKey = key;
+        } else if (reply.reason === "cooldown") {
+          state.lastRealtimeTelegramNotifyKey = key;
+        }
+      } catch (err) {
+        console.error("Realtime Telegram notify failed:", err);
+      } finally {
+        state.realtimeTelegramNotifyInFlight = false;
+      }
+    }
+
     async function apiAutofill() {
       return apiAutofillBy(el.provider.value, el.espnEventId.value.trim());
     }
@@ -2208,6 +2276,9 @@
       if (data && typeof data === "object" && data.state && data.state !== "ERROR") {
         state.lastSignalData = data;
       }
+      if (!data || String(data.state || "").toUpperCase() !== "GUESS") {
+        state.lastRealtimeTelegramNotifyKey = "";
+      }
       if (data.state === "SIGNAL") {
         el.actionText.textContent = data.action || "-";
         el.reasonText.textContent = data.reason || "-";
@@ -2324,6 +2395,7 @@
           const data = await apiWinner();
           updateStatus(data);
           addLog(data, false);
+          await maybeNotifyRealtimeTelegram(data);
           return;
         }
 

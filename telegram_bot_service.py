@@ -162,6 +162,7 @@ def build_start_text(bot_username: str) -> str:
             f"/status or /status{handle}",
             f"/lastsignal or /lastsignal{handle}",
             f"/botstatus or /botstatus{handle}",
+            f"/chatid or /chatid{handle}",
             f"/help or /help{handle}",
         ]
     )
@@ -267,6 +268,8 @@ def launchctl_snapshot(label: str) -> dict[str, str]:
             snapshot["runs"] = line.split("=", 1)[1].strip()
         elif line.startswith("run interval ="):
             snapshot["run_interval"] = line.split("=", 1)[1].strip()
+        elif "SIGNAL_DECK_LOOP_INTERVAL =>" in line:
+            snapshot["loop_interval"] = line.split("=>", 1)[1].strip()
     return snapshot
 
 
@@ -285,7 +288,7 @@ def build_botstatus_text() -> str:
             f"last_exit={dryrun.get('last_exit_code', '-')}"
         ),
         (
-            f"dryrun_interval={dryrun.get('run_interval', '-')}"
+            f"dryrun_interval={dryrun.get('loop_interval', dryrun.get('run_interval', '-'))}"
         ),
         f"dryrun_last_log={dryrun_log}",
         (
@@ -303,6 +306,18 @@ def build_botstatus_text() -> str:
     if telegrambot.get("error"):
         lines.append(f"telegram_error={telegrambot['error']}")
     return "\n".join(lines)
+
+
+def build_chatid_text(message: dict[str, Any]) -> str:
+    chat = message.get("chat") if isinstance(message.get("chat"), dict) else {}
+    return "\n".join(
+        [
+            "Signal Deck chatid",
+            f"chat_id={chat.get('id') if chat.get('id') is not None else '-'}",
+            f"chat_type={chat.get('type') or '-'}",
+            f"chat_title={chat.get('title') or chat.get('username') or chat.get('first_name') or '-'}",
+        ]
+    )
 
 
 def normalize_command(text: str, bot_username: str) -> str:
@@ -326,7 +341,8 @@ def extract_message(update: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def handle_command(text: str, bot_username: str) -> str | None:
+def handle_command(message: dict[str, Any], bot_username: str) -> str | None:
+    text = str(message.get("text") or "")
     command = normalize_command(text, bot_username)
     if command in {"/start", "/help"}:
         return build_start_text(bot_username)
@@ -336,6 +352,8 @@ def handle_command(text: str, bot_username: str) -> str | None:
         return build_lastsignal_text()
     if command == "/botstatus":
         return build_botstatus_text()
+    if command == "/chatid":
+        return build_chatid_text(message)
     return None
 
 
@@ -360,8 +378,7 @@ def process_updates(token: str, bot_username: str, state_path: Path, poll_timeou
         message = extract_message(update)
         if not isinstance(message, dict):
             continue
-        text = str(message.get("text") or "")
-        reply = handle_command(text, bot_username)
+        reply = handle_command(message, bot_username)
         if reply is None:
             continue
         chat = message.get("chat") if isinstance(message.get("chat"), dict) else {}

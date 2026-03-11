@@ -24,7 +24,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 from zoneinfo import ZoneInfo
 
 from live_experiment_signal import get_espn_state, get_kalshi_prices, get_polymarket_prices
@@ -39,6 +39,16 @@ DRYRUN_TXT = LOG_DIR / "dryrun_latest.txt"
 DRYRUN_CRON_LOG = LOG_DIR / "dryrun_cron.log"
 DRYRUN_TRADE_CSV = LOG_DIR / "dryrun_trades.csv"
 DRYRUN_TRADE_STATE = LOG_DIR / "dryrun_trade_state.json"
+TELEGRAM_ENV_PATH = Path.home() / ".signal-deck" / "runtime" / "telegram.env"
+TELEGRAM_DASHBOARD_ALERT_STATE = LOG_DIR / "telegram_dashboard_alert_state.json"
+FIXED_TELEGRAM_ALERT_RULES = {
+    "winner_max_time_left": 180.0,
+    "winner_min_lead": 6.0,
+    "winner_p_min": 0.80,
+    "winner_p_max": 0.95,
+    "winner_min_edge": 0.025,
+    "winner_max_buy_price": 0.91,
+}
 HOTRELOAD_WATCH_FILES = (
     ROOT / "dashboard_server.py",
     ROOT / "live_experiment_signal.py",
@@ -61,6 +71,252 @@ def file_signature(path: Path) -> str:
 def compute_reload_token(paths: tuple[Path, ...] = HOTRELOAD_WATCH_FILES) -> str:
     joined = "|".join(file_signature(path) for path in paths)
     return hashlib.sha1(joined.encode("utf-8")).hexdigest()[:12]
+
+
+def _load_shell_exports(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {}
+    out: dict[str, str] = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return {}
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :]
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip("'").strip('"')
+        if key:
+            out[key] = value
+    return out
+
+
+def _resolve_telegram_runtime_config() -> dict[str, Any]:
+    env_file_values = _load_shell_exports(TELEGRAM_ENV_PATH)
+    token = str(
+        os.environ.get("SIGNAL_DECK_TELEGRAM_BOT_TOKEN")
+        or env_file_values.get("SIGNAL_DECK_TELEGRAM_BOT_TOKEN")
+        or ""
+    ).strip()
+    single_chat = str(
+        os.environ.get("SIGNAL_DECK_TELEGRAM_CHAT_ID")
+        or env_file_values.get("SIGNAL_DECK_TELEGRAM_CHAT_ID")
+        or ""
+    ).strip()
+    raw_targets = str(
+        os.environ.get("SIGNAL_DECK_TELEGRAM_CHAT_IDS")
+        or env_file_values.get("SIGNAL_DECK_TELEGRAM_CHAT_IDS")
+        or ""
+    ).strip()
+    chat_ids: list[str] = []
+    seen: set[str] = set()
+    for raw in [raw_targets, single_chat]:
+        parts = [item.strip() for item in raw.replace("\n", ",").split(",")]
+        for part in parts:
+            if not part or part in seen:
+                continue
+            seen.add(part)
+            chat_ids.append(part)
+    return {
+        "token": token,
+        "chat_ids": chat_ids,
+        "env_path": str(TELEGRAM_ENV_PATH),
+    }
+
+
+def _load_dashboard_alert_state() -> dict[str, Any]:
+    if not TELEGRAM_DASHBOARD_ALERT_STATE.exists():
+        return {"alerts": {}}
+    try:
+        payload = json.loads(TELEGRAM_DASHBOARD_ALERT_STATE.read_text(encoding="utf-8"))
+    except Exception:
+        return {"alerts": {}}
+    if not isinstance(payload, dict):
+        return {"alerts": {}}
+    alerts = payload.get("alerts")
+    if not isinstance(alerts, dict):
+        payload["alerts"] = {}
+    return payload
+
+
+def _save_dashboard_alert_state(payload: dict[str, Any]) -> None:
+    TELEGRAM_DASHBOARD_ALERT_STATE.parent.mkdir(parents=True, exist_ok=True)
+    payload["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    TELEGRAM_DASHBOARD_ALERT_STATE.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+
+
+def _send_telegram_text(token: str, chat_ids: list[str], text: str, timeout: float = 8.0) -> dict[str, Any]:
+    from urllib.request import Request, urlopen
+
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    sent = 0
+    errors: list[str] = []
+    for chat_id in chat_ids:
+        body = urlencode(
+            {
+                "chat_id": chat_id,
+                "text": text,
+                "disable_web_page_preview": "true",
+            }
+        ).encode("utf-8")
+        request = Request(url, data=body, headers={"Content-Type": "application/x-www-form-urlencoded"})
+        with urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8")
+        reply = json.loads(raw)
+        if not isinstance(reply, dict) or not reply.get("ok"):
+            errors.append(f"{chat_id}: {raw}")
+        else:
+            sent += 1
+    return {"sent": sent, "errors": errors}
+
+
+def _fmt_alert_num(value: Any, digits: int = 4) -> str:
+    if value is None:
+        return "-"
+    try:
+        return f"{float(value):.{digits}f}"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def build_dashboard_telegram_alert(payload: dict[str, Any]) -> dict[str, Any]:
+    state_text = str(payload.get("state") or "").upper()
+    if state_text != "GUESS":
+        return {"ok": False, "skipped": True, "reason": f"state={state_text or '-'} is not GUESS"}
+
+    config = _resolve_telegram_runtime_config()
+    token = str(config.get("token") or "").strip()
+    chat_ids = list(config.get("chat_ids") or [])
+    if not token or not chat_ids:
+        return {"ok": False, "skipped": True, "reason": "telegram targets not configured"}
+
+    event_id = str(payload.get("espn_event_id") or payload.get("event_id") or "").strip()
+    guess_side = str(payload.get("guess_side") or "").strip().lower()
+    guess_team = str(payload.get("guess_team") or "").strip().upper()
+    if not event_id or guess_side not in {"home", "away"}:
+        return {"ok": False, "skipped": True, "reason": "missing event_id or guess_side"}
+
+    for key in (
+        "winner_max_time_left",
+        "winner_min_lead",
+        "winner_p_min",
+        "winner_p_max",
+        "winner_min_edge",
+        "winner_max_buy_price",
+    ):
+        value = payload.get(key)
+        if value is None:
+            continue
+        current = parse_float(value, FIXED_TELEGRAM_ALERT_RULES[key])
+        if abs(current - FIXED_TELEGRAM_ALERT_RULES[key]) > 1e-9:
+            return {
+                "ok": False,
+                "skipped": True,
+                "reason": f"{key} mismatch",
+                "expected": FIXED_TELEGRAM_ALERT_RULES[key],
+                "received": current,
+            }
+
+    time_left = parse_float(payload.get("time_left"), -1.0)
+    lead = parse_float(payload.get("lead"), -1.0)
+    guess_prob = parse_float(payload.get("guess_prob"), -1.0)
+    target_max_buy_price = parse_float(payload.get("target_max_buy_price"), -1.0)
+    blockers: list[str] = []
+    if time_left < 0 or time_left > FIXED_TELEGRAM_ALERT_RULES["winner_max_time_left"]:
+        blockers.append(
+            f"time_left {time_left:.0f}s > {FIXED_TELEGRAM_ALERT_RULES['winner_max_time_left']:.0f}s"
+            if time_left >= 0
+            else "missing time_left"
+        )
+    if lead < FIXED_TELEGRAM_ALERT_RULES["winner_min_lead"]:
+        blockers.append(f"lead {lead:.0f} < {FIXED_TELEGRAM_ALERT_RULES['winner_min_lead']:.0f}")
+    if not (
+        FIXED_TELEGRAM_ALERT_RULES["winner_p_min"]
+        <= guess_prob
+        <= FIXED_TELEGRAM_ALERT_RULES["winner_p_max"]
+    ):
+        blockers.append(
+            f"guess_prob {guess_prob:.4f} not in "
+            f"[{FIXED_TELEGRAM_ALERT_RULES['winner_p_min']:.2f}, {FIXED_TELEGRAM_ALERT_RULES['winner_p_max']:.2f}]"
+        )
+    if target_max_buy_price < 0 or target_max_buy_price > FIXED_TELEGRAM_ALERT_RULES["winner_max_buy_price"]:
+        blockers.append(
+            f"target_max_buy {target_max_buy_price:.4f} > {FIXED_TELEGRAM_ALERT_RULES['winner_max_buy_price']:.4f}"
+            if target_max_buy_price >= 0
+            else "missing target_max_buy_price"
+        )
+    if blockers:
+        return {
+            "ok": False,
+            "skipped": True,
+            "reason": "; ".join(blockers),
+            "rules": FIXED_TELEGRAM_ALERT_RULES,
+        }
+
+    dedupe_key = str(payload.get("dedupe_key") or f"{event_id}|{guess_side}|{guess_team}").strip()
+    cooldown_sec = max(30, min(parse_int(payload.get("cooldown_sec"), 900), 24 * 3600))
+
+    state_payload = _load_dashboard_alert_state()
+    alerts = state_payload.get("alerts") if isinstance(state_payload.get("alerts"), dict) else {}
+    now_ts = time.time()
+    existing = alerts.get(dedupe_key)
+    if isinstance(existing, dict):
+        last_sent_ts = existing.get("last_sent_ts")
+        try:
+            last_sent = float(last_sent_ts)
+        except (TypeError, ValueError):
+            last_sent = None
+        if last_sent is not None and now_ts - last_sent < cooldown_sec:
+            return {
+                "ok": True,
+                "skipped": True,
+                "reason": "cooldown",
+                "cooldown_remaining_sec": max(0, int(cooldown_sec - (now_ts - last_sent))),
+                "dedupe_key": dedupe_key,
+            }
+
+    rivalry = str(payload.get("rivalry") or event_id)
+    reason = " ".join(str(payload.get("reason") or "").splitlines()).strip() or "-"
+    text = "\n".join(
+        [
+            "PAGE SIGNAL",
+            "source=dashboard_live",
+            "strategy=max_profit_95",
+            f"game={rivalry}",
+            f"action=BUY {guess_team or '-'}",
+            f"guess_prob={_fmt_alert_num(payload.get('guess_prob'), 4)}",
+            f"lead={_fmt_alert_num(payload.get('lead'), 0)}",
+            f"time_left={_fmt_alert_num(payload.get('time_left'), 0)}s",
+            f"target_max_buy={_fmt_alert_num(payload.get('target_max_buy_price'), 4)}",
+            f"reason={reason}",
+        ]
+    )
+    delivery = _send_telegram_text(token, chat_ids, text, timeout=parse_float(payload.get("timeout"), 8.0))
+    if delivery["errors"]:
+        raise RuntimeError("Telegram sendMessage failed: " + " | ".join(delivery["errors"]))
+
+    alerts[dedupe_key] = {
+        "event_id": event_id,
+        "guess_side": guess_side,
+        "guess_team": guess_team,
+        "last_sent_ts": now_ts,
+        "rivalry": rivalry,
+    }
+    state_payload["alerts"] = alerts
+    _save_dashboard_alert_state(state_payload)
+    return {
+        "ok": True,
+        "sent": delivery["sent"],
+        "chat_ids": chat_ids,
+        "dedupe_key": dedupe_key,
+        "cooldown_sec": cooldown_sec,
+    }
 
 
 def terminate_process(child: subprocess.Popen[Any], timeout: float = 3.0) -> None:
@@ -2025,7 +2281,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
-        if parsed.path not in {"/api/signal", "/api/winner"}:
+        if parsed.path not in {"/api/signal", "/api/winner", "/api/telegram/notify-signal"}:
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "Not found"})
             return
 
@@ -2036,7 +2292,9 @@ class Handler(BaseHTTPRequestHandler):
             payload = json.loads(data.decode("utf-8"))
             if not isinstance(payload, dict):
                 raise ValueError("Request body must be a JSON object.")
-            if parsed.path == "/api/winner":
+            if parsed.path == "/api/telegram/notify-signal":
+                result = build_dashboard_telegram_alert(payload)
+            elif parsed.path == "/api/winner":
                 result = build_winner_once(payload)
             else:
                 result = build_signal_once(payload)
