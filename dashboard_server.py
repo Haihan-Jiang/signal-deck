@@ -285,16 +285,16 @@ def build_dashboard_telegram_alert(payload: dict[str, Any]) -> dict[str, Any]:
     reason = " ".join(str(payload.get("reason") or "").splitlines()).strip() or "-"
     text = "\n".join(
         [
-            "PAGE SIGNAL",
-            "source=dashboard_live",
-            "strategy=max_profit_95",
-            f"game={rivalry}",
-            f"action=BUY {guess_team or '-'}",
-            f"guess_prob={_fmt_alert_num(payload.get('guess_prob'), 4)}",
-            f"lead={_fmt_alert_num(payload.get('lead'), 0)}",
-            f"time_left={_fmt_alert_num(payload.get('time_left'), 0)}s",
-            f"target_max_buy={_fmt_alert_num(payload.get('target_max_buy_price'), 4)}",
-            f"reason={reason}",
+            "⚡ PAGE SIGNAL",
+            "🖥 source=dashboard_live",
+            "📌 strategy=max_profit_95",
+            f"🏀 game={rivalry}",
+            f"💰 action=BUY {guess_team or '-'}",
+            f"📈 guess_prob={_fmt_alert_num(payload.get('guess_prob'), 4)}",
+            f"📊 lead={_fmt_alert_num(payload.get('lead'), 0)}",
+            f"⏱ time_left={_fmt_alert_num(payload.get('time_left'), 0)}s",
+            f"💵 target_max_buy={_fmt_alert_num(payload.get('target_max_buy_price'), 4)}",
+            f"🧪 reason={reason}",
         ]
     )
     delivery = _send_telegram_text(token, chat_ids, text, timeout=parse_float(payload.get("timeout"), 8.0))

@@ -481,20 +481,20 @@ def build_telegram_signal_text(run_ts: str, args: argparse.Namespace, result: di
     score = f"{fmt_num(result.get('away_score'), 0) or '-'} - {fmt_num(result.get('home_score'), 0) or '-'}"
     action_label = display_action_label(result.get("suggested_action"), result.get("guess_team")) or "-"
     lines = [
-        "Signal Deck Alert",
-        "strategy=max_profit_95",
-        f"game={rivalry}",
-        f"state={result.get('state') or '-'}",
-        f"action={action_label}",
-        f"guess_team={result.get('guess_team') or '-'}",
-        f"guess_prob={fmt_num(result.get('guess_prob'), 4) or '-'}",
-        f"lead={fmt_num(result.get('lead'), 0) or '-'}",
-        f"time_left={fmt_num(result.get('time_left'), 0) or '-'}s",
-        f"score(away-home)={score}",
-        f"target_max_buy={fmt_num(result.get('target_max_buy_price'), 4) or '-'}",
-        f"contracts={fmt_num(contracts, 2) or '-'}",
-        f"reason={normalize_reason(result.get('reason')) or '-'}",
-        f"run_ts={run_ts}",
+        "🚨 Signal Deck Alert",
+        "📌 strategy=max_profit_95",
+        f"🏀 game={rivalry}",
+        f"📍 state={result.get('state') or '-'}",
+        f"💰 action={action_label}",
+        f"🎯 guess_team={result.get('guess_team') or '-'}",
+        f"📈 guess_prob={fmt_num(result.get('guess_prob'), 4) or '-'}",
+        f"📊 lead={fmt_num(result.get('lead'), 0) or '-'}",
+        f"⏱ time_left={fmt_num(result.get('time_left'), 0) or '-'}s",
+        f"🔢 score(away-home)={score}",
+        f"💵 target_max_buy={fmt_num(result.get('target_max_buy_price'), 4) or '-'}",
+        f"🧮 contracts={fmt_num(contracts, 2) or '-'}",
+        f"🧪 reason={normalize_reason(result.get('reason')) or '-'}",
+        f"🕒 run_ts={run_ts}",
     ]
     return "\n".join(lines)
 
