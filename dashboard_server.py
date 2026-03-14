@@ -28,6 +28,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 from zoneinfo import ZoneInfo
 
 from live_experiment_signal import get_espn_state, get_kalshi_prices, get_polymarket_prices
+from polymarket_executor import DEFAULT_EXECUTION_CSV_PATH, read_execution_latest
 from signal_engine import compute_signal
 
 
@@ -38,6 +39,7 @@ DRYRUN_CSV = LOG_DIR / "dryrun_signals.csv"
 DRYRUN_TXT = LOG_DIR / "dryrun_latest.txt"
 DRYRUN_CRON_LOG = LOG_DIR / "dryrun_cron.log"
 DRYRUN_TRADE_CSV = LOG_DIR / "dryrun_trades.csv"
+POLYMARKET_EXECUTION_CSV = DEFAULT_EXECUTION_CSV_PATH
 DRYRUN_TRADE_STATE = LOG_DIR / "dryrun_trade_state.json"
 MANUAL_TX_JSON = LOG_DIR / "manual_transactions.json"
 MANUAL_TX_CSV = LOG_DIR / "manual_transactions.csv"
@@ -50,6 +52,10 @@ FIXED_TELEGRAM_ALERT_RULES = {
     "winner_p_max": 0.95,
     "winner_min_edge": 0.025,
     "winner_max_buy_price": 0.91,
+}
+DEFAULT_WINNER_STRATEGY = {
+    **FIXED_TELEGRAM_ALERT_RULES,
+    "fee_total": 0.02,
 }
 HOTRELOAD_WATCH_FILES = (
     ROOT / "dashboard_server.py",
@@ -994,12 +1000,15 @@ def build_history_replay(config: dict[str, Any]) -> dict[str, Any]:
     timeout = parse_float(config.get("timeout"), 8.0)
     period_seconds = parse_float(config.get("period_seconds"), 720.0)
     regulation_periods = parse_int(config.get("regulation_periods"), 4)
-    winner_max_time_left = parse_float(config.get("winner_max_time_left"), 360.0)
-    winner_min_lead = parse_float(config.get("winner_min_lead"), 10.0)
-    winner_p_min = parse_float(config.get("winner_p_min"), 0.80)
-    winner_p_max = parse_float(config.get("winner_p_max"), 0.97)
-    winner_min_edge = parse_float(config.get("winner_min_edge"), 0.025)
-    fee_total = parse_float(config.get("fee_total"), 0.02)
+    winner_max_time_left = parse_float(
+        config.get("winner_max_time_left"),
+        DEFAULT_WINNER_STRATEGY["winner_max_time_left"],
+    )
+    winner_min_lead = parse_float(config.get("winner_min_lead"), DEFAULT_WINNER_STRATEGY["winner_min_lead"])
+    winner_p_min = parse_float(config.get("winner_p_min"), DEFAULT_WINNER_STRATEGY["winner_p_min"])
+    winner_p_max = parse_float(config.get("winner_p_max"), DEFAULT_WINNER_STRATEGY["winner_p_max"])
+    winner_min_edge = parse_float(config.get("winner_min_edge"), DEFAULT_WINNER_STRATEGY["winner_min_edge"])
+    fee_total = parse_float(config.get("fee_total"), DEFAULT_WINNER_STRATEGY["fee_total"])
     max_points = max(40, min(parse_int(config.get("max_points"), 220), 900))
     include_timeline = parse_bool(config.get("include_timeline"), True)
 
@@ -1245,12 +1254,15 @@ def build_history_gate(config: dict[str, Any]) -> dict[str, Any]:
     if not (0.0 <= min_first_hit_rate <= 1.0):
         raise ValueError("min_first_hit_rate must be in [0,1].")
 
-    winner_max_time_left = parse_float(config.get("winner_max_time_left"), 360.0)
-    winner_min_lead = parse_float(config.get("winner_min_lead"), 10.0)
-    winner_p_min = parse_float(config.get("winner_p_min"), 0.80)
-    winner_p_max = parse_float(config.get("winner_p_max"), 0.98)
-    winner_min_edge = parse_float(config.get("winner_min_edge"), 0.025)
-    fee_total = parse_float(config.get("fee_total"), 0.02)
+    winner_max_time_left = parse_float(
+        config.get("winner_max_time_left"),
+        DEFAULT_WINNER_STRATEGY["winner_max_time_left"],
+    )
+    winner_min_lead = parse_float(config.get("winner_min_lead"), DEFAULT_WINNER_STRATEGY["winner_min_lead"])
+    winner_p_min = parse_float(config.get("winner_p_min"), DEFAULT_WINNER_STRATEGY["winner_p_min"])
+    winner_p_max = parse_float(config.get("winner_p_max"), DEFAULT_WINNER_STRATEGY["winner_p_max"])
+    winner_min_edge = parse_float(config.get("winner_min_edge"), DEFAULT_WINNER_STRATEGY["winner_min_edge"])
+    fee_total = parse_float(config.get("fee_total"), DEFAULT_WINNER_STRATEGY["fee_total"])
 
     if not (0 <= winner_p_min <= 1 and 0 <= winner_p_max <= 1 and winner_p_min <= winner_p_max):
         raise ValueError("winner_p_min/winner_p_max must satisfy 0 <= min <= max <= 1.")
@@ -1437,24 +1449,49 @@ def build_history_gate(config: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def read_dryrun_latest(limit: int = 40) -> dict[str, Any]:
+def _normalize_date_filter(value: str | None) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if len(text) == 8 and text.isdigit():
+        return f"{text[:4]}-{text[4:6]}-{text[6:]}"
+    return text[:10]
+
+
+def _row_matches_date(row: dict[str, Any], date_filter: str) -> bool:
+    if not date_filter:
+        return True
+    run_ts = str(row.get("run_ts") or row.get("updated_at") or row.get("created_at") or "").strip()
+    return run_ts[:10] == date_filter
+
+
+def read_dryrun_latest(limit: int = 40, *, date_filter: str = "") -> dict[str, Any]:
+    normalized_date = _normalize_date_filter(date_filter)
     rows: list[dict[str, str]] = []
     if DRYRUN_CSV.exists():
         with DRYRUN_CSV.open("r", encoding="utf-8", newline="") as fh:
             reader = csv.DictReader(fh)
             rows = [dict(row) for row in reader]
+    if normalized_date:
+        rows = [row for row in rows if _row_matches_date(row, normalized_date)]
     if limit > 0:
         rows = rows[-limit:]
     rows.reverse()
 
     txt = ""
     if DRYRUN_TXT.exists():
-        txt = DRYRUN_TXT.read_text(encoding="utf-8")
+        if normalized_date:
+            txt = (
+                f"Dry Run filtered by date: {normalized_date}\n\n"
+                "文本快照始终只代表最近一次运行状态；日期筛选主要作用于下方信号记录和理论交易流水。"
+            )
+        else:
+            txt = DRYRUN_TXT.read_text(encoding="utf-8")
 
     return {
         "txt": txt,
         "rows": rows,
-        "trades": read_dryrun_trades(limit=max(1, min(limit, 100))),
+        "trades": read_dryrun_trades(limit=max(1, min(limit, 100)), date_filter=normalized_date),
         "csv_exists": DRYRUN_CSV.exists(),
         "txt_exists": DRYRUN_TXT.exists(),
         "csv_mtime": DRYRUN_CSV.stat().st_mtime if DRYRUN_CSV.exists() else None,
@@ -1464,6 +1501,7 @@ def read_dryrun_latest(limit: int = 40) -> dict[str, Any]:
         "trades_csv_exists": DRYRUN_TRADE_CSV.exists(),
         "trades_csv_mtime": DRYRUN_TRADE_CSV.stat().st_mtime if DRYRUN_TRADE_CSV.exists() else None,
         "trades_csv_size": DRYRUN_TRADE_CSV.stat().st_size if DRYRUN_TRADE_CSV.exists() else 0,
+        "date_filter": normalized_date,
     }
 
 
@@ -1724,12 +1762,15 @@ def save_manual_transaction(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def read_dryrun_trades(limit: int = 20) -> dict[str, Any]:
+def read_dryrun_trades(limit: int = 20, *, date_filter: str = "") -> dict[str, Any]:
+    normalized_date = _normalize_date_filter(date_filter)
     rows: list[dict[str, str]] = []
     if DRYRUN_TRADE_CSV.exists():
         with DRYRUN_TRADE_CSV.open("r", encoding="utf-8", newline="") as fh:
             reader = csv.DictReader(fh)
             rows = [dict(row) for row in reader]
+    if normalized_date:
+        rows = [row for row in rows if _row_matches_date(row, normalized_date)]
 
     recent_rows = rows[-limit:] if limit > 0 else rows[:]
     recent_rows.reverse()
@@ -1785,6 +1826,7 @@ def read_dryrun_trades(limit: int = 20) -> dict[str, Any]:
             "trade_budget": _to_float_or_none(settings.get("trade_budget")),
             "contracts": _to_float_or_none(settings.get("contracts")),
             "sizing_mode": str(settings.get("sizing_mode") or ""),
+            "date_filter": normalized_date,
         },
     }
 
@@ -2099,13 +2141,19 @@ def build_winner_once(config: dict[str, Any]) -> dict[str, Any]:
     require_live = parse_bool(config.get("require_live"), True)
     period_seconds = parse_float(config.get("period_seconds"), 720.0)
     regulation_periods = parse_int(config.get("regulation_periods"), 4)
-    winner_max_time_left = parse_float(config.get("winner_max_time_left"), 360.0)
-    winner_min_lead = parse_float(config.get("winner_min_lead"), 10.0)
-    winner_p_min = parse_float(config.get("winner_p_min"), 0.80)
-    winner_p_max = parse_float(config.get("winner_p_max"), 0.97)
-    winner_min_edge = parse_float(config.get("winner_min_edge"), 0.025)
-    winner_max_buy_price = parse_float(config.get("winner_max_buy_price"), 0.91)
-    fee_total = parse_float(config.get("fee_total"), 0.02)
+    winner_max_time_left = parse_float(
+        config.get("winner_max_time_left"),
+        DEFAULT_WINNER_STRATEGY["winner_max_time_left"],
+    )
+    winner_min_lead = parse_float(config.get("winner_min_lead"), DEFAULT_WINNER_STRATEGY["winner_min_lead"])
+    winner_p_min = parse_float(config.get("winner_p_min"), DEFAULT_WINNER_STRATEGY["winner_p_min"])
+    winner_p_max = parse_float(config.get("winner_p_max"), DEFAULT_WINNER_STRATEGY["winner_p_max"])
+    winner_min_edge = parse_float(config.get("winner_min_edge"), DEFAULT_WINNER_STRATEGY["winner_min_edge"])
+    winner_max_buy_price = parse_float(
+        config.get("winner_max_buy_price"),
+        DEFAULT_WINNER_STRATEGY["winner_max_buy_price"],
+    )
+    fee_total = parse_float(config.get("fee_total"), DEFAULT_WINNER_STRATEGY["fee_total"])
 
     if winner_max_time_left < 0:
         raise ValueError("winner_max_time_left must be >= 0.")
@@ -2339,7 +2387,8 @@ class Handler(BaseHTTPRequestHandler):
 
             if path == "/api/dryrun/latest":
                 payload = read_dryrun_latest(
-                    limit=max(1, min(parse_int(query_first(query, "limit", "30"), 30), 200))
+                    limit=max(1, min(parse_int(query_first(query, "limit", "30"), 30), 200)),
+                    date_filter=query_first(query, "date", ""),
                 )
                 self._send_json(
                     HTTPStatus.OK,
@@ -2347,6 +2396,7 @@ class Handler(BaseHTTPRequestHandler):
                         "txt": payload["txt"],
                         "rows": payload["rows"],
                         "trades": payload["trades"],
+                        "date_filter": payload["date_filter"],
                         "files": {
                             "csv": "/logs/dryrun_signals.csv",
                             "txt": "/logs/dryrun_latest.txt",
@@ -2363,6 +2413,25 @@ class Handler(BaseHTTPRequestHandler):
                             "trades_csv_exists": payload["trades_csv_exists"],
                             "trades_csv_mtime": payload["trades_csv_mtime"],
                             "trades_csv_size": payload["trades_csv_size"],
+                        },
+                    },
+                )
+                return
+
+            if path == "/api/execution/latest":
+                payload = read_execution_latest(
+                    limit=max(1, min(parse_int(query_first(query, "limit", "30"), 30), 200))
+                )
+                self._send_json(
+                    HTTPStatus.OK,
+                    {
+                        "rows": payload["rows"],
+                        "summary": payload["summary"],
+                        "config": payload["config"],
+                        "state": payload["state"],
+                        "meta": payload["meta"],
+                        "files": {
+                            "csv": "/logs/polymarket_execution.csv",
                         },
                     },
                 )
@@ -2401,6 +2470,13 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_json(HTTPStatus.NOT_FOUND, {"error": "dryrun_trades.csv not found"})
                     return
                 self._send_bytes(HTTPStatus.OK, DRYRUN_TRADE_CSV.read_bytes(), "text/csv; charset=utf-8")
+                return
+
+            if path == "/logs/polymarket_execution.csv":
+                if not POLYMARKET_EXECUTION_CSV.exists():
+                    self._send_json(HTTPStatus.NOT_FOUND, {"error": "polymarket_execution.csv not found"})
+                    return
+                self._send_bytes(HTTPStatus.OK, POLYMARKET_EXECUTION_CSV.read_bytes(), "text/csv; charset=utf-8")
                 return
 
             if path == "/logs/manual_transactions.csv":
@@ -2500,12 +2576,34 @@ class Handler(BaseHTTPRequestHandler):
                         "timeout": parse_float(query_first(query, "timeout", "8"), 8.0),
                         "period_seconds": parse_float(query_first(query, "period_seconds", "720"), 720.0),
                         "regulation_periods": parse_int(query_first(query, "regulation_periods", "4"), 4),
-                        "winner_max_time_left": parse_float(query_first(query, "winner_max_time_left", "360"), 360.0),
-                        "winner_min_lead": parse_float(query_first(query, "winner_min_lead", "10"), 10.0),
-                        "winner_p_min": parse_float(query_first(query, "winner_p_min", "0.80"), 0.80),
-                        "winner_p_max": parse_float(query_first(query, "winner_p_max", "0.97"), 0.97),
-                        "winner_min_edge": parse_float(query_first(query, "winner_min_edge", "0.025"), 0.025),
-                        "fee_total": parse_float(query_first(query, "fee_total", "0.02"), 0.02),
+                        "winner_max_time_left": parse_float(
+                            query_first(
+                                query,
+                                "winner_max_time_left",
+                                str(DEFAULT_WINNER_STRATEGY["winner_max_time_left"]),
+                            ),
+                            DEFAULT_WINNER_STRATEGY["winner_max_time_left"],
+                        ),
+                        "winner_min_lead": parse_float(
+                            query_first(query, "winner_min_lead", str(DEFAULT_WINNER_STRATEGY["winner_min_lead"])),
+                            DEFAULT_WINNER_STRATEGY["winner_min_lead"],
+                        ),
+                        "winner_p_min": parse_float(
+                            query_first(query, "winner_p_min", str(DEFAULT_WINNER_STRATEGY["winner_p_min"])),
+                            DEFAULT_WINNER_STRATEGY["winner_p_min"],
+                        ),
+                        "winner_p_max": parse_float(
+                            query_first(query, "winner_p_max", str(DEFAULT_WINNER_STRATEGY["winner_p_max"])),
+                            DEFAULT_WINNER_STRATEGY["winner_p_max"],
+                        ),
+                        "winner_min_edge": parse_float(
+                            query_first(query, "winner_min_edge", str(DEFAULT_WINNER_STRATEGY["winner_min_edge"])),
+                            DEFAULT_WINNER_STRATEGY["winner_min_edge"],
+                        ),
+                        "fee_total": parse_float(
+                            query_first(query, "fee_total", str(DEFAULT_WINNER_STRATEGY["fee_total"])),
+                            DEFAULT_WINNER_STRATEGY["fee_total"],
+                        ),
                         "max_points": parse_int(query_first(query, "max_points", "220"), 220),
                         "include_timeline": parse_bool(query_first(query, "include_timeline", "1"), True),
                     }
@@ -2524,12 +2622,34 @@ class Handler(BaseHTTPRequestHandler):
                         "min_games": parse_int(query_first(query, "min_games", "80"), 80),
                         "min_trigger_games": parse_int(query_first(query, "min_trigger_games", "20"), 20),
                         "min_first_hit_rate": parse_float(query_first(query, "min_first_hit_rate", "0.93"), 0.93),
-                        "winner_max_time_left": parse_float(query_first(query, "winner_max_time_left", "360"), 360.0),
-                        "winner_min_lead": parse_float(query_first(query, "winner_min_lead", "10"), 10.0),
-                        "winner_p_min": parse_float(query_first(query, "winner_p_min", "0.80"), 0.80),
-                        "winner_p_max": parse_float(query_first(query, "winner_p_max", "0.98"), 0.98),
-                        "winner_min_edge": parse_float(query_first(query, "winner_min_edge", "0.025"), 0.025),
-                        "fee_total": parse_float(query_first(query, "fee_total", "0.02"), 0.02),
+                        "winner_max_time_left": parse_float(
+                            query_first(
+                                query,
+                                "winner_max_time_left",
+                                str(DEFAULT_WINNER_STRATEGY["winner_max_time_left"]),
+                            ),
+                            DEFAULT_WINNER_STRATEGY["winner_max_time_left"],
+                        ),
+                        "winner_min_lead": parse_float(
+                            query_first(query, "winner_min_lead", str(DEFAULT_WINNER_STRATEGY["winner_min_lead"])),
+                            DEFAULT_WINNER_STRATEGY["winner_min_lead"],
+                        ),
+                        "winner_p_min": parse_float(
+                            query_first(query, "winner_p_min", str(DEFAULT_WINNER_STRATEGY["winner_p_min"])),
+                            DEFAULT_WINNER_STRATEGY["winner_p_min"],
+                        ),
+                        "winner_p_max": parse_float(
+                            query_first(query, "winner_p_max", str(DEFAULT_WINNER_STRATEGY["winner_p_max"])),
+                            DEFAULT_WINNER_STRATEGY["winner_p_max"],
+                        ),
+                        "winner_min_edge": parse_float(
+                            query_first(query, "winner_min_edge", str(DEFAULT_WINNER_STRATEGY["winner_min_edge"])),
+                            DEFAULT_WINNER_STRATEGY["winner_min_edge"],
+                        ),
+                        "fee_total": parse_float(
+                            query_first(query, "fee_total", str(DEFAULT_WINNER_STRATEGY["fee_total"])),
+                            DEFAULT_WINNER_STRATEGY["fee_total"],
+                        ),
                         "use_cache": parse_bool(query_first(query, "use_cache", "1"), True),
                     }
                 )

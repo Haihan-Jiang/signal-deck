@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Lightweight Telegram bot command service for Signal Deck."""
+"""Lightweight Telegram bot command service for Polymarket Auto Trader."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ SERVICE_LABELS = {
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Telegram bot command service for Signal Deck.")
+    parser = argparse.ArgumentParser(description="Telegram bot command service for Polymarket Auto Trader.")
     parser.add_argument("--bot-token", default=os.environ.get("SIGNAL_DECK_TELEGRAM_BOT_TOKEN", ""))
     parser.add_argument("--bot-username", default=os.environ.get("SIGNAL_DECK_TELEGRAM_BOT_USERNAME", ""))
     parser.add_argument("--state-path", type=Path, default=DEFAULT_STATE_PATH)
@@ -157,7 +157,7 @@ def build_start_text(bot_username: str) -> str:
     handle = f"@{bot_username}" if bot_username else "@your_bot"
     return "\n".join(
         [
-            "Signal Deck bot is online.",
+            "Polymarket Auto Trader bot is online.",
             "Commands:",
             f"/status or /status{handle}",
             f"/lastsignal or /lastsignal{handle}",
@@ -179,7 +179,7 @@ def build_status_text() -> str:
         signal_row = latest_game_row(rows)
 
     lines = [
-        "Signal Deck status",
+        "Polymarket Auto Trader status",
         "strategy=max_profit_95",
         f"rules={parse_rules_line(txt)}",
         f"snapshot={parse_generated_at(txt)}",
@@ -280,7 +280,7 @@ def build_botstatus_text() -> str:
     telegram_log = tail_last_nonempty_line(TELEGRAM_LOG_PATH)
 
     lines = [
-        "Signal Deck botstatus",
+        "Polymarket Auto Trader botstatus",
         (
             f"dryrun: loaded={dryrun.get('loaded', '0')} "
             f"state={dryrun.get('state', '-')} "
@@ -312,7 +312,7 @@ def build_chatid_text(message: dict[str, Any]) -> str:
     chat = message.get("chat") if isinstance(message.get("chat"), dict) else {}
     return "\n".join(
         [
-            "Signal Deck chatid",
+            "Polymarket Auto Trader chatid",
             f"chat_id={chat.get('id') if chat.get('id') is not None else '-'}",
             f"chat_type={chat.get('type') or '-'}",
             f"chat_title={chat.get('title') or chat.get('username') or chat.get('first_name') or '-'}",

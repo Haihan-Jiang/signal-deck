@@ -21,8 +21,9 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
-from dashboard_server import build_history_gate, build_winner_once, discover_espn
+from dashboard_server import autofill_market, build_history_gate, build_winner_once, discover_espn
 from live_experiment_signal import get_espn_state
+from polymarket_executor import build_order_intent, execute_order_intent
 
 
 ROOT = Path(__file__).resolve().parent
@@ -121,6 +122,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--telegram-bot-token", default=os.environ.get("SIGNAL_DECK_TELEGRAM_BOT_TOKEN", ""))
     parser.add_argument("--telegram-chat-id", default=os.environ.get("SIGNAL_DECK_TELEGRAM_CHAT_ID", ""))
     parser.add_argument("--telegram-chat-ids", default=os.environ.get("SIGNAL_DECK_TELEGRAM_CHAT_IDS", ""))
+    parser.add_argument("--execution-mode", default=os.environ.get("SIGNAL_DECK_EXECUTION_MODE", ""))
+    parser.add_argument("--execution-env-path", type=Path, default=Path.home() / ".signal-deck" / "runtime" / "polymarket.env")
     parser.add_argument("--timezone", default="America/Los_Angeles")
     parser.add_argument("--disable-gate", action="store_true", help="Skip history gate and just record snapshots.")
     parser.set_defaults(require_live=True, fallback_pre=True)
@@ -481,7 +484,7 @@ def build_telegram_signal_text(run_ts: str, args: argparse.Namespace, result: di
     score = f"{fmt_num(result.get('away_score'), 0) or '-'} - {fmt_num(result.get('home_score'), 0) or '-'}"
     action_label = display_action_label(result.get("suggested_action"), result.get("guess_team")) or "-"
     lines = [
-        "🚨 Signal Deck Alert",
+        "🚨 Polymarket Auto Trader Alert",
         "📌 strategy=max_profit_95",
         f"🏀 game={rivalry}",
         f"📍 state={result.get('state') or '-'}",
@@ -695,6 +698,28 @@ def build_game_payload(args: argparse.Namespace, event_id: str) -> dict[str, Any
     )
 
 
+def resolve_polymarket_market(args: argparse.Namespace, event_id: str) -> dict[str, Any]:
+    try:
+        return autofill_market(
+            provider="polymarket_espn",
+            sport=args.sport,
+            league=args.league,
+            event_id=event_id,
+            yes_team="home",
+            timeout=args.timeout,
+        )
+    except Exception as exc:
+        return {
+            "provider": "polymarket_espn",
+            "event": {},
+            "matched": False,
+            "market": "",
+            "source": "error",
+            "message": str(exc),
+            "candidates": [],
+        }
+
+
 def write_snapshot_text(
     txt_path: Path,
     run_ts: str,
@@ -716,6 +741,8 @@ def write_snapshot_text(
         f"fee_total={args.fee_total:.3f}, "
         f"max_buy={args.winner_max_buy_price:.3f}"
     )
+    execution_mode = str(getattr(args, "execution_mode", "") or "paper").strip().lower() or "paper"
+    lines.append(f"Execution Mode: {execution_mode}")
     if gate is not None:
         metrics = gate.get("metrics") if isinstance(gate.get("metrics"), dict) else {}
         gate_info = gate.get("gate") if isinstance(gate.get("gate"), dict) else {}
@@ -813,6 +840,47 @@ def main() -> int:
         for item in opened_signals:
             position = item.get("position") if isinstance(item.get("position"), dict) else {}
             result = item.get("result") if isinstance(item.get("result"), dict) else {}
+            event_id = str(position.get("event_id") or result.get("espn_event_id") or "").strip()
+            market_info = resolve_polymarket_market(args, event_id) if event_id else {}
+            market_id = str(market_info.get("market") or "")
+            market_source = str(market_info.get("source") or "")
+            question = ""
+            event_meta = market_info.get("event") if isinstance(market_info.get("event"), dict) else {}
+            if isinstance(event_meta, dict):
+                away = str(event_meta.get("away_name") or event_meta.get("away_abbr") or "").strip()
+                home = str(event_meta.get("home_name") or event_meta.get("home_abbr") or "").strip()
+                if away or home:
+                    question = f"{away} @ {home}".strip(" @")
+            try:
+                contracts_value = float(position.get("contracts") or 0.0)
+                entry_price_value = float(position.get("entry_price") or 0.0)
+                intent = build_order_intent(
+                    run_ts=run_ts,
+                    source="dryrun_signal",
+                    signal={
+                        **result,
+                        "event_id": event_id,
+                    },
+                    contracts=contracts_value,
+                    stake_amount=contracts_value * entry_price_value,
+                    market_id=market_id,
+                    market_source=market_source,
+                    question=question,
+                )
+                execute_order_intent(
+                    intent,
+                    env_path=args.execution_env_path,
+                    overrides={"SIGNAL_DECK_EXECUTION_MODE": args.execution_mode or None},
+                )
+            except Exception as exc:
+                rows.append(
+                    build_system_row(
+                        run_ts,
+                        args,
+                        f"EXECUTION_ERROR:{event_id}",
+                        str(exc),
+                    )
+                )
             try:
                 send_telegram_message(
                     args,
