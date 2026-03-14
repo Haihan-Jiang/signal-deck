@@ -39,6 +39,8 @@ DRYRUN_TXT = LOG_DIR / "dryrun_latest.txt"
 DRYRUN_CRON_LOG = LOG_DIR / "dryrun_cron.log"
 DRYRUN_TRADE_CSV = LOG_DIR / "dryrun_trades.csv"
 DRYRUN_TRADE_STATE = LOG_DIR / "dryrun_trade_state.json"
+MANUAL_TX_JSON = LOG_DIR / "manual_transactions.json"
+MANUAL_TX_CSV = LOG_DIR / "manual_transactions.csv"
 TELEGRAM_ENV_PATH = Path.home() / ".signal-deck" / "runtime" / "telegram.env"
 TELEGRAM_DASHBOARD_ALERT_STATE = LOG_DIR / "telegram_dashboard_alert_state.json"
 FIXED_TELEGRAM_ALERT_RULES = {
@@ -58,6 +60,33 @@ HOTRELOAD_WATCH_FILES = (
 
 HISTORY_GATE_CACHE_TTL_SEC = 15 * 60
 HISTORY_GATE_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+MANUAL_TRANSACTION_FIELDS = [
+    "id",
+    "created_at",
+    "updated_at",
+    "source",
+    "event_date",
+    "rivalry",
+    "market_question",
+    "side",
+    "team",
+    "order_type",
+    "status",
+    "result",
+    "submitted_at",
+    "filled_at",
+    "settled_at",
+    "entered_amount",
+    "limit_price",
+    "filled_quantity",
+    "fees",
+    "payout_amount",
+    "cost_basis",
+    "avg_fill_price",
+    "realized_pnl",
+    "roi",
+    "notes",
+]
 
 
 def file_signature(path: Path) -> str:
@@ -1477,6 +1506,224 @@ def _to_float_or_none(value: Any) -> float | None:
         return None
 
 
+def _clean_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _load_manual_transaction_rows() -> list[dict[str, Any]]:
+    if not MANUAL_TX_JSON.exists():
+        return []
+    try:
+        payload = json.loads(MANUAL_TX_JSON.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    rows = payload.get("rows") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in rows:
+        if isinstance(item, dict):
+            out.append(dict(item))
+    return out
+
+
+def _write_manual_transaction_rows(rows: list[dict[str, Any]]) -> None:
+    MANUAL_TX_JSON.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "rows": rows,
+    }
+    MANUAL_TX_JSON.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    with MANUAL_TX_CSV.open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=MANUAL_TRANSACTION_FIELDS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: row.get(field, "") for field in MANUAL_TRANSACTION_FIELDS})
+
+
+def _manual_tx_cost_basis(row: dict[str, Any]) -> float | None:
+    entered_amount = _to_float_or_none(row.get("entered_amount"))
+    if entered_amount is not None and entered_amount > 0:
+        return entered_amount
+    limit_price = _to_float_or_none(row.get("limit_price"))
+    filled_qty = _to_float_or_none(row.get("filled_quantity"))
+    if limit_price is not None and filled_qty is not None and limit_price > 0 and filled_qty > 0:
+        return limit_price * filled_qty
+    return None
+
+
+def _manual_tx_payout_value(row: dict[str, Any]) -> float | None:
+    payout_amount = _to_float_or_none(row.get("payout_amount"))
+    if payout_amount is not None:
+        return payout_amount
+    status = _clean_text(row.get("status")).upper()
+    result = _clean_text(row.get("result")).upper()
+    if status == "SETTLED" and result == "LOSS":
+        return 0.0
+    if status == "SETTLED" and result == "VOID":
+        return _manual_tx_cost_basis(row)
+    return None
+
+
+def _compute_manual_transaction(row: dict[str, Any]) -> dict[str, Any]:
+    item = {field: row.get(field, "") for field in MANUAL_TRANSACTION_FIELDS}
+    cost_basis = _manual_tx_cost_basis(item)
+    payout_value = _manual_tx_payout_value(item)
+    fees = _to_float_or_none(item.get("fees")) or 0.0
+    filled_qty = _to_float_or_none(item.get("filled_quantity"))
+    avg_fill_price = None
+    if cost_basis is not None and filled_qty is not None and filled_qty > 0:
+        avg_fill_price = cost_basis / filled_qty
+    realized_pnl = None
+    status = _clean_text(item.get("status")).upper()
+    if status == "SETTLED" and payout_value is not None and cost_basis is not None:
+        realized_pnl = payout_value - cost_basis - fees
+    roi = realized_pnl / cost_basis if realized_pnl is not None and cost_basis and cost_basis > 0 else None
+
+    item["cost_basis"] = "" if cost_basis is None else f"{cost_basis:.4f}"
+    item["avg_fill_price"] = "" if avg_fill_price is None else f"{avg_fill_price:.4f}"
+    item["realized_pnl"] = "" if realized_pnl is None else f"{realized_pnl:.4f}"
+    item["roi"] = "" if roi is None else f"{roi:.6f}"
+    return item
+
+
+def _transaction_sort_key(row: dict[str, Any]) -> tuple[str, str]:
+    return (
+        _clean_text(row.get("filled_at"))
+        or _clean_text(row.get("submitted_at"))
+        or _clean_text(row.get("event_date"))
+        or _clean_text(row.get("created_at")),
+        _clean_text(row.get("id")),
+    )
+
+
+def read_manual_transactions(limit: int = 200) -> dict[str, Any]:
+    rows = [_compute_manual_transaction(item) for item in _load_manual_transaction_rows()]
+    rows.sort(key=_transaction_sort_key)
+    recent_rows = rows[-limit:] if limit > 0 else rows[:]
+    recent_rows.reverse()
+
+    settled = 0
+    open_rows = 0
+    wins = 0
+    losses = 0
+    voids = 0
+    total_cost = 0.0
+    total_payout = 0.0
+    net_pnl = 0.0
+
+    for row in rows:
+        cost_basis = _to_float_or_none(row.get("cost_basis")) or 0.0
+        payout_value = _manual_tx_payout_value(row)
+        total_cost += cost_basis
+        if payout_value is not None:
+            total_payout += payout_value
+        status = _clean_text(row.get("status")).upper()
+        result = _clean_text(row.get("result")).upper()
+        realized_pnl = _to_float_or_none(row.get("realized_pnl"))
+        if status == "SETTLED":
+            settled += 1
+            if realized_pnl is not None:
+                net_pnl += realized_pnl
+            if result == "WIN":
+                wins += 1
+            elif result == "LOSS":
+                losses += 1
+            elif result == "VOID":
+                voids += 1
+        elif status in {"OPEN", "FILLED"}:
+            open_rows += 1
+
+    decided = wins + losses
+    win_rate = wins / decided if decided > 0 else None
+
+    return {
+        "rows": recent_rows,
+        "summary": {
+            "total_records": len(rows),
+            "settled_records": settled,
+            "open_records": open_rows,
+            "wins": wins,
+            "losses": losses,
+            "voids": voids,
+            "win_rate": win_rate,
+            "total_cost": total_cost,
+            "total_payout": total_payout,
+            "net_pnl": net_pnl,
+        },
+        "files": {
+            "csv": "/logs/manual_transactions.csv",
+        },
+        "meta": {
+            "csv_exists": MANUAL_TX_CSV.exists(),
+            "csv_mtime": MANUAL_TX_CSV.stat().st_mtime if MANUAL_TX_CSV.exists() else None,
+            "csv_size": MANUAL_TX_CSV.stat().st_size if MANUAL_TX_CSV.exists() else 0,
+            "json_exists": MANUAL_TX_JSON.exists(),
+        },
+    }
+
+
+def save_manual_transaction(payload: dict[str, Any]) -> dict[str, Any]:
+    existing_rows = _load_manual_transaction_rows()
+    existing_index = {
+        _clean_text(row.get("id")): idx for idx, row in enumerate(existing_rows) if _clean_text(row.get("id"))
+    }
+    now_ts = datetime.now().isoformat(timespec="seconds")
+    tx_id = _clean_text(payload.get("id"))
+    if not tx_id:
+        tx_id = "tx_" + hashlib.sha1(f"{time.time_ns()}".encode("utf-8")).hexdigest()[:12]
+
+    previous = existing_rows[existing_index[tx_id]] if tx_id in existing_index else {}
+    row = {
+        "id": tx_id,
+        "created_at": _clean_text(previous.get("created_at")) or now_ts,
+        "updated_at": now_ts,
+        "source": _clean_text(payload.get("source")) or "manual",
+        "event_date": _clean_text(payload.get("event_date")),
+        "rivalry": _clean_text(payload.get("rivalry")),
+        "market_question": _clean_text(payload.get("market_question")),
+        "side": _clean_text(payload.get("side")).upper(),
+        "team": _clean_text(payload.get("team")).upper(),
+        "order_type": _clean_text(payload.get("order_type")).upper(),
+        "status": _clean_text(payload.get("status")).upper(),
+        "result": _clean_text(payload.get("result")).upper(),
+        "submitted_at": _clean_text(payload.get("submitted_at")),
+        "filled_at": _clean_text(payload.get("filled_at")),
+        "settled_at": _clean_text(payload.get("settled_at")),
+        "entered_amount": _clean_text(payload.get("entered_amount")),
+        "limit_price": _clean_text(payload.get("limit_price")),
+        "filled_quantity": _clean_text(payload.get("filled_quantity")),
+        "fees": _clean_text(payload.get("fees")),
+        "payout_amount": _clean_text(payload.get("payout_amount")),
+        "cost_basis": "",
+        "avg_fill_price": "",
+        "realized_pnl": "",
+        "roi": "",
+        "notes": _clean_text(payload.get("notes")),
+    }
+    if not row["event_date"] and row["submitted_at"]:
+        row["event_date"] = row["submitted_at"][:10]
+    if row["status"] == "SETTLED" and not row["result"]:
+        row["result"] = "PENDING"
+    if not row["status"]:
+        row["status"] = "FILLED"
+    if not row["side"]:
+        row["side"] = "YES"
+
+    computed = _compute_manual_transaction(row)
+
+    if tx_id in existing_index:
+        existing_rows[existing_index[tx_id]] = computed
+    else:
+        existing_rows.append(computed)
+    existing_rows.sort(key=_transaction_sort_key)
+    _write_manual_transaction_rows(existing_rows)
+    return {
+        "saved": computed,
+        "journal": read_manual_transactions(limit=200),
+    }
+
+
 def read_dryrun_trades(limit: int = 20) -> dict[str, Any]:
     rows: list[dict[str, str]] = []
     if DRYRUN_TRADE_CSV.exists():
@@ -2121,6 +2368,13 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 return
 
+            if path == "/api/manual-transactions":
+                payload = read_manual_transactions(
+                    limit=max(1, min(parse_int(query_first(query, "limit", "200"), 200), 1000))
+                )
+                self._send_json(HTTPStatus.OK, payload)
+                return
+
             if path == "/logs/dryrun_signals.csv":
                 if not DRYRUN_CSV.exists():
                     self._send_json(HTTPStatus.NOT_FOUND, {"error": "dryrun_signals.csv not found"})
@@ -2147,6 +2401,13 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_json(HTTPStatus.NOT_FOUND, {"error": "dryrun_trades.csv not found"})
                     return
                 self._send_bytes(HTTPStatus.OK, DRYRUN_TRADE_CSV.read_bytes(), "text/csv; charset=utf-8")
+                return
+
+            if path == "/logs/manual_transactions.csv":
+                if not MANUAL_TX_CSV.exists():
+                    self._send_json(HTTPStatus.NOT_FOUND, {"error": "manual_transactions.csv not found"})
+                    return
+                self._send_bytes(HTTPStatus.OK, MANUAL_TX_CSV.read_bytes(), "text/csv; charset=utf-8")
                 return
 
             if path == "/api/dev/reload-token":
@@ -2281,7 +2542,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
-        if parsed.path not in {"/api/signal", "/api/winner", "/api/telegram/notify-signal"}:
+        if parsed.path not in {"/api/signal", "/api/winner", "/api/telegram/notify-signal", "/api/manual-transactions"}:
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "Not found"})
             return
 
@@ -2292,7 +2553,9 @@ class Handler(BaseHTTPRequestHandler):
             payload = json.loads(data.decode("utf-8"))
             if not isinstance(payload, dict):
                 raise ValueError("Request body must be a JSON object.")
-            if parsed.path == "/api/telegram/notify-signal":
+            if parsed.path == "/api/manual-transactions":
+                result = save_manual_transaction(payload)
+            elif parsed.path == "/api/telegram/notify-signal":
                 result = build_dashboard_telegram_alert(payload)
             elif parsed.path == "/api/winner":
                 result = build_winner_once(payload)
