@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-ROOT="/Users/haihan/Documents/New project"
+ROOT="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 RUNTIME_ROOT="$HOME/.signal-deck/runtime"
 SHARED_LOG_DIR="$HOME/.signal-deck/logs"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
@@ -14,7 +14,7 @@ LOOP_INTERVAL="${SIGNAL_DECK_LOOP_INTERVAL:-5}"
 
 mkdir -p "$RUNTIME_ROOT" "$SHARED_LOG_DIR" "$LAUNCH_AGENTS_DIR"
 
-for file in dashboard_server.py dryrun_recorder.py live_experiment_signal.py signal_engine.py run_dryrun_job.sh run_dryrun_daemon.sh; do
+for file in dashboard_server.py dryrun_recorder.py live_experiment_signal.py signal_engine.py polymarket_executor.py run_dryrun_job.sh run_dryrun_daemon.sh; do
   cp "$ROOT/$file" "$RUNTIME_ROOT/$file"
 done
 

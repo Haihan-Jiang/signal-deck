@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Signal Deck</title>
+  <title>Polymarket Auto Trader</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet" />
@@ -50,6 +50,16 @@
       display: grid;
       gap: 14px;
       grid-template-columns: 380px 1fr;
+    }
+
+    .page.compact-page {
+      max-width: 1480px;
+      grid-template-columns: 1fr;
+    }
+
+    .page.compact-page .left,
+    .page.compact-page .status-card {
+      display: none;
     }
 
     .panel {
@@ -573,288 +583,18 @@
   </style>
 </head>
 <body>
-  <main class="page">
-    <section class="panel left">
-      <div>
-        <h1 class="title">Signal Deck</h1>
-        <p class="sub">本地实验面板。仅用于信号分析，不会自动下单。</p>
-      </div>
-
-      <section class="box">
-        <h3>信号设置</h3>
-        <div class="grid-2" id="tradeProviderRow">
-          <label>Provider
-            <select id="provider">
-              <option value="kalshi_espn">kalshi_espn</option>
-              <option value="polymarket_espn">polymarket_espn</option>
-            </select>
-          </label>
-          <label>Yes Team
-            <select id="yesTeam">
-              <option value="home">home</option>
-              <option value="away">away</option>
-            </select>
-          </label>
-        </div>
-        <label id="tradeMarketLabel">Market (Kalshi ticker 或 Polymarket id)
-          <input id="market" placeholder="KXNBAGAME-... 或 553824" />
-        </label>
-        <div class="btn-row" id="tradeAutofillRow">
-          <button class="btn-aux" id="btnAutofill">自动填充 Market</button>
-          <span class="hint" id="autofillHint">先选 ESPN Event，再点自动填充。</span>
-        </div>
-        <div class="btn-row" id="tradeQuickSetupRow">
-          <button class="btn-main" id="btnQuickSetup">一键就绪（自动选赛+配市场）</button>
-          <span class="hint" id="quickSetupHint">优先进行中比赛，自动完成 Event + Market。</span>
-        </div>
-        <div class="grid-3">
-          <label>ESPN Sport
-            <input id="espnSport" value="basketball" />
-          </label>
-          <label>ESPN League
-            <input id="espnLeague" value="nba" />
-          </label>
-          <label>ESPN Event ID
-            <input id="espnEventId" placeholder="401810741" />
-          </label>
-        </div>
-        <div class="check" id="simpleModeWrap">
-          <input id="simpleMode" type="checkbox" checked />
-          <span>Robinhood 极简模式（只保留必要操作）</span>
-        </div>
-        <div class="grid-2">
-          <label>快速选择比赛
-            <select id="gamePicker">
-              <option value="">先点“加载比赛”</option>
-            </select>
-          </label>
-          <label>比赛范围
-            <select id="gamePickerState">
-              <option value="in">in（进行中）</option>
-              <option value="pre">pre（未开始）</option>
-              <option value="all">all（全部）</option>
-              <option value="post">post（已结束）</option>
-            </select>
-          </label>
-        </div>
-        <div class="btn-row" id="simpleFlowRow">
-          <button class="btn-main" id="btnSimpleReady">一键选中比赛</button>
-          <button class="btn-aux" id="btnSimpleStrategy">平衡型策略</button>
-          <button class="btn-aux" id="btnMaxProfitStrategy">最大利润版</button>
-          <button class="btn-aux" id="btnSteadyProfitStrategy">更稳版</button>
-          <button class="btn-aux" id="btnRobustModeGateQuick">历史稳健门控</button>
-          <span class="hint" id="simpleFlowHint">极简：先选策略，再点“一键选中比赛”。</span>
-        </div>
-        <div class="btn-row">
-          <button class="btn-aux" id="btnLoadGames">加载比赛</button>
-          <label class="check" id="gameAutoFillWrap">
-            <input id="gameAutoFill" type="checkbox" checked />
-            <span>选中后自动配 Market</span>
-          </label>
-          <label class="check" id="autoSyncMarketWrap">
-            <input id="autoSyncMarket" type="checkbox" checked />
-            <span>切换 Event 自动重配 Market</span>
-          </label>
-          <span class="hint" id="gamePickerHint">支持多场同时进行时快速切换。</span>
-        </div>
-        <div class="grid-3">
-          <label>Interval(s)
-            <input id="interval" type="number" step="0.1" value="2" />
-          </label>
-          <label>Timeout(s)
-            <input id="timeout" type="number" step="0.1" value="6" />
-          </label>
-          <label id="minEvWrap">Min EV
-            <input id="minEv" type="number" step="0.001" value="0.03" />
-          </label>
-        </div>
-        <div class="check">
-          <input id="requireLive" type="checkbox" checked />
-          <span>Require Live (开赛前输出 WAITING)</span>
-        </div>
-        <div class="check" id="winnerOnlyWrap">
-          <input id="winnerOnly" type="checkbox" checked />
-          <span>仅看输赢（只用实时胜率）</span>
-        </div>
-      </section>
-
-      <section class="box" id="winnerRulesBox">
-        <h3>末段过滤（输赢）</h3>
-        <div class="grid-2">
-          <label>剩余时间上限(s)
-            <input id="winnerMaxTimeLeft" type="number" step="1" value="360" />
-          </label>
-          <label>最小分差
-            <input id="winnerMinLead" type="number" step="1" value="10" />
-          </label>
-        </div>
-        <div class="grid-3">
-          <label>胜率下限
-            <input id="winnerPMin" type="number" step="0.001" value="0.80" />
-          </label>
-          <label>胜率上限
-            <input id="winnerPMax" type="number" step="0.001" value="0.97" />
-          </label>
-          <label>最小边际(可选)
-            <input id="winnerMinEdge" type="number" step="0.001" value="0.025" />
-          </label>
-          <label>买价上限(可选)
-            <input id="winnerMaxBuyPrice" type="number" step="0.001" value="0.91" />
-          </label>
-        </div>
-        <div class="tiny">边际 = 领先方胜率 - 对应买入价。默认平衡型：360s / 10分 / [0.80, 0.97] / min_edge 0.025 / 买价<=0.91。</div>
-        <div class="grid-3">
-          <label>门控回看天数
-            <input id="robustLookbackDays" type="number" step="1" value="30" />
-          </label>
-          <label>最小样本场次
-            <input id="robustMinGames" type="number" step="1" value="80" />
-          </label>
-          <label>最小触发场次
-            <input id="robustMinTriggerGames" type="number" step="1" value="20" />
-          </label>
-          <label>最小首信号命中率
-            <input id="robustMinHitRate" type="number" step="0.001" value="0.93" />
-          </label>
-        </div>
-        <div class="btn-row">
-          <button class="btn-main" id="btnRobustModeGate">历史稳健模式（自动门控）</button>
-          <span class="hint" id="robustGateHint">点击后自动检查近30天历史；不通过将阻止开始轮询。</span>
-        </div>
-        <div class="btn-row">
-          <button class="btn-aux" id="btnFillWinnerTest">填充测试参数</button>
-          <button class="btn-aux" id="btnRunWinnerSelfTest">规则自测(离线)</button>
-          <span class="hint" id="winnerTestHint">不依赖实时比赛，直接验证规则拦截是否生效。</span>
-        </div>
-      </section>
-
-      <section class="box" id="bankrollBox">
-        <h3>资金建议</h3>
-        <div class="grid-3">
-          <label>本金($)
-            <input id="capBankroll" type="number" step="1" value="1000" />
-          </label>
-          <label>胜率估计
-            <input id="capWinRate" type="number" step="0.0001" value="0.9442" />
-          </label>
-          <label>费用估计
-            <input id="capFee" type="number" step="0.0001" value="0.02" />
-          </label>
-        </div>
-        <div class="grid-3">
-          <label>买入价估计
-            <input id="capBuyPrice" type="number" step="0.0001" value="0.90" />
-          </label>
-          <label>单笔风险%
-            <input id="capRiskPct" type="number" step="0.0001" value="0.008" />
-          </label>
-          <label>日止损%
-            <input id="capDailyStopPct" type="number" step="0.0001" value="0.02" />
-          </label>
-        </div>
-        <div class="btn-row">
-          <button class="btn-main" id="btnQuickSetupSimple">一键实验配置</button>
-          <button class="btn-aux" id="btnUseSignalPrice">用当前信号价</button>
-          <button class="btn-aux" id="btnCalcBudget">更新建议</button>
-          <span class="hint" id="budgetHint">默认基于平衡型回测胜率 0.9442，仅作实验估算。</span>
-        </div>
-        <div class="metrics calc-metrics">
-          <div class="metric"><p class="k">Edge</p><p class="v" id="capEdge">-</p></div>
-          <div class="metric"><p class="k">Break-even Price</p><p class="v" id="capBreakeven">-</p></div>
-          <div class="metric"><p class="k">单笔建议投入($)</p><p class="v" id="capStake">-</p></div>
-          <div class="metric"><p class="k">建议张数</p><p class="v" id="capContracts">-</p></div>
-          <div class="metric"><p class="k">单笔期望盈亏($)</p><p class="v" id="capExpectedPnl">-</p></div>
-          <div class="metric"><p class="k">日止损($) / 连亏笔数</p><p class="v" id="capDailyStop">-</p></div>
-        </div>
-      </section>
-
-      <section class="box" id="costBox">
-        <h3>成本与风控</h3>
-        <div class="grid-3">
-          <label>Fee Open
-            <input id="feeOpen" type="number" step="0.001" value="0.01" />
-          </label>
-          <label>Alpha
-            <input id="alpha" type="number" step="0.01" value="0.7" />
-          </label>
-          <label>Roundtrip
-            <input id="roundtripCost" type="number" step="0.001" value="0.04" />
-          </label>
-        </div>
-        <div class="grid-3">
-          <label>Spread Buffer
-            <input id="spreadBuffer" type="number" step="0.001" value="0.02" />
-          </label>
-          <label>Account (opt)
-            <input id="accountEquity" type="number" step="1" placeholder="1000" />
-          </label>
-          <label>Risk %
-            <input id="riskPct" type="number" step="0.0001" value="0.0025" />
-          </label>
-        </div>
-      </section>
-
-      <section class="box">
-        <h3>运行</h3>
-        <div class="btn-row">
-          <button class="btn-main" id="btnStart">开始轮询</button>
-          <button class="btn-stop" id="btnStop">停止</button>
-          <button class="btn-aux" id="btnOnce">单次</button>
-          <button class="btn-aux" id="btnClear">清空日志</button>
-        </div>
-        <div class="tiny mono" id="runState">IDLE</div>
-      </section>
-    </section>
-
+  <main class="page compact-page">
     <section class="panel right">
-      <section class="status-card">
-        <div class="status-head">
-          <p class="action" id="actionText">-</p>
-          <span class="badge wait" id="stateBadge">WAITING</span>
-        </div>
-        <div class="tiny" id="reasonText">等待数据...</div>
-        <div class="metrics">
-          <div class="metric"><p class="k">P Live Yes</p><p class="v" id="mPLive">-</p></div>
-          <div class="metric"><p class="k">P Eff</p><p class="v" id="mPEff">-</p></div>
-          <div class="metric"><p class="k">Best EV</p><p class="v" id="mBestEv">-</p></div>
-          <div class="metric"><p class="k">A Yes / A No</p><p class="v" id="mPrices">-</p></div>
-          <div class="metric"><p class="k">Time Left</p><p class="v" id="mTime">-</p></div>
-          <div class="metric"><p class="k">ESPN Status</p><p class="v" id="mStatus">-</p></div>
-          <div class="metric"><p class="k">Provider</p><p class="v" id="mProvider">-</p></div>
-          <div class="metric"><p class="k">Mode</p><p class="v" id="mMode">-</p></div>
-        </div>
-      </section>
-
-      <section class="box">
-        <h3>比赛列表</h3>
-        <div class="grid-2">
-          <label>Date (YYYYMMDD)
-            <input id="discoverDate" placeholder="20260303" />
-          </label>
-          <div class="hint">默认展示当天全部比赛；不再需要 State / Query。</div>
-        </div>
-        <div class="btn-row">
-          <button class="btn-aux" id="btnEspn">加载比赛列表</button>
-        </div>
-        <div id="discoverWrap" class="empty">点击“加载比赛列表”。</div>
-      </section>
-
       <section class="box" id="historyBox">
         <h3>历史回测（点比赛看建议）</h3>
-        <div class="grid-3">
+        <div class="grid-2">
           <label>日期 (YYYYMMDD)
             <input id="historyDate" placeholder="20260303" />
-          </label>
-          <label>图表采样点
-            <input id="historyMaxPoints" type="number" step="1" value="220" />
-          </label>
-          <label>费率(总)
-            <input id="historyFeeTotal" type="number" step="0.001" value="0.02" />
           </label>
         </div>
         <div class="btn-row">
           <button class="btn-aux" id="btnLoadHistoryGames">加载历史比赛</button>
-          <span class="hint" id="historyHint">点击任意比赛会自动显示胜负、买入建议和图表。</span>
+          <span class="hint" id="historyHint">点击任意比赛会按后台默认最大利润策略（180/6/[0.80,0.95]）显示胜负、买入建议和图表。</span>
         </div>
         <div id="historyGamesWrap" class="empty">先点“加载历史比赛”。</div>
 
@@ -865,15 +605,10 @@
           </div>
           <div class="history-reco" id="historyRecommendation">-</div>
           <div class="history-sub mono" id="historyRuleSummary">-</div>
-          <div class="history-metrics" id="historyMetrics"></div>
           <div class="history-charts">
             <div class="chart-card">
-              <div class="chart-title">Home Win Probability</div>
+              <div class="chart-title">两队赔率对比变化图</div>
               <svg id="historyProbChart" class="chart-svg" viewBox="0 0 760 220" preserveAspectRatio="none"></svg>
-            </div>
-            <div class="chart-card">
-              <div class="chart-title">Lead (Home - Away)</div>
-              <svg id="historyLeadChart" class="chart-svg" viewBox="0 0 760 220" preserveAspectRatio="none"></svg>
             </div>
           </div>
           <div id="historySignalsWrap" class="empty">选择比赛后显示触发明细。</div>
@@ -884,6 +619,10 @@
         <h3>Dry Run 记录</h3>
         <div class="btn-row">
           <button class="btn-aux" id="btnLoadDryrun">刷新记录</button>
+          <label>日期
+            <input id="dryrunDate" type="date" />
+          </label>
+          <button class="btn-aux" id="btnDryrunClearDate">清空日期</button>
           <label class="check">
             <input id="dryrunAutoRefresh" type="checkbox" checked />
             <span>AJAX 自动刷新（10s）</span>
@@ -908,127 +647,202 @@
       </section>
 
       <section class="box" id="journalBox">
-        <h3>真实交易记录</h3>
+        <h3>交易记录（API）</h3>
         <div class="btn-row">
           <button class="btn-aux" id="btnJournalRefresh">刷新记录</button>
-          <button class="btn-aux" id="btnJournalReset">清空表单</button>
-          <button class="btn-aux" id="btnJournalFillExample">填入 GSW 截图示例</button>
-          <span class="hint" id="journalHint">记录 Robinhood 实际成交和结算，方便回看比赛、价格和盈亏。</span>
+          <span class="hint" id="journalHint">只展示后端 API 同步过来的真实成交与结算记录。</span>
         </div>
         <div class="dryrun-links">
-          <a class="link-chip" id="linkJournalCsv" href="/logs/manual_transactions.csv" target="_blank" rel="noreferrer">打开 Journal CSV</a>
+          <a class="link-chip" id="linkJournalCsv" href="/logs/manual_transactions.csv" target="_blank" rel="noreferrer">打开 Transactions CSV</a>
         </div>
         <div class="metrics journal-summary" id="journalSummary"></div>
-        <div class="journal-form">
-          <div class="journal-editing" id="journalEditingState">新建记录</div>
-          <div class="grid-3">
-            <label>比赛日期
-              <input id="journalEventDate" type="date" />
-            </label>
-            <label>对阵
-              <input id="journalRivalry" placeholder="CHI @ GS" />
-            </label>
-            <label>队伍
-              <input id="journalTeam" placeholder="GSW" />
-            </label>
-          </div>
-          <div class="grid-3">
-            <label>方向
-              <select id="journalSide">
-                <option value="YES">YES</option>
-                <option value="NO">NO</option>
-              </select>
-            </label>
-            <label>订单类型
-              <select id="journalOrderType">
-                <option value="LIMIT_BUY">LIMIT_BUY</option>
-                <option value="MARKET_BUY">MARKET_BUY</option>
-                <option value="SELL">SELL</option>
-                <option value="PAYOUT">PAYOUT</option>
-              </select>
-            </label>
-            <label>状态
-              <select id="journalStatus">
-                <option value="FILLED">FILLED</option>
-                <option value="OPEN">OPEN</option>
-                <option value="SETTLED">SETTLED</option>
-                <option value="CANCELED">CANCELED</option>
-              </select>
-            </label>
-          </div>
-          <div class="grid-3">
-            <label>结果
-              <select id="journalResult">
-                <option value="PENDING">PENDING</option>
-                <option value="WIN">WIN</option>
-                <option value="LOSS">LOSS</option>
-                <option value="VOID">VOID</option>
-              </select>
-            </label>
-            <label>投入金额($)
-              <input id="journalEnteredAmount" type="number" step="0.01" placeholder="100.00" />
-            </label>
-            <label>限价($)
-              <input id="journalLimitPrice" type="number" step="0.0001" placeholder="0.9600" />
-            </label>
-          </div>
-          <div class="grid-3">
-            <label>成交数量
-              <input id="journalFilledQuantity" type="number" step="0.01" placeholder="102" />
-            </label>
-            <label>手续费($)
-              <input id="journalFees" type="number" step="0.01" placeholder="0.00" />
-            </label>
-            <label>结算 / Payout($)
-              <input id="journalPayoutAmount" type="number" step="0.01" placeholder="102.00" />
-            </label>
-          </div>
-          <div class="grid-3">
-            <label>提交时间
-              <input id="journalSubmittedAt" placeholder="2026-03-10 21:16" />
-            </label>
-            <label>成交时间
-              <input id="journalFilledAt" placeholder="2026-03-10 21:16" />
-            </label>
-            <label>结算时间
-              <input id="journalSettledAt" placeholder="2026-03-10 23:40" />
-            </label>
-          </div>
-          <label>问题描述
-            <textarea id="journalQuestion" placeholder="Will Golden State win the Chicago at Golden State?"></textarea>
-          </label>
-          <label>备注
-            <textarea id="journalNotes" placeholder="截图导入 / 账户备注 / 赛后复盘"></textarea>
-          </label>
-          <div class="btn-row">
-            <button class="btn-main" id="btnJournalSave">保存记录</button>
-            <span class="hint" id="journalFormHint">保存后会自动计算成本、净盈亏和 ROI，并导出 CSV。</span>
-          </div>
-        </div>
         <div class="table-wrap" id="journalTableWrap"></div>
       </section>
 
-      <section class="box">
-        <h3>信号日志</h3>
-        <table class="log-table" id="logTable">
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>State</th>
-              <th id="thAction">Action</th>
-              <th id="thBestEv">Best EV</th>
-              <th id="thPLive">P Live</th>
-              <th id="thPrices">A Yes/No</th>
-              <th>Rivalry</th>
-            </tr>
-          </thead>
-          <tbody id="logBody"></tbody>
-        </table>
-      </section>
     </section>
   </main>
 
   <script>
+    const DEFAULT_WINNER_STRATEGY = Object.freeze({
+      maxTimeLeft: 180,
+      minLead: 6,
+      pMin: 0.80,
+      pMax: 0.95,
+      minEdge: 0.025,
+      maxBuyPrice: 0.91,
+      feeTotal: 0.02,
+      capWinRate: 0.9787,
+    });
+
+    function installLegacyGhostUi() {
+      if (document.getElementById("legacyGhostUi")) return;
+
+      const root = document.createElement("div");
+      root.id = "legacyGhostUi";
+      root.className = "hidden";
+      root.setAttribute("aria-hidden", "true");
+      document.body.appendChild(root);
+
+      function add(node) {
+        root.appendChild(node);
+        return node;
+      }
+
+      function addBox(id, tag = "div", text = "") {
+        const node = document.createElement(tag);
+        node.id = id;
+        if (text) node.textContent = text;
+        return add(node);
+      }
+
+      function addInput(id, value = "", type = "text") {
+        const node = document.createElement("input");
+        node.id = id;
+        node.type = type;
+        if (type === "checkbox") {
+          node.checked = Boolean(value);
+        } else {
+          node.value = String(value);
+        }
+        return add(node);
+      }
+
+      function addButton(id) {
+        const node = document.createElement("button");
+        node.id = id;
+        node.type = "button";
+        return add(node);
+      }
+
+      function addSelect(id, options, value) {
+        const node = document.createElement("select");
+        node.id = id;
+        options.forEach(({ value: optionValue, label }) => {
+          const option = document.createElement("option");
+          option.value = optionValue;
+          option.textContent = label;
+          node.appendChild(option);
+        });
+        node.value = value;
+        return add(node);
+      }
+
+      [
+        "tradeProviderRow",
+        "tradeMarketLabel",
+        "tradeAutofillRow",
+        "tradeQuickSetupRow",
+        "simpleModeWrap",
+        "simpleFlowRow",
+        "gameAutoFillWrap",
+        "autoSyncMarketWrap",
+        "minEvWrap",
+        "winnerOnlyWrap",
+        "winnerRulesBox",
+        "bankrollBox",
+        "costBox",
+      ].forEach((id) => addBox(id));
+
+      addSelect("provider", [
+        { value: "kalshi_espn", label: "kalshi_espn" },
+        { value: "polymarket_espn", label: "polymarket_espn" },
+      ], "kalshi_espn");
+      addSelect("yesTeam", [
+        { value: "home", label: "home" },
+        { value: "away", label: "away" },
+      ], "home");
+      addInput("market", "");
+      addInput("espnSport", "basketball");
+      addInput("espnLeague", "nba");
+      addInput("espnEventId", "");
+      addInput("discoverDate", "");
+      addInput("historyMaxPoints", "220", "number");
+      addInput("historyFeeTotal", "0.02", "number");
+      addBox("discoverWrap");
+      addInput("simpleMode", true, "checkbox");
+      addBox("simpleFlowHint", "span", "");
+      addSelect("gamePicker", [{ value: "", label: "" }], "");
+      addSelect("gamePickerState", [
+        { value: "in", label: "in" },
+        { value: "pre", label: "pre" },
+        { value: "all", label: "all" },
+        { value: "post", label: "post" },
+      ], "in");
+      addInput("gameAutoFill", true, "checkbox");
+      addInput("autoSyncMarket", true, "checkbox");
+      addBox("gamePickerHint", "span", "");
+      addInput("interval", "2", "number");
+      addInput("timeout", "6", "number");
+      addInput("minEv", "0.03", "number");
+      addInput("requireLive", true, "checkbox");
+      addInput("winnerOnly", true, "checkbox");
+      addInput("winnerMaxTimeLeft", String(DEFAULT_WINNER_STRATEGY.maxTimeLeft), "number");
+      addInput("winnerMinLead", String(DEFAULT_WINNER_STRATEGY.minLead), "number");
+      addInput("winnerPMin", DEFAULT_WINNER_STRATEGY.pMin.toFixed(2), "number");
+      addInput("winnerPMax", DEFAULT_WINNER_STRATEGY.pMax.toFixed(2), "number");
+      addInput("winnerMinEdge", DEFAULT_WINNER_STRATEGY.minEdge.toFixed(3), "number");
+      addInput("winnerMaxBuyPrice", DEFAULT_WINNER_STRATEGY.maxBuyPrice.toFixed(2), "number");
+      addInput("robustLookbackDays", "30", "number");
+      addInput("robustMinGames", "80", "number");
+      addInput("robustMinTriggerGames", "20", "number");
+      addInput("robustMinHitRate", "0.93", "number");
+      addBox("robustGateHint", "span", "");
+      addBox("winnerTestHint", "span", "");
+      addInput("capBankroll", "1000", "number");
+      addInput("capWinRate", DEFAULT_WINNER_STRATEGY.capWinRate.toFixed(4), "number");
+      addInput("capFee", DEFAULT_WINNER_STRATEGY.feeTotal.toFixed(2), "number");
+      addInput("capBuyPrice", "0.90", "number");
+      addInput("capRiskPct", "0.008", "number");
+      addInput("capDailyStopPct", "0.02", "number");
+      addBox("budgetHint", "span", "");
+      ["capEdge", "capBreakeven", "capStake", "capContracts", "capExpectedPnl", "capDailyStop"].forEach((id) => addBox(id, "span", "-"));
+      addInput("feeOpen", "0.01", "number");
+      addInput("alpha", "0.7", "number");
+      addInput("roundtripCost", "0.04", "number");
+      addInput("spreadBuffer", "0.02", "number");
+      addInput("accountEquity", "", "number");
+      addInput("riskPct", "0.0025", "number");
+      addBox("runState", "div", "IDLE");
+
+      [
+        "btnAutofill",
+        "btnQuickSetup",
+        "btnSimpleReady",
+        "btnSimpleStrategy",
+        "btnMaxProfitStrategy",
+        "btnSteadyProfitStrategy",
+        "btnRobustModeGateQuick",
+        "btnRobustModeGate",
+        "btnFillWinnerTest",
+        "btnRunWinnerSelfTest",
+        "btnQuickSetupSimple",
+        "btnUseSignalPrice",
+        "btnCalcBudget",
+        "btnStart",
+        "btnStop",
+        "btnOnce",
+        "btnClear",
+        "btnLoadGames",
+        "btnEspn",
+      ].forEach((id) => addButton(id));
+
+      addBox("autofillHint", "span", "");
+      addBox("quickSetupHint", "span", "");
+      addBox("thAction", "span", "Action");
+      addBox("thBestEv", "span", "Best EV");
+      addBox("thPLive", "span", "P Live");
+      addBox("thPrices", "span", "A Yes/No");
+      addBox("logBody");
+
+      addBox("actionText", "p", "-");
+      const stateBadge = addBox("stateBadge", "span", "WAITING");
+      stateBadge.className = "badge wait";
+      addBox("reasonText", "div", "");
+      ["mPLive", "mPEff", "mBestEv", "mPrices", "mTime", "mStatus", "mProvider", "mMode"].forEach((id) => addBox(id, "span", "-"));
+    }
+
+    installLegacyGhostUi();
+
     const state = {
       timer: null,
       historyLimit: 180,
@@ -1152,11 +966,11 @@
       historyFinalResult: document.getElementById("historyFinalResult"),
       historyRecommendation: document.getElementById("historyRecommendation"),
       historyRuleSummary: document.getElementById("historyRuleSummary"),
-      historyMetrics: document.getElementById("historyMetrics"),
       historyProbChart: document.getElementById("historyProbChart"),
-      historyLeadChart: document.getElementById("historyLeadChart"),
       historySignalsWrap: document.getElementById("historySignalsWrap"),
       btnLoadDryrun: document.getElementById("btnLoadDryrun"),
+      dryrunDate: document.getElementById("dryrunDate"),
+      btnDryrunClearDate: document.getElementById("btnDryrunClearDate"),
       dryrunAutoRefresh: document.getElementById("dryrunAutoRefresh"),
       dryrunTriggeredOnly: document.getElementById("dryrunTriggeredOnly"),
       dryrunHint: document.getElementById("dryrunHint"),
@@ -1170,30 +984,8 @@
       linkDryrunTxt: document.getElementById("linkDryrunTxt"),
       linkDryrunCron: document.getElementById("linkDryrunCron"),
       btnJournalRefresh: document.getElementById("btnJournalRefresh"),
-      btnJournalReset: document.getElementById("btnJournalReset"),
-      btnJournalFillExample: document.getElementById("btnJournalFillExample"),
-      btnJournalSave: document.getElementById("btnJournalSave"),
       journalHint: document.getElementById("journalHint"),
       journalSummary: document.getElementById("journalSummary"),
-      journalEditingState: document.getElementById("journalEditingState"),
-      journalEventDate: document.getElementById("journalEventDate"),
-      journalRivalry: document.getElementById("journalRivalry"),
-      journalTeam: document.getElementById("journalTeam"),
-      journalSide: document.getElementById("journalSide"),
-      journalOrderType: document.getElementById("journalOrderType"),
-      journalStatus: document.getElementById("journalStatus"),
-      journalResult: document.getElementById("journalResult"),
-      journalEnteredAmount: document.getElementById("journalEnteredAmount"),
-      journalLimitPrice: document.getElementById("journalLimitPrice"),
-      journalFilledQuantity: document.getElementById("journalFilledQuantity"),
-      journalFees: document.getElementById("journalFees"),
-      journalPayoutAmount: document.getElementById("journalPayoutAmount"),
-      journalSubmittedAt: document.getElementById("journalSubmittedAt"),
-      journalFilledAt: document.getElementById("journalFilledAt"),
-      journalSettledAt: document.getElementById("journalSettledAt"),
-      journalQuestion: document.getElementById("journalQuestion"),
-      journalNotes: document.getElementById("journalNotes"),
-      journalFormHint: document.getElementById("journalFormHint"),
       journalTableWrap: document.getElementById("journalTableWrap"),
       linkJournalCsv: document.getElementById("linkJournalCsv"),
       logBody: document.getElementById("logBody"),
@@ -1411,12 +1203,12 @@
         account_equity: account ? Number(account) : null,
         per_trade_risk_pct: Number(el.riskPct.value || 0.0025),
         daily_stop_pct: 0.01,
-        winner_max_time_left: Number(el.winnerMaxTimeLeft.value || 360),
-        winner_min_lead: Number(el.winnerMinLead.value || 10),
-        winner_p_min: Number(el.winnerPMin.value || 0.80),
-        winner_p_max: Number(el.winnerPMax.value || 0.97),
-        winner_min_edge: Number(el.winnerMinEdge.value || 0.025),
-        winner_max_buy_price: Number(el.winnerMaxBuyPrice.value || 0.91),
+        winner_max_time_left: Number(el.winnerMaxTimeLeft.value || DEFAULT_WINNER_STRATEGY.maxTimeLeft),
+        winner_min_lead: Number(el.winnerMinLead.value || DEFAULT_WINNER_STRATEGY.minLead),
+        winner_p_min: Number(el.winnerPMin.value || DEFAULT_WINNER_STRATEGY.pMin),
+        winner_p_max: Number(el.winnerPMax.value || DEFAULT_WINNER_STRATEGY.pMax),
+        winner_min_edge: Number(el.winnerMinEdge.value || DEFAULT_WINNER_STRATEGY.minEdge),
+        winner_max_buy_price: Number(el.winnerMaxBuyPrice.value || DEFAULT_WINNER_STRATEGY.maxBuyPrice),
         ts: nowStamp()
       };
     }
@@ -1427,15 +1219,18 @@
 
     function updateBudgetCalc() {
       const bankroll = Math.max(0, toNumber(el.capBankroll.value, 1000));
-      const winRate = clamp01(toNumber(el.capWinRate.value, 0.9442));
-      const fee = Math.max(0, toNumber(el.capFee.value, 0.02));
+      const winRate = clamp01(toNumber(el.capWinRate.value, DEFAULT_WINNER_STRATEGY.capWinRate));
+      const fee = Math.max(0, toNumber(el.capFee.value, DEFAULT_WINNER_STRATEGY.feeTotal));
       const buyPrice = Math.max(0.0001, Math.min(0.9999, toNumber(el.capBuyPrice.value, 0.90)));
       const riskPct = Math.max(0, toNumber(el.capRiskPct.value, 0.008));
       const dailyStopPct = Math.max(0, toNumber(el.capDailyStopPct.value, 0.02));
 
       const edge = winRate - buyPrice - fee;
       const breakevenPrice = Math.max(0, winRate - fee);
-      const maxBuyPriceRule = Math.max(0.0001, Math.min(0.9999, toNumber(el.winnerMaxBuyPrice.value, 0.91)));
+      const maxBuyPriceRule = Math.max(
+        0.0001,
+        Math.min(0.9999, toNumber(el.winnerMaxBuyPrice.value, DEFAULT_WINNER_STRATEGY.maxBuyPrice)),
+      );
       const stake = bankroll * riskPct;
       const lossPerContract = Math.max(0.0001, Math.min(1, buyPrice + fee));
       const contracts = Math.max(0, Math.floor(stake / lossPerContract));
@@ -1474,24 +1269,25 @@
       el.interval.value = "2";
       el.timeout.value = "6";
 
-      el.winnerMaxTimeLeft.value = "360";
-      el.winnerMinLead.value = "10";
-      el.winnerPMin.value = "0.80";
-      el.winnerPMax.value = "0.97";
-      el.winnerMinEdge.value = "0.025";
-      el.winnerMaxBuyPrice.value = "0.91";
+      el.winnerMaxTimeLeft.value = String(DEFAULT_WINNER_STRATEGY.maxTimeLeft);
+      el.winnerMinLead.value = String(DEFAULT_WINNER_STRATEGY.minLead);
+      el.winnerPMin.value = DEFAULT_WINNER_STRATEGY.pMin.toFixed(2);
+      el.winnerPMax.value = DEFAULT_WINNER_STRATEGY.pMax.toFixed(2);
+      el.winnerMinEdge.value = DEFAULT_WINNER_STRATEGY.minEdge.toFixed(3);
+      el.winnerMaxBuyPrice.value = DEFAULT_WINNER_STRATEGY.maxBuyPrice.toFixed(2);
 
       el.capBankroll.value = "1000";
-      el.capWinRate.value = "0.9442";
-      el.capFee.value = "0.02";
+      el.capWinRate.value = DEFAULT_WINNER_STRATEGY.capWinRate.toFixed(4);
+      el.capFee.value = DEFAULT_WINNER_STRATEGY.feeTotal.toFixed(2);
       el.capBuyPrice.value = "0.90";
       el.capRiskPct.value = "0.008";
       el.capDailyStopPct.value = "0.02";
+      el.historyFeeTotal.value = DEFAULT_WINNER_STRATEGY.feeTotal.toFixed(2);
 
       applyModeLabels();
       applyModeVisibility();
       updateBudgetCalc();
-      el.budgetHint.textContent = "已应用简化配置：选比赛后可直接开始轮询。";
+      el.budgetHint.textContent = "已应用默认最大利润策略：选比赛后可直接开始轮询。";
       el.robustGateHint.textContent = "点击“历史稳健模式（自动门控）”可启用门控拦截。";
       loadGamePicker().catch((err) => { el.gamePickerHint.textContent = `加载失败: ${err}`; });
     }
@@ -1503,8 +1299,8 @@
         pMin: 0.80,
         pMax: 0.97,
         capWinRate: 0.9442,
-        simpleHint: "已应用平衡型策略：360s/10分/[0.80,0.97]/min_edge0.025/买价<=0.91。",
-        budgetHint: "平衡型策略已生效，建议买价控制在 0.91 以下。",
+        simpleHint: "策略已生效。",
+        budgetHint: "参数已更新。",
       });
     }
 
@@ -1513,15 +1309,16 @@
       invalidateRobustGate();
       el.winnerOnly.checked = true;
       el.requireLive.checked = true;
-      el.winnerMaxTimeLeft.value = String(Number(preset.maxTimeLeft || 360));
-      el.winnerMinLead.value = String(Number(preset.minLead || 10));
-      el.winnerPMin.value = Number(preset.pMin || 0.80).toFixed(2);
-      el.winnerPMax.value = Number(preset.pMax || 0.97).toFixed(2);
-      el.winnerMinEdge.value = "0.025";
-      el.winnerMaxBuyPrice.value = "0.91";
-      el.capWinRate.value = Number(preset.capWinRate || 0.9442).toFixed(4);
+      el.winnerMaxTimeLeft.value = String(Number(preset.maxTimeLeft ?? DEFAULT_WINNER_STRATEGY.maxTimeLeft));
+      el.winnerMinLead.value = String(Number(preset.minLead ?? DEFAULT_WINNER_STRATEGY.minLead));
+      el.winnerPMin.value = Number(preset.pMin ?? DEFAULT_WINNER_STRATEGY.pMin).toFixed(2);
+      el.winnerPMax.value = Number(preset.pMax ?? DEFAULT_WINNER_STRATEGY.pMax).toFixed(2);
+      el.winnerMinEdge.value = Number(preset.minEdge ?? DEFAULT_WINNER_STRATEGY.minEdge).toFixed(3);
+      el.winnerMaxBuyPrice.value = Number(preset.maxBuyPrice ?? DEFAULT_WINNER_STRATEGY.maxBuyPrice).toFixed(2);
+      el.historyFeeTotal.value = Number(preset.feeTotal ?? DEFAULT_WINNER_STRATEGY.feeTotal).toFixed(2);
+      el.capWinRate.value = Number(preset.capWinRate ?? DEFAULT_WINNER_STRATEGY.capWinRate).toFixed(4);
       el.capBuyPrice.value = "0.90";
-      el.capFee.value = "0.02";
+      el.capFee.value = Number(preset.feeTotal ?? DEFAULT_WINNER_STRATEGY.feeTotal).toFixed(2);
       applyModeLabels();
       applyModeVisibility();
       updateBudgetCalc();
@@ -1532,13 +1329,16 @@
 
     function applyMaxProfitStrategyPreset() {
       applyWinnerPreset({
-        maxTimeLeft: 180,
-        minLead: 6,
-        pMin: 0.80,
-        pMax: 1.00,
-        capWinRate: 0.9939,
-        simpleHint: "已应用最大利润版：180s/6分/[0.80,1.00]。近30天回放 165 场触发，164 胜 1 负。",
-        budgetHint: "最大利润版已生效。历史净利润最高，但触发更密集，不代表未来还能保持同样命中。",
+        maxTimeLeft: DEFAULT_WINNER_STRATEGY.maxTimeLeft,
+        minLead: DEFAULT_WINNER_STRATEGY.minLead,
+        pMin: DEFAULT_WINNER_STRATEGY.pMin,
+        pMax: DEFAULT_WINNER_STRATEGY.pMax,
+        minEdge: DEFAULT_WINNER_STRATEGY.minEdge,
+        maxBuyPrice: DEFAULT_WINNER_STRATEGY.maxBuyPrice,
+        feeTotal: DEFAULT_WINNER_STRATEGY.feeTotal,
+        capWinRate: DEFAULT_WINNER_STRATEGY.capWinRate,
+        simpleHint: "后台默认策略已生效。",
+        budgetHint: "历史回测与 Dry Run 已对齐。",
       });
     }
 
@@ -1549,8 +1349,8 @@
         pMin: 0.80,
         pMax: 1.00,
         capWinRate: 1.0000,
-        simpleHint: "已应用更稳版：240s/10分/[0.80,1.00]。近30天回放 130 场触发，历史样本内 130 胜 0 负。",
-        budgetHint: "更稳版已生效。历史样本更干净，但 100% 只代表过去一个月，不代表未来不会回撤。",
+        simpleHint: "稳健策略已生效。",
+        budgetHint: "参数已更新。",
       });
     }
 
@@ -1559,14 +1359,14 @@
       el.requireLive.checked = true;
       el.espnSport.value = "basketball";
       el.espnLeague.value = "nba";
-      el.winnerMaxTimeLeft.value = "360";
-      el.winnerMinLead.value = "10";
-      el.winnerPMin.value = "0.80";
-      el.winnerPMax.value = "0.98";
-      el.winnerMinEdge.value = "0.025";
-      el.winnerMaxBuyPrice.value = "0.91";
-      el.historyFeeTotal.value = "0.02";
-      el.capFee.value = "0.02";
+      el.winnerMaxTimeLeft.value = String(DEFAULT_WINNER_STRATEGY.maxTimeLeft);
+      el.winnerMinLead.value = String(DEFAULT_WINNER_STRATEGY.minLead);
+      el.winnerPMin.value = DEFAULT_WINNER_STRATEGY.pMin.toFixed(2);
+      el.winnerPMax.value = DEFAULT_WINNER_STRATEGY.pMax.toFixed(2);
+      el.winnerMinEdge.value = DEFAULT_WINNER_STRATEGY.minEdge.toFixed(3);
+      el.winnerMaxBuyPrice.value = DEFAULT_WINNER_STRATEGY.maxBuyPrice.toFixed(2);
+      el.historyFeeTotal.value = DEFAULT_WINNER_STRATEGY.feeTotal.toFixed(2);
+      el.capFee.value = DEFAULT_WINNER_STRATEGY.feeTotal.toFixed(2);
       applyModeLabels();
       applyModeVisibility();
 
@@ -1598,13 +1398,13 @@
         if (!state.timer) {
           el.runState.textContent = "READY (GATE PASS)";
         }
-        el.simpleFlowHint.textContent = "历史稳健门控已通过：先选比赛，再开始轮询。";
+        el.simpleFlowHint.textContent = "校验通过。";
       } else {
         const reasonText = Array.isArray(gate.reasons) && gate.reasons.length ? gate.reasons.join("；") : (gate.message || "未通过");
         stopPolling();
         el.runState.textContent = "BLOCKED BY GATE";
         el.robustGateHint.textContent = `BLOCK：${reasonText}`;
-        el.simpleFlowHint.textContent = `历史稳健门控未通过：${reasonText}`;
+        el.simpleFlowHint.textContent = `校验未通过：${reasonText}`;
       }
     }
 
@@ -1687,22 +1487,23 @@
       el.yesTeam.value = "home";
       el.requireLive.checked = false;
 
-      el.winnerMaxTimeLeft.value = "360";
-      el.winnerMinLead.value = "10";
-      el.winnerPMin.value = "0.80";
-      el.winnerPMax.value = "0.97";
-      el.winnerMinEdge.value = "0.025";
-      el.winnerMaxBuyPrice.value = "0.91";
+      el.winnerMaxTimeLeft.value = String(DEFAULT_WINNER_STRATEGY.maxTimeLeft);
+      el.winnerMinLead.value = String(DEFAULT_WINNER_STRATEGY.minLead);
+      el.winnerPMin.value = DEFAULT_WINNER_STRATEGY.pMin.toFixed(2);
+      el.winnerPMax.value = DEFAULT_WINNER_STRATEGY.pMax.toFixed(2);
+      el.winnerMinEdge.value = DEFAULT_WINNER_STRATEGY.minEdge.toFixed(3);
+      el.winnerMaxBuyPrice.value = DEFAULT_WINNER_STRATEGY.maxBuyPrice.toFixed(2);
 
       el.interval.value = "2";
       el.timeout.value = "6";
-      el.capWinRate.value = "0.9442";
+      el.capWinRate.value = DEFAULT_WINNER_STRATEGY.capWinRate.toFixed(4);
       el.capBuyPrice.value = "0.90";
-      el.capFee.value = "0.02";
+      el.capFee.value = DEFAULT_WINNER_STRATEGY.feeTotal.toFixed(2);
       el.capRiskPct.value = "0.008";
       el.capDailyStopPct.value = "0.02";
+      el.historyFeeTotal.value = DEFAULT_WINNER_STRATEGY.feeTotal.toFixed(2);
 
-      el.winnerTestHint.textContent = "已填充测试参数：360s / 10分 / [0.80, 0.97] / min_edge 0.025 / 买价<=0.91。";
+      el.winnerTestHint.textContent = "已填充测试参数：180s / 6分 / [0.80, 0.95] / min_edge 0.025 / 买价<=0.91。";
       updateBudgetCalc();
     }
 
@@ -1773,11 +1574,11 @@
         applyModeVisibility();
       }
       const cfg = getConfig();
-      const maxTime = Number(cfg.winner_max_time_left || 360);
-      const minLead = Number(cfg.winner_min_lead || 10);
-      const pMin = Number(cfg.winner_p_min || 0.80);
-      const pMax = Number(cfg.winner_p_max || 0.97);
-      const minEdge = Number(cfg.winner_min_edge || 0.025);
+      const maxTime = Number(cfg.winner_max_time_left || DEFAULT_WINNER_STRATEGY.maxTimeLeft);
+      const minLead = Number(cfg.winner_min_lead || DEFAULT_WINNER_STRATEGY.minLead);
+      const pMin = Number(cfg.winner_p_min || DEFAULT_WINNER_STRATEGY.pMin);
+      const pMax = Number(cfg.winner_p_max || DEFAULT_WINNER_STRATEGY.pMax);
+      const minEdge = Number(cfg.winner_min_edge || DEFAULT_WINNER_STRATEGY.minEdge);
       const pPass = clamp01((pMin + pMax) / 2);
       const pHigh = clamp01(Math.min(0.99, pMax + 0.05));
       const testEntryPass = clamp01(Math.max(0.01, pPass - minEdge - 0.02));
@@ -1904,20 +1705,6 @@
       return apiGet(`/api/manual-transactions?limit=${encodeURIComponent(String(limit))}`);
     }
 
-    async function apiSaveManualTransaction(payload) {
-      const res = await fetch("/api/manual-transactions", {
-        method: "POST",
-        cache: "no-store",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || `HTTP ${res.status}`);
-      }
-      return data;
-    }
-
     function realtimeTelegramNotifyKey(data) {
       const eventId = String(data.espn_event_id || data.event_id || "").trim();
       const guessSide = String(data.guess_side || "").trim().toLowerCase();
@@ -1991,12 +1778,12 @@
       const eventEnc = encodeURIComponent(eventId);
       const timeout = encodeURIComponent(String(Number(el.timeout.value || 6)));
       const maxPoints = encodeURIComponent(String(Math.max(40, Number(el.historyMaxPoints.value || 220))));
-      const feeTotal = encodeURIComponent(String(Math.max(0, Number(el.historyFeeTotal.value || 0.02))));
-      const winnerMaxTime = encodeURIComponent(String(Number(el.winnerMaxTimeLeft.value || 360)));
-      const winnerLead = encodeURIComponent(String(Number(el.winnerMinLead.value || 10)));
-      const winnerPMin = encodeURIComponent(String(Number(el.winnerPMin.value || 0.8)));
-      const winnerPMax = encodeURIComponent(String(Number(el.winnerPMax.value || 0.97)));
-      const winnerEdge = encodeURIComponent(String(Number(el.winnerMinEdge.value || 0.025)));
+      const feeTotal = encodeURIComponent(String(DEFAULT_WINNER_STRATEGY.feeTotal));
+      const winnerMaxTime = encodeURIComponent(String(DEFAULT_WINNER_STRATEGY.maxTimeLeft));
+      const winnerLead = encodeURIComponent(String(DEFAULT_WINNER_STRATEGY.minLead));
+      const winnerPMin = encodeURIComponent(String(DEFAULT_WINNER_STRATEGY.pMin));
+      const winnerPMax = encodeURIComponent(String(DEFAULT_WINNER_STRATEGY.pMax));
+      const winnerEdge = encodeURIComponent(String(DEFAULT_WINNER_STRATEGY.minEdge));
       const url = `/api/history/replay?sport=${sport}&league=${league}&event_id=${eventEnc}&timeout=${timeout}&winner_max_time_left=${winnerMaxTime}&winner_min_lead=${winnerLead}&winner_p_min=${winnerPMin}&winner_p_max=${winnerPMax}&winner_min_edge=${winnerEdge}&fee_total=${feeTotal}&max_points=${maxPoints}`;
       return apiGet(url);
     }
@@ -2009,19 +1796,25 @@
       const minGames = encodeURIComponent(String(Math.max(1, Number(el.robustMinGames.value || 80))));
       const minTriggerGames = encodeURIComponent(String(Math.max(1, Number(el.robustMinTriggerGames.value || 20))));
       const minHitRate = encodeURIComponent(String(Math.max(0, Math.min(1, Number(el.robustMinHitRate.value || 0.93)))));
-      const winnerMaxTime = encodeURIComponent(String(Number(el.winnerMaxTimeLeft.value || 360)));
-      const winnerLead = encodeURIComponent(String(Number(el.winnerMinLead.value || 10)));
-      const winnerPMin = encodeURIComponent(String(Number(el.winnerPMin.value || 0.8)));
-      const winnerPMax = encodeURIComponent(String(Number(el.winnerPMax.value || 0.98)));
-      const winnerEdge = encodeURIComponent(String(Number(el.winnerMinEdge.value || 0.025)));
-      const feeTotal = encodeURIComponent(String(Math.max(0, Number(el.historyFeeTotal.value || 0.02))));
+      const winnerMaxTime = encodeURIComponent(String(Number(el.winnerMaxTimeLeft.value || DEFAULT_WINNER_STRATEGY.maxTimeLeft)));
+      const winnerLead = encodeURIComponent(String(Number(el.winnerMinLead.value || DEFAULT_WINNER_STRATEGY.minLead)));
+      const winnerPMin = encodeURIComponent(String(Number(el.winnerPMin.value || DEFAULT_WINNER_STRATEGY.pMin)));
+      const winnerPMax = encodeURIComponent(String(Number(el.winnerPMax.value || DEFAULT_WINNER_STRATEGY.pMax)));
+      const winnerEdge = encodeURIComponent(String(Number(el.winnerMinEdge.value || DEFAULT_WINNER_STRATEGY.minEdge)));
+      const feeTotal = encodeURIComponent(String(Math.max(0, Number(el.historyFeeTotal.value || DEFAULT_WINNER_STRATEGY.feeTotal))));
       const useCache = forceRefresh ? "0" : "1";
       const url = `/api/history/gate?sport=${sport}&league=${league}&timeout=${timeout}&lookback_days=${lookbackDays}&min_games=${minGames}&min_trigger_games=${minTriggerGames}&min_first_hit_rate=${minHitRate}&winner_max_time_left=${winnerMaxTime}&winner_min_lead=${winnerLead}&winner_p_min=${winnerPMin}&winner_p_max=${winnerPMax}&winner_min_edge=${winnerEdge}&fee_total=${feeTotal}&use_cache=${useCache}`;
       return apiGet(url);
     }
 
     async function apiDryrunLatest(limit = 30) {
-      return apiGet(`/api/dryrun/latest?limit=${encodeURIComponent(String(limit))}`);
+      const params = new URLSearchParams();
+      params.set("limit", String(limit));
+      const dateValue = String(el.dryrunDate.value || "").trim();
+      if (dateValue) {
+        params.set("date", dateValue);
+      }
+      return apiGet(`/api/dryrun/latest?${params.toString()}`);
     }
 
     function buildSvgLinePath(points, xFn, yFn) {
@@ -2033,7 +1826,7 @@
       }).join(" ");
     }
 
-    function renderHistoryProbChart(timeline) {
+    function renderHistoryProbChart(timeline, labels = {}) {
       if (!Array.isArray(timeline) || !timeline.length) {
         el.historyProbChart.innerHTML = "";
         return;
@@ -2042,57 +1835,31 @@
       const height = 220;
       const pad = 24;
       const x = (p) => pad + clamp01(p.progress) * (width - pad * 2);
-      const y = (p) => height - pad - clamp01(p.p_home) * (height - pad * 2);
-      const path = buildSvgLinePath(timeline, x, y);
+      const yHome = (p) => height - pad - clamp01(p.p_home) * (height - pad * 2);
+      const yAway = (p) => height - pad - clamp01(p.p_away) * (height - pad * 2);
+      const homePath = buildSvgLinePath(timeline, x, yHome);
+      const awayPath = buildSvgLinePath(timeline, x, yAway);
       const yMid = height - pad - 0.5 * (height - pad * 2);
-      const signals = timeline.filter((p) => p.pass_all).slice(-80);
-      const dots = signals.map((p) => {
+      const signalDots = timeline.filter((p) => p.pass_all).slice(-80).map((p) => {
         const cx = x(p).toFixed(2);
-        const cy = y(p).toFixed(2);
-        const fill = p.guess_side === "home" ? "#0f7f67" : "#d55b44";
+        const isHome = p.guess_side === "home";
+        const cy = (isHome ? yHome(p) : yAway(p)).toFixed(2);
+        const fill = isHome ? "#0f7f67" : "#d55b44";
         return `<circle cx="${cx}" cy="${cy}" r="2.8" fill="${fill}" opacity="0.9" />`;
       }).join("");
+      const homeLabel = String(labels.home || "HOME");
+      const awayLabel = String(labels.away || "AWAY");
 
       el.historyProbChart.innerHTML = `
         <line x1="${pad}" y1="${yMid.toFixed(2)}" x2="${width - pad}" y2="${yMid.toFixed(2)}" stroke="#8fb7ae" stroke-width="1" stroke-dasharray="5 4" />
-        <path d="${path}" fill="none" stroke="#0f6d4a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
-        ${dots}
+        <path d="${homePath}" fill="none" stroke="#0f6d4a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+        <path d="${awayPath}" fill="none" stroke="#d55b44" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+        ${signalDots}
         <text x="${pad}" y="${height - 6}" fill="#4f6965" font-size="11">开场</text>
         <text x="${width - pad}" y="${height - 6}" fill="#4f6965" font-size="11" text-anchor="end">终场</text>
-        <text x="${pad}" y="14" fill="#4f6965" font-size="11">P(home)</text>
-      `;
-    }
-
-    function renderHistoryLeadChart(timeline) {
-      if (!Array.isArray(timeline) || !timeline.length) {
-        el.historyLeadChart.innerHTML = "";
-        return;
-      }
-      const width = 760;
-      const height = 220;
-      const pad = 24;
-      const maxAbsLead = Math.max(
-        6,
-        ...timeline.map((p) => Math.abs(Number(p.lead_signed || 0)))
-      );
-      const x = (p) => pad + clamp01(p.progress) * (width - pad * 2);
-      const y = (p) => height / 2 - (Number(p.lead_signed || 0) / maxAbsLead) * ((height - pad * 2) / 2);
-      const path = buildSvgLinePath(timeline, x, y);
-      const yZero = y({ lead_signed: 0 });
-      const signals = timeline.filter((p) => p.pass_all).slice(-80);
-      const dots = signals.map((p) => {
-        const cx = x(p).toFixed(2);
-        const cy = y(p).toFixed(2);
-        const fill = p.guess_side === "home" ? "#0f7f67" : "#d55b44";
-        return `<circle cx="${cx}" cy="${cy}" r="2.8" fill="${fill}" opacity="0.9" />`;
-      }).join("");
-
-      el.historyLeadChart.innerHTML = `
-        <line x1="${pad}" y1="${yZero.toFixed(2)}" x2="${width - pad}" y2="${yZero.toFixed(2)}" stroke="#8fb7ae" stroke-width="1" stroke-dasharray="5 4" />
-        <path d="${path}" fill="none" stroke="#355f9c" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" />
-        ${dots}
-        <text x="${pad}" y="14" fill="#4f6965" font-size="11">Home - Away</text>
-        <text x="${width - pad}" y="14" fill="#4f6965" font-size="11" text-anchor="end">max |lead|=${maxAbsLead.toFixed(0)}</text>
+        <text x="${pad}" y="14" fill="#0f6d4a" font-size="11">${esc(homeLabel)} YES</text>
+        <text x="${pad + 84}" y="14" fill="#d55b44" font-size="11">${esc(awayLabel)} YES</text>
+        <text x="${width - pad}" y="14" fill="#4f6965" font-size="11" text-anchor="end">price / probability</text>
       `;
     }
 
@@ -2160,21 +1927,8 @@
 
       el.historyRuleSummary.textContent = `规则: time<=${fmtNum(rules.winner_max_time_left, 0)}s, lead>=${fmtNum(rules.winner_min_lead, 0)}, p∈[${fmtNum(rules.winner_p_min, 3)}, ${fmtNum(rules.winner_p_max, 3)}], min_edge=${fmtNum(rules.winner_min_edge, 3)}, fee=${fmtNum(rules.fee_total, 3)}`;
 
-      const metricRows = [
-        { k: "Timeline", v: String(metrics.timeline_points || 0) },
-        { k: "Signals", v: String(metrics.signals || 0) },
-        { k: "Signal Hit", v: `${metrics.signal_hits || 0}` },
-        { k: "Signal Win Rate", v: fmtPct(metrics.signal_win_rate, 2) },
-        { k: "First Signal", v: metrics.first_signal ? `Q${metrics.first_signal.period} ${metrics.first_signal.clock || "-"}` : "-" },
-        { k: "First Max Buy", v: metrics.first_signal ? fmtNum(metrics.first_signal.recommended_max_buy_price, 4) : "-" },
-        { k: "Best Max Buy", v: metrics.best_signal ? fmtNum(metrics.best_signal.recommended_max_buy_price, 4) : "-" },
-        { k: "Best Guess P", v: metrics.best_signal ? fmtNum(metrics.best_signal.guess_prob, 3) : "-" },
-      ];
-      el.historyMetrics.innerHTML = metricRows.map((m) => `<div class="history-metric"><p class="k">${esc(m.k)}</p><p class="v">${esc(m.v)}</p></div>`).join("");
-
       const timeline = Array.isArray(data.timeline) ? data.timeline : [];
-      renderHistoryProbChart(timeline);
-      renderHistoryLeadChart(timeline);
+      renderHistoryProbChart(timeline, { home, away });
       renderHistorySignals(Array.isArray(data.signals_preview) ? data.signals_preview : []);
     }
 
@@ -2249,100 +2003,6 @@
       el.historyHint.textContent = `已加载 ${items.length} 场已结束比赛，点“回放”即可看建议和图表。`;
     }
 
-    function resetJournalForm(message = "新建记录") {
-      state.manualJournalEditingId = "";
-      const today = new Date().toISOString().slice(0, 10);
-      el.journalEditingState.textContent = message;
-      el.journalEventDate.value = today;
-      el.journalRivalry.value = "";
-      el.journalTeam.value = "";
-      el.journalSide.value = "YES";
-      el.journalOrderType.value = "LIMIT_BUY";
-      el.journalStatus.value = "FILLED";
-      el.journalResult.value = "PENDING";
-      el.journalEnteredAmount.value = "";
-      el.journalLimitPrice.value = "";
-      el.journalFilledQuantity.value = "";
-      el.journalFees.value = "";
-      el.journalPayoutAmount.value = "";
-      el.journalSubmittedAt.value = "";
-      el.journalFilledAt.value = "";
-      el.journalSettledAt.value = "";
-      el.journalQuestion.value = "";
-      el.journalNotes.value = "";
-      el.journalFormHint.textContent = "保存后会自动计算成本、净盈亏和 ROI，并导出 CSV。";
-    }
-
-    function fillJournalExample() {
-      state.manualJournalEditingId = "";
-      el.journalEditingState.textContent = "截图示例：GSW 限价买单（保存前可继续修改）";
-      el.journalEventDate.value = "2026-03-10";
-      el.journalRivalry.value = "CHI @ GS";
-      el.journalTeam.value = "GSW";
-      el.journalSide.value = "YES";
-      el.journalOrderType.value = "LIMIT_BUY";
-      el.journalStatus.value = "FILLED";
-      el.journalResult.value = "PENDING";
-      el.journalEnteredAmount.value = "100.00";
-      el.journalLimitPrice.value = "0.96";
-      el.journalFilledQuantity.value = "102";
-      el.journalFees.value = "";
-      el.journalPayoutAmount.value = "";
-      el.journalSubmittedAt.value = "2026-03-10 21:16";
-      el.journalFilledAt.value = "2026-03-10 21:16";
-      el.journalSettledAt.value = "";
-      el.journalQuestion.value = "Will Golden State win the Chicago at Golden State?";
-      el.journalNotes.value = "根据截图预填；其它 payout / settle 信息请你再确认后补上。";
-      el.journalFormHint.textContent = "已填入最清晰的 GSW 截图示例。请核对后保存。";
-    }
-
-    function populateJournalForm(row) {
-      state.manualJournalEditingId = String(row.id || "");
-      el.journalEditingState.textContent = `编辑记录：${state.manualJournalEditingId}`;
-      el.journalEventDate.value = String(row.event_date || "").slice(0, 10);
-      el.journalRivalry.value = String(row.rivalry || "");
-      el.journalTeam.value = String(row.team || "");
-      el.journalSide.value = String(row.side || "YES");
-      el.journalOrderType.value = String(row.order_type || "LIMIT_BUY");
-      el.journalStatus.value = String(row.status || "FILLED");
-      el.journalResult.value = String(row.result || "PENDING");
-      el.journalEnteredAmount.value = row.entered_amount || "";
-      el.journalLimitPrice.value = row.limit_price || "";
-      el.journalFilledQuantity.value = row.filled_quantity || "";
-      el.journalFees.value = row.fees || "";
-      el.journalPayoutAmount.value = row.payout_amount || "";
-      el.journalSubmittedAt.value = row.submitted_at || "";
-      el.journalFilledAt.value = row.filled_at || "";
-      el.journalSettledAt.value = row.settled_at || "";
-      el.journalQuestion.value = row.market_question || "";
-      el.journalNotes.value = row.notes || "";
-      el.journalFormHint.textContent = "编辑后点击“保存记录”会覆盖这一条。";
-    }
-
-    function readJournalForm() {
-      return {
-        id: state.manualJournalEditingId || "",
-        source: "manual",
-        event_date: el.journalEventDate.value.trim(),
-        rivalry: el.journalRivalry.value.trim(),
-        market_question: el.journalQuestion.value.trim(),
-        side: el.journalSide.value,
-        team: el.journalTeam.value.trim().toUpperCase(),
-        order_type: el.journalOrderType.value,
-        status: el.journalStatus.value,
-        result: el.journalResult.value,
-        submitted_at: el.journalSubmittedAt.value.trim(),
-        filled_at: el.journalFilledAt.value.trim(),
-        settled_at: el.journalSettledAt.value.trim(),
-        entered_amount: el.journalEnteredAmount.value.trim(),
-        limit_price: el.journalLimitPrice.value.trim(),
-        filled_quantity: el.journalFilledQuantity.value.trim(),
-        fees: el.journalFees.value.trim(),
-        payout_amount: el.journalPayoutAmount.value.trim(),
-        notes: el.journalNotes.value.trim(),
-      };
-    }
-
     function renderJournalSummary(data) {
       const summary = data && typeof data === "object" ? (data.summary || {}) : {};
       const netPnl = Number(summary.net_pnl || 0);
@@ -2364,7 +2024,7 @@
 
     function renderJournalTable(rows) {
       if (!Array.isArray(rows) || !rows.length) {
-        el.journalTableWrap.innerHTML = `<div class="empty">还没有真实交易记录。先填一条，再慢慢补历史单子。</div>`;
+        el.journalTableWrap.innerHTML = `<div class="empty">还没有 API 交易记录。等后端同步后这里会自动出现。</div>`;
         return;
       }
       const body = rows.map((row) => {
@@ -2386,7 +2046,7 @@
             <td class="mono">${esc(fmtMoney(row.payout_amount, 2))}</td>
             <td class="mono ${pnlClass}">${esc(fmtSignedMoney(row.realized_pnl, 2))}</td>
             <td class="mono">${esc(row.result || "-")}</td>
-            <td><button class="btn-aux" data-journal-edit="${esc(row.id || "")}">编辑</button></td>
+            <td class="tiny">${esc(row.submitted_at || row.filled_at || row.id || "-")}</td>
           </tr>
         `;
       }).join("");
@@ -2402,21 +2062,12 @@
               <th>Payout</th>
               <th>净盈亏</th>
               <th>结果</th>
-              <th>操作</th>
+              <th>时间</th>
             </tr>
           </thead>
           <tbody>${body}</tbody>
         </table>
       `;
-      el.journalTableWrap.querySelectorAll("[data-journal-edit]").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const id = String(btn.getAttribute("data-journal-edit") || "");
-          const row = state.manualJournalRows.find((item) => String(item.id || "") === id);
-          if (row) {
-            populateJournalForm(row);
-          }
-        });
-      });
     }
 
     async function loadManualJournal() {
@@ -2429,24 +2080,6 @@
       const csvHref = data.files && data.files.csv ? data.files.csv : "/logs/manual_transactions.csv";
       el.linkJournalCsv.href = csvHref;
       el.journalHint.textContent = `已加载 ${rows.length} 条真实交易记录。`;
-    }
-
-    async function saveManualJournal() {
-      el.journalFormHint.textContent = "保存中...";
-      const reply = await apiSaveManualTransaction(readJournalForm());
-      const journal = reply.journal || {};
-      const rows = Array.isArray(journal.rows) ? journal.rows : [];
-      state.manualJournalRows = rows;
-      renderJournalSummary(journal);
-      renderJournalTable(rows);
-      if (journal.files && journal.files.csv) {
-        el.linkJournalCsv.href = journal.files.csv;
-      }
-      const saved = reply.saved || {};
-      const label = saved.rivalry || saved.market_question || saved.id || "记录";
-      el.journalHint.textContent = `已保存：${label}`;
-      resetJournalForm("新建记录");
-      el.journalFormHint.textContent = `保存完成：${label}`;
     }
 
     function filteredDryrunRows(rows) {
@@ -2606,14 +2239,16 @@
         renderDryrunPnlSummary(trades);
         renderDryrunTrades(tradeRows);
         renderDryrunTable(rows);
+        const activeDate = String(data.date_filter || el.dryrunDate.value || "").trim();
         const visibleCount = filteredDryrunRows(rows).length;
         const csvUpdated = meta.csv_mtime ? new Date(Number(meta.csv_mtime) * 1000).toLocaleString() : "-";
         const tradesUpdated = meta.trades_csv_mtime ? new Date(Number(meta.trades_csv_mtime) * 1000).toLocaleString() : "-";
         const scopeText = el.dryrunTriggeredOnly.checked
           ? `当前显示 ${visibleCount}/${rows.length} 条（仅触发）`
           : `当前显示 ${rows.length} 条记录`;
+        const dateText = activeDate ? `日期 ${activeDate}；` : "";
         const autoText = source === "auto" ? `AJAX 自动刷新于 ${new Date(state.dryrunLastLoadedAt).toLocaleTimeString()}；` : "";
-        el.dryrunHint.textContent = `${autoText}CSV ${meta.csv_exists ? "已生成" : "未生成"}，最近更新时间 ${csvUpdated}；Trades ${meta.trades_csv_exists ? "已生成" : "未生成"}，最近更新时间 ${tradesUpdated}；${scopeText}。`;
+        el.dryrunHint.textContent = `${autoText}${dateText}CSV ${meta.csv_exists ? "已生成" : "未生成"}，最近更新时间 ${csvUpdated}；Trades ${meta.trades_csv_exists ? "已生成" : "未生成"}，最近更新时间 ${tradesUpdated}；${scopeText}。`;
       } finally {
         state.dryrunRefreshInFlight = false;
       }
@@ -2894,7 +2529,7 @@
     async function autoFillMarket() {
       const eventId = el.espnEventId.value.trim();
       if (!eventId) {
-        throw new Error("请先填写 ESPN Event ID");
+        throw new Error("缺少 event id");
       }
       el.autofillHint.textContent = "匹配中...";
       const resolved = await resolveMarketForEvent(eventId, el.provider.value);
@@ -3131,21 +2766,16 @@
       );
     }
 
-    el.btnStart.addEventListener("click", startPolling);
-    el.btnStop.addEventListener("click", stopPolling);
-    el.btnOnce.addEventListener("click", pollOnce);
-    el.btnClear.addEventListener("click", () => { el.logBody.innerHTML = ""; });
-    el.btnLoadGames.addEventListener("click", () => loadGamePicker().catch((err) => { el.gamePickerHint.textContent = `加载失败: ${err}`; }));
-    el.gamePicker.addEventListener("change", () => { onGamePickerChange(); });
-    el.gamePickerState.addEventListener("change", () => loadGamePicker().catch((err) => { el.gamePickerHint.textContent = `加载失败: ${err}`; }));
     el.historyDate.addEventListener("change", () => loadHistoryGames().catch((err) => { el.historyHint.textContent = `加载失败: ${err}`; }));
     el.btnEspn.addEventListener("click", () => loadEspn().catch((err) => { el.discoverWrap.innerHTML = `<div class="empty">Error: ${err}</div>`; }));
     el.btnLoadHistoryGames.addEventListener("click", () => loadHistoryGames().catch((err) => { el.historyHint.textContent = `加载失败: ${err}`; }));
     el.btnLoadDryrun.addEventListener("click", () => loadDryrun().catch((err) => { el.dryrunHint.textContent = `加载失败: ${err}`; }));
+    el.dryrunDate.addEventListener("change", () => loadDryrun().catch((err) => { el.dryrunHint.textContent = `加载失败: ${err}`; }));
+    el.btnDryrunClearDate.addEventListener("click", () => {
+      el.dryrunDate.value = "";
+      loadDryrun().catch((err) => { el.dryrunHint.textContent = `加载失败: ${err}`; });
+    });
     el.btnJournalRefresh.addEventListener("click", () => loadManualJournal().catch((err) => { el.journalHint.textContent = `加载失败: ${err}`; }));
-    el.btnJournalReset.addEventListener("click", () => resetJournalForm("新建记录"));
-    el.btnJournalFillExample.addEventListener("click", fillJournalExample);
-    el.btnJournalSave.addEventListener("click", () => saveManualJournal().catch((err) => { el.journalFormHint.textContent = `保存失败: ${err}`; }));
     el.dryrunAutoRefresh.addEventListener("change", () => {
       if (el.dryrunAutoRefresh.checked) {
         startDryrunAutoRefresh();
@@ -3167,74 +2797,6 @@
         el.dryrunHint.textContent = `当前显示 ${totalCount} 条记录。`;
       }
     });
-    el.btnAutofill.addEventListener("click", () => autoFillMarket().catch((err) => { el.autofillHint.textContent = `自动填充失败: ${err}`; }));
-    el.btnQuickSetup.addEventListener("click", () => quickSetup().catch((err) => { el.quickSetupHint.textContent = `一键就绪失败: ${err}`; }));
-    el.btnSimpleReady.addEventListener("click", () => simpleReady().catch((err) => { el.simpleFlowHint.textContent = `失败: ${err}`; }));
-    el.btnSimpleStrategy.addEventListener("click", applyBalancedStrategyPreset);
-    el.btnMaxProfitStrategy.addEventListener("click", applyMaxProfitStrategyPreset);
-    el.btnSteadyProfitStrategy.addEventListener("click", applySteadyProfitStrategyPreset);
-    el.btnRobustModeGateQuick.addEventListener("click", () => applyRobustModeAndGate(false).catch((err) => {
-      state.robustGateRequired = true;
-      state.robustGateResult = null;
-      state.robustGateConfigKey = "";
-      el.simpleFlowHint.textContent = `历史门控失败: ${err}`;
-      el.robustGateHint.textContent = `门控失败: ${err}`;
-      el.runState.textContent = "BLOCKED BY GATE";
-    }));
-    el.btnRobustModeGate.addEventListener("click", () => applyRobustModeAndGate(false).catch((err) => {
-      state.robustGateRequired = true;
-      state.robustGateResult = null;
-      state.robustGateConfigKey = "";
-      el.robustGateHint.textContent = `门控失败: ${err}`;
-      el.runState.textContent = "BLOCKED BY GATE";
-    }));
-    el.btnQuickSetupSimple.addEventListener("click", applyQuickExperimentPreset);
-    el.btnUseSignalPrice.addEventListener("click", useCurrentSignalPriceForBudget);
-    el.btnCalcBudget.addEventListener("click", updateBudgetCalc);
-    el.btnFillWinnerTest.addEventListener("click", fillWinnerTestData);
-    el.btnRunWinnerSelfTest.addEventListener("click", runWinnerSelfTest);
-    [
-      el.capBankroll,
-      el.capWinRate,
-      el.capFee,
-      el.capBuyPrice,
-      el.capRiskPct,
-      el.capDailyStopPct,
-    ].forEach((node) => {
-      node.addEventListener("input", updateBudgetCalc);
-    });
-    [
-      el.winnerMaxTimeLeft,
-      el.winnerMinLead,
-      el.winnerPMin,
-      el.winnerPMax,
-      el.winnerMinEdge,
-      el.historyFeeTotal,
-      el.robustLookbackDays,
-      el.robustMinGames,
-      el.robustMinTriggerGames,
-      el.robustMinHitRate,
-    ].forEach((node) => {
-      node.addEventListener("input", () => {
-        if (state.robustGateRequired) {
-          invalidateRobustGate("参数变化");
-        }
-      });
-    });
-    el.winnerOnly.addEventListener("change", () => {
-      applyModeLabels();
-      applyModeVisibility();
-      updateBudgetCalc();
-    });
-    el.simpleMode.addEventListener("change", () => {
-      applyModeLabels();
-      applyModeVisibility();
-      updateBudgetCalc();
-      if (el.simpleMode.checked) {
-        el.simpleFlowHint.textContent = "极简：先选策略（平衡型 / 最大利润版 / 更稳版），再点“一键选中比赛”，最后开始轮询。";
-      }
-    });
-
     (function initDate() {
       const d = new Date();
       const yyyy = d.getFullYear();
@@ -3246,10 +2808,9 @@
       const mm2 = String(y.getMonth() + 1).padStart(2, "0");
       const dd2 = String(y.getDate()).padStart(2, "0");
       el.historyDate.value = `${yyyy2}${mm2}${dd2}`;
+      applyMaxProfitStrategyPreset();
       applyModeLabels();
       applyModeVisibility();
-      resetJournalForm("新建记录");
-      loadGamePicker().catch((err) => { el.gamePickerHint.textContent = `加载失败: ${err}`; });
       loadHistoryGames().catch((err) => { el.historyHint.textContent = `加载失败: ${err}`; });
       loadDryrun().catch((err) => { el.dryrunHint.textContent = `加载失败: ${err}`; });
       loadManualJournal().catch((err) => { el.journalHint.textContent = `加载失败: ${err}`; });

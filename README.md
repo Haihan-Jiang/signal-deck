@@ -1,13 +1,16 @@
-# Signal Deck
+# Polymarket Auto Trader
 
-Signal Deck is a local signal-analysis toolkit for event contracts.
+Polymarket Auto Trader is a local trading and signal-analysis toolkit for event contracts.
 
 It combines:
 - market prices (Kalshi / Polymarket)
 - live game state from ESPN
 - a simple signal model based on live probability + time remaining
 
-It is **signal-only** and does **not** place orders.
+Execution is server-side and mode-gated:
+- `paper`: record order intents only, never place real orders
+- `armed`: validate and record intents, but still block real orders
+- `live`: reserved for real order placement; currently scaffolded but intentionally blocked until execution wiring is implemented
 
 ## Features
 
@@ -46,6 +49,7 @@ With `--hotreload`, backend files and `web/index.html` changes trigger auto-rest
 - `realtime_signal.py`: generic JSON endpoint polling signal runner
 - `live_experiment_signal.py`: provider-specific realtime runner (`kalshi_espn`, `polymarket_espn`)
 - `dryrun_recorder.py`: scheduled dry-run recorder and Telegram alert sender
+- `polymarket_executor.py`: server-side execution logger with `paper / armed / live` modes
 - `discover_sources.py`: discover ESPN/Kalshi/Polymarket IDs
 - `dashboard_server.py`: local web API + dashboard host
 - `web/index.html`: dashboard UI
@@ -89,6 +93,39 @@ when reinstalling:
 SIGNAL_DECK_LOOP_INTERVAL=10 ./install_dryrun_launchd.sh
 ```
 
+## Execution Modes
+
+The backend execution skeleton reads `~/.signal-deck/runtime/polymarket.env`.
+
+Example:
+
+```bash
+export SIGNAL_DECK_EXECUTION_MODE="paper"
+export POLYMARKET_CLOB_HOST="https://clob.polymarket.com"
+export POLYMARKET_CHAIN_ID="137"
+```
+
+Optional live credentials are read from the same file:
+
+```bash
+export POLYMARKET_PRIVATE_KEY="..."
+export POLYMARKET_PROXY_ADDRESS="..."
+export POLYMARKET_API_KEY="..."
+export POLYMARKET_API_SECRET="..."
+export POLYMARKET_API_PASSPHRASE="..."
+```
+
+Current behavior:
+
+- `paper`: writes a row to `~/.signal-deck/logs/polymarket_execution.csv`
+- `armed`: writes a validated intent row, but still does not transmit an order
+- `live`: checks that credentials exist, then hard-blocks with `live_not_implemented`
+
+Execution rows are available over:
+
+- `GET /api/execution/latest`
+- `GET /logs/polymarket_execution.csv`
+
 ## Telegram Commands
 
 There is also a separate Telegram bot command service for group/private chat
@@ -109,8 +146,6 @@ Install or refresh the bot service with:
 
 The bot service reads the same `~/.signal-deck/runtime/telegram.env` file and
 replies from groups or private chats through Telegram `getUpdates`.
-4. Start polling.
-
 ## CLI Examples
 
 Single-shot signal with direct probability:
@@ -135,5 +170,5 @@ Realtime from custom JSON endpoint:
 
 ## Notes
 
-- This repository is for analysis/experimentation.
-- Validate API data quality and costs before any real-world use.
+- The current repository is safe-by-default because execution defaults to `paper`.
+- Validate API data quality, market mapping, fees, and execution costs before enabling any live path.
