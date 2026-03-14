@@ -136,7 +136,7 @@
       color: var(--muted);
     }
 
-    input, select {
+    input, select, textarea {
       width: 100%;
       border-radius: 9px;
       border: 1px solid #9fbab3;
@@ -147,7 +147,12 @@
       font-family: var(--sans);
     }
 
-    input:focus, select:focus {
+    textarea {
+      resize: vertical;
+      min-height: 88px;
+    }
+
+    input:focus, select:focus, textarea:focus {
       outline: 2px solid rgba(0, 127, 111, 0.26);
       border-color: var(--teal);
     }
@@ -388,6 +393,28 @@
       grid-template-columns: repeat(6, minmax(0, 1fr));
     }
 
+    .journal-form {
+      display: grid;
+      gap: 8px;
+      border: 1px solid #bfd7d1;
+      border-radius: 10px;
+      background: #fcfdfb;
+      padding: 10px;
+    }
+
+    .journal-editing {
+      padding: 7px 9px;
+      border-radius: 9px;
+      background: #edf7f4;
+      border: 1px solid #bfd7d1;
+      font-size: 0.8rem;
+      color: #21443e;
+    }
+
+    .journal-summary {
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+    }
+
     .table-wrap {
       overflow: auto;
     }
@@ -535,6 +562,9 @@
       }
       .history-charts {
         grid-template-columns: 1fr;
+      }
+      .journal-summary, .dryrun-pnl-metrics {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
       }
       .title {
         font-size: 1.2rem;
@@ -877,6 +907,107 @@
         <div class="table-wrap" id="dryrunTableWrap"></div>
       </section>
 
+      <section class="box" id="journalBox">
+        <h3>真实交易记录</h3>
+        <div class="btn-row">
+          <button class="btn-aux" id="btnJournalRefresh">刷新记录</button>
+          <button class="btn-aux" id="btnJournalReset">清空表单</button>
+          <button class="btn-aux" id="btnJournalFillExample">填入 GSW 截图示例</button>
+          <span class="hint" id="journalHint">记录 Robinhood 实际成交和结算，方便回看比赛、价格和盈亏。</span>
+        </div>
+        <div class="dryrun-links">
+          <a class="link-chip" id="linkJournalCsv" href="/logs/manual_transactions.csv" target="_blank" rel="noreferrer">打开 Journal CSV</a>
+        </div>
+        <div class="metrics journal-summary" id="journalSummary"></div>
+        <div class="journal-form">
+          <div class="journal-editing" id="journalEditingState">新建记录</div>
+          <div class="grid-3">
+            <label>比赛日期
+              <input id="journalEventDate" type="date" />
+            </label>
+            <label>对阵
+              <input id="journalRivalry" placeholder="CHI @ GS" />
+            </label>
+            <label>队伍
+              <input id="journalTeam" placeholder="GSW" />
+            </label>
+          </div>
+          <div class="grid-3">
+            <label>方向
+              <select id="journalSide">
+                <option value="YES">YES</option>
+                <option value="NO">NO</option>
+              </select>
+            </label>
+            <label>订单类型
+              <select id="journalOrderType">
+                <option value="LIMIT_BUY">LIMIT_BUY</option>
+                <option value="MARKET_BUY">MARKET_BUY</option>
+                <option value="SELL">SELL</option>
+                <option value="PAYOUT">PAYOUT</option>
+              </select>
+            </label>
+            <label>状态
+              <select id="journalStatus">
+                <option value="FILLED">FILLED</option>
+                <option value="OPEN">OPEN</option>
+                <option value="SETTLED">SETTLED</option>
+                <option value="CANCELED">CANCELED</option>
+              </select>
+            </label>
+          </div>
+          <div class="grid-3">
+            <label>结果
+              <select id="journalResult">
+                <option value="PENDING">PENDING</option>
+                <option value="WIN">WIN</option>
+                <option value="LOSS">LOSS</option>
+                <option value="VOID">VOID</option>
+              </select>
+            </label>
+            <label>投入金额($)
+              <input id="journalEnteredAmount" type="number" step="0.01" placeholder="100.00" />
+            </label>
+            <label>限价($)
+              <input id="journalLimitPrice" type="number" step="0.0001" placeholder="0.9600" />
+            </label>
+          </div>
+          <div class="grid-3">
+            <label>成交数量
+              <input id="journalFilledQuantity" type="number" step="0.01" placeholder="102" />
+            </label>
+            <label>手续费($)
+              <input id="journalFees" type="number" step="0.01" placeholder="0.00" />
+            </label>
+            <label>结算 / Payout($)
+              <input id="journalPayoutAmount" type="number" step="0.01" placeholder="102.00" />
+            </label>
+          </div>
+          <div class="grid-3">
+            <label>提交时间
+              <input id="journalSubmittedAt" placeholder="2026-03-10 21:16" />
+            </label>
+            <label>成交时间
+              <input id="journalFilledAt" placeholder="2026-03-10 21:16" />
+            </label>
+            <label>结算时间
+              <input id="journalSettledAt" placeholder="2026-03-10 23:40" />
+            </label>
+          </div>
+          <label>问题描述
+            <textarea id="journalQuestion" placeholder="Will Golden State win the Chicago at Golden State?"></textarea>
+          </label>
+          <label>备注
+            <textarea id="journalNotes" placeholder="截图导入 / 账户备注 / 赛后复盘"></textarea>
+          </label>
+          <div class="btn-row">
+            <button class="btn-main" id="btnJournalSave">保存记录</button>
+            <span class="hint" id="journalFormHint">保存后会自动计算成本、净盈亏和 ROI，并导出 CSV。</span>
+          </div>
+        </div>
+        <div class="table-wrap" id="journalTableWrap"></div>
+      </section>
+
       <section class="box">
         <h3>信号日志</h3>
         <table class="log-table" id="logTable">
@@ -910,6 +1041,8 @@
       historyReplayData: null,
       lastDryrunRows: [],
       lastDryrunTrades: [],
+      manualJournalRows: [],
+      manualJournalEditingId: "",
       dryrunRefreshTimer: null,
       dryrunRefreshInFlight: false,
       dryrunLastLoadedAt: 0,
@@ -1036,6 +1169,33 @@
       linkDryrunTrades: document.getElementById("linkDryrunTrades"),
       linkDryrunTxt: document.getElementById("linkDryrunTxt"),
       linkDryrunCron: document.getElementById("linkDryrunCron"),
+      btnJournalRefresh: document.getElementById("btnJournalRefresh"),
+      btnJournalReset: document.getElementById("btnJournalReset"),
+      btnJournalFillExample: document.getElementById("btnJournalFillExample"),
+      btnJournalSave: document.getElementById("btnJournalSave"),
+      journalHint: document.getElementById("journalHint"),
+      journalSummary: document.getElementById("journalSummary"),
+      journalEditingState: document.getElementById("journalEditingState"),
+      journalEventDate: document.getElementById("journalEventDate"),
+      journalRivalry: document.getElementById("journalRivalry"),
+      journalTeam: document.getElementById("journalTeam"),
+      journalSide: document.getElementById("journalSide"),
+      journalOrderType: document.getElementById("journalOrderType"),
+      journalStatus: document.getElementById("journalStatus"),
+      journalResult: document.getElementById("journalResult"),
+      journalEnteredAmount: document.getElementById("journalEnteredAmount"),
+      journalLimitPrice: document.getElementById("journalLimitPrice"),
+      journalFilledQuantity: document.getElementById("journalFilledQuantity"),
+      journalFees: document.getElementById("journalFees"),
+      journalPayoutAmount: document.getElementById("journalPayoutAmount"),
+      journalSubmittedAt: document.getElementById("journalSubmittedAt"),
+      journalFilledAt: document.getElementById("journalFilledAt"),
+      journalSettledAt: document.getElementById("journalSettledAt"),
+      journalQuestion: document.getElementById("journalQuestion"),
+      journalNotes: document.getElementById("journalNotes"),
+      journalFormHint: document.getElementById("journalFormHint"),
+      journalTableWrap: document.getElementById("journalTableWrap"),
+      linkJournalCsv: document.getElementById("linkJournalCsv"),
       logBody: document.getElementById("logBody"),
       btnStart: document.getElementById("btnStart"),
       btnStop: document.getElementById("btnStop"),
@@ -1740,6 +1900,24 @@
       return data;
     }
 
+    async function apiManualTransactions(limit = 200) {
+      return apiGet(`/api/manual-transactions?limit=${encodeURIComponent(String(limit))}`);
+    }
+
+    async function apiSaveManualTransaction(payload) {
+      const res = await fetch("/api/manual-transactions", {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      return data;
+    }
+
     function realtimeTelegramNotifyKey(data) {
       const eventId = String(data.espn_event_id || data.event_id || "").trim();
       const guessSide = String(data.guess_side || "").trim().toLowerCase();
@@ -2069,6 +2247,206 @@
       const items = Array.isArray(data.items) ? data.items : [];
       renderHistoryGames(items);
       el.historyHint.textContent = `已加载 ${items.length} 场已结束比赛，点“回放”即可看建议和图表。`;
+    }
+
+    function resetJournalForm(message = "新建记录") {
+      state.manualJournalEditingId = "";
+      const today = new Date().toISOString().slice(0, 10);
+      el.journalEditingState.textContent = message;
+      el.journalEventDate.value = today;
+      el.journalRivalry.value = "";
+      el.journalTeam.value = "";
+      el.journalSide.value = "YES";
+      el.journalOrderType.value = "LIMIT_BUY";
+      el.journalStatus.value = "FILLED";
+      el.journalResult.value = "PENDING";
+      el.journalEnteredAmount.value = "";
+      el.journalLimitPrice.value = "";
+      el.journalFilledQuantity.value = "";
+      el.journalFees.value = "";
+      el.journalPayoutAmount.value = "";
+      el.journalSubmittedAt.value = "";
+      el.journalFilledAt.value = "";
+      el.journalSettledAt.value = "";
+      el.journalQuestion.value = "";
+      el.journalNotes.value = "";
+      el.journalFormHint.textContent = "保存后会自动计算成本、净盈亏和 ROI，并导出 CSV。";
+    }
+
+    function fillJournalExample() {
+      state.manualJournalEditingId = "";
+      el.journalEditingState.textContent = "截图示例：GSW 限价买单（保存前可继续修改）";
+      el.journalEventDate.value = "2026-03-10";
+      el.journalRivalry.value = "CHI @ GS";
+      el.journalTeam.value = "GSW";
+      el.journalSide.value = "YES";
+      el.journalOrderType.value = "LIMIT_BUY";
+      el.journalStatus.value = "FILLED";
+      el.journalResult.value = "PENDING";
+      el.journalEnteredAmount.value = "100.00";
+      el.journalLimitPrice.value = "0.96";
+      el.journalFilledQuantity.value = "102";
+      el.journalFees.value = "";
+      el.journalPayoutAmount.value = "";
+      el.journalSubmittedAt.value = "2026-03-10 21:16";
+      el.journalFilledAt.value = "2026-03-10 21:16";
+      el.journalSettledAt.value = "";
+      el.journalQuestion.value = "Will Golden State win the Chicago at Golden State?";
+      el.journalNotes.value = "根据截图预填；其它 payout / settle 信息请你再确认后补上。";
+      el.journalFormHint.textContent = "已填入最清晰的 GSW 截图示例。请核对后保存。";
+    }
+
+    function populateJournalForm(row) {
+      state.manualJournalEditingId = String(row.id || "");
+      el.journalEditingState.textContent = `编辑记录：${state.manualJournalEditingId}`;
+      el.journalEventDate.value = String(row.event_date || "").slice(0, 10);
+      el.journalRivalry.value = String(row.rivalry || "");
+      el.journalTeam.value = String(row.team || "");
+      el.journalSide.value = String(row.side || "YES");
+      el.journalOrderType.value = String(row.order_type || "LIMIT_BUY");
+      el.journalStatus.value = String(row.status || "FILLED");
+      el.journalResult.value = String(row.result || "PENDING");
+      el.journalEnteredAmount.value = row.entered_amount || "";
+      el.journalLimitPrice.value = row.limit_price || "";
+      el.journalFilledQuantity.value = row.filled_quantity || "";
+      el.journalFees.value = row.fees || "";
+      el.journalPayoutAmount.value = row.payout_amount || "";
+      el.journalSubmittedAt.value = row.submitted_at || "";
+      el.journalFilledAt.value = row.filled_at || "";
+      el.journalSettledAt.value = row.settled_at || "";
+      el.journalQuestion.value = row.market_question || "";
+      el.journalNotes.value = row.notes || "";
+      el.journalFormHint.textContent = "编辑后点击“保存记录”会覆盖这一条。";
+    }
+
+    function readJournalForm() {
+      return {
+        id: state.manualJournalEditingId || "",
+        source: "manual",
+        event_date: el.journalEventDate.value.trim(),
+        rivalry: el.journalRivalry.value.trim(),
+        market_question: el.journalQuestion.value.trim(),
+        side: el.journalSide.value,
+        team: el.journalTeam.value.trim().toUpperCase(),
+        order_type: el.journalOrderType.value,
+        status: el.journalStatus.value,
+        result: el.journalResult.value,
+        submitted_at: el.journalSubmittedAt.value.trim(),
+        filled_at: el.journalFilledAt.value.trim(),
+        settled_at: el.journalSettledAt.value.trim(),
+        entered_amount: el.journalEnteredAmount.value.trim(),
+        limit_price: el.journalLimitPrice.value.trim(),
+        filled_quantity: el.journalFilledQuantity.value.trim(),
+        fees: el.journalFees.value.trim(),
+        payout_amount: el.journalPayoutAmount.value.trim(),
+        notes: el.journalNotes.value.trim(),
+      };
+    }
+
+    function renderJournalSummary(data) {
+      const summary = data && typeof data === "object" ? (data.summary || {}) : {};
+      const netPnl = Number(summary.net_pnl || 0);
+      const cards = [
+        { k: "累计净盈亏", v: fmtSignedMoney(summary.net_pnl, 2), cls: netPnl > 0 ? "pos" : netPnl < 0 ? "neg" : "" },
+        { k: "总投入", v: fmtMoney(summary.total_cost, 2), cls: "" },
+        { k: "总结算", v: fmtMoney(summary.total_payout, 2), cls: "" },
+        { k: "记录数", v: String(Number(summary.total_records || 0)), cls: "" },
+        { k: "已结算 / 未结算", v: `${Number(summary.settled_records || 0)} / ${Number(summary.open_records || 0)}`, cls: "" },
+        { k: "胜率", v: fmtPct(summary.win_rate, 2), cls: "" },
+      ];
+      el.journalSummary.innerHTML = cards.map((item) => `
+        <div class="metric">
+          <p class="k">${esc(item.k)}</p>
+          <p class="v ${item.cls}">${esc(item.v)}</p>
+        </div>
+      `).join("");
+    }
+
+    function renderJournalTable(rows) {
+      if (!Array.isArray(rows) || !rows.length) {
+        el.journalTableWrap.innerHTML = `<div class="empty">还没有真实交易记录。先填一条，再慢慢补历史单子。</div>`;
+        return;
+      }
+      const body = rows.map((row) => {
+        const pnlNum = Number(row.realized_pnl);
+        const pnlClass = Number.isFinite(pnlNum) ? (pnlNum > 0 ? "pos" : pnlNum < 0 ? "neg" : "") : "";
+        return `
+          <tr>
+            <td>
+              <div>${esc(row.rivalry || "-")}</div>
+              <div class="tiny mono">${esc(row.event_date || row.submitted_at || row.id || "-")}</div>
+            </td>
+            <td>
+              <div>${esc(row.side || "-")} · ${esc(row.team || "-")}</div>
+              <div class="tiny">${esc(row.order_type || "-")} / ${esc(row.status || "-")}</div>
+            </td>
+            <td class="mono">${esc(fmtMoney(row.entered_amount, 2))}</td>
+            <td class="mono">${esc(fmtNum(row.filled_quantity, 2))}</td>
+            <td class="mono">${esc(fmtNum(row.limit_price, 4))}</td>
+            <td class="mono">${esc(fmtMoney(row.payout_amount, 2))}</td>
+            <td class="mono ${pnlClass}">${esc(fmtSignedMoney(row.realized_pnl, 2))}</td>
+            <td class="mono">${esc(row.result || "-")}</td>
+            <td><button class="btn-aux" data-journal-edit="${esc(row.id || "")}">编辑</button></td>
+          </tr>
+        `;
+      }).join("");
+      el.journalTableWrap.innerHTML = `
+        <table class="discover-list">
+          <thead>
+            <tr>
+              <th>比赛</th>
+              <th>方向</th>
+              <th>投入</th>
+              <th>数量</th>
+              <th>价格</th>
+              <th>Payout</th>
+              <th>净盈亏</th>
+              <th>结果</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>${body}</tbody>
+        </table>
+      `;
+      el.journalTableWrap.querySelectorAll("[data-journal-edit]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const id = String(btn.getAttribute("data-journal-edit") || "");
+          const row = state.manualJournalRows.find((item) => String(item.id || "") === id);
+          if (row) {
+            populateJournalForm(row);
+          }
+        });
+      });
+    }
+
+    async function loadManualJournal() {
+      el.journalHint.textContent = "加载真实交易记录中...";
+      const data = await apiManualTransactions(200);
+      const rows = Array.isArray(data.rows) ? data.rows : [];
+      state.manualJournalRows = rows;
+      renderJournalSummary(data);
+      renderJournalTable(rows);
+      const csvHref = data.files && data.files.csv ? data.files.csv : "/logs/manual_transactions.csv";
+      el.linkJournalCsv.href = csvHref;
+      el.journalHint.textContent = `已加载 ${rows.length} 条真实交易记录。`;
+    }
+
+    async function saveManualJournal() {
+      el.journalFormHint.textContent = "保存中...";
+      const reply = await apiSaveManualTransaction(readJournalForm());
+      const journal = reply.journal || {};
+      const rows = Array.isArray(journal.rows) ? journal.rows : [];
+      state.manualJournalRows = rows;
+      renderJournalSummary(journal);
+      renderJournalTable(rows);
+      if (journal.files && journal.files.csv) {
+        el.linkJournalCsv.href = journal.files.csv;
+      }
+      const saved = reply.saved || {};
+      const label = saved.rivalry || saved.market_question || saved.id || "记录";
+      el.journalHint.textContent = `已保存：${label}`;
+      resetJournalForm("新建记录");
+      el.journalFormHint.textContent = `保存完成：${label}`;
     }
 
     function filteredDryrunRows(rows) {
@@ -2764,6 +3142,10 @@
     el.btnEspn.addEventListener("click", () => loadEspn().catch((err) => { el.discoverWrap.innerHTML = `<div class="empty">Error: ${err}</div>`; }));
     el.btnLoadHistoryGames.addEventListener("click", () => loadHistoryGames().catch((err) => { el.historyHint.textContent = `加载失败: ${err}`; }));
     el.btnLoadDryrun.addEventListener("click", () => loadDryrun().catch((err) => { el.dryrunHint.textContent = `加载失败: ${err}`; }));
+    el.btnJournalRefresh.addEventListener("click", () => loadManualJournal().catch((err) => { el.journalHint.textContent = `加载失败: ${err}`; }));
+    el.btnJournalReset.addEventListener("click", () => resetJournalForm("新建记录"));
+    el.btnJournalFillExample.addEventListener("click", fillJournalExample);
+    el.btnJournalSave.addEventListener("click", () => saveManualJournal().catch((err) => { el.journalFormHint.textContent = `保存失败: ${err}`; }));
     el.dryrunAutoRefresh.addEventListener("change", () => {
       if (el.dryrunAutoRefresh.checked) {
         startDryrunAutoRefresh();
@@ -2866,9 +3248,11 @@
       el.historyDate.value = `${yyyy2}${mm2}${dd2}`;
       applyModeLabels();
       applyModeVisibility();
+      resetJournalForm("新建记录");
       loadGamePicker().catch((err) => { el.gamePickerHint.textContent = `加载失败: ${err}`; });
       loadHistoryGames().catch((err) => { el.historyHint.textContent = `加载失败: ${err}`; });
       loadDryrun().catch((err) => { el.dryrunHint.textContent = `加载失败: ${err}`; });
+      loadManualJournal().catch((err) => { el.journalHint.textContent = `加载失败: ${err}`; });
       updateBudgetCalc();
       startHotReloadWatcher();
       startDryrunAutoRefresh();
