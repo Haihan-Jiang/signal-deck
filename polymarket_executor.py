@@ -10,9 +10,13 @@ from __future__ import annotations
 import csv
 import json
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 
 DEFAULT_LOG_DIR = Path(os.environ.get("SIGNAL_DECK_LOG_DIR", str(Path.home() / ".signal-deck" / "logs"))).expanduser()
@@ -20,6 +24,7 @@ DEFAULT_RUNTIME_DIR = Path.home() / ".signal-deck" / "runtime"
 DEFAULT_ENV_PATH = DEFAULT_RUNTIME_DIR / "polymarket.env"
 DEFAULT_EXECUTION_CSV_PATH = DEFAULT_LOG_DIR / "polymarket_execution.csv"
 DEFAULT_EXECUTION_STATE_PATH = DEFAULT_LOG_DIR / "polymarket_execution_state.json"
+DEFAULT_PROBE_STATE_PATH = DEFAULT_LOG_DIR / "polymarket_probe.json"
 DEFAULT_MODE = "paper"
 
 EXECUTION_COLUMNS = [
@@ -78,7 +83,14 @@ def _parse_mode(value: Any) -> str:
     return mode
 
 
-def load_runtime_config(env_path: Path | None = None, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+def _parse_int(value: Any, default: int) -> int:
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError, AttributeError):
+        return default
+
+
+def _load_runtime_values(env_path: Path | None = None, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     env_path = env_path or DEFAULT_ENV_PATH
     file_values = _load_shell_exports(env_path)
     merged: dict[str, Any] = {}
@@ -89,36 +101,211 @@ def load_runtime_config(env_path: Path | None = None, overrides: dict[str, Any] 
     def pick(key: str, default: str = "") -> str:
         return str(os.environ.get(key) or merged.get(key) or default).strip()
 
-    mode = _parse_mode(
-        pick("SIGNAL_DECK_EXECUTION_MODE") or pick("POLYMARKET_EXECUTION_MODE") or DEFAULT_MODE
+    return {
+        "mode": _parse_mode(
+            pick("SIGNAL_DECK_EXECUTION_MODE") or pick("POLYMARKET_EXECUTION_MODE") or DEFAULT_MODE
+        ),
+        "env_path": env_path,
+        "csv_path_raw": pick("SIGNAL_DECK_EXECUTION_CSV_PATH") or pick("POLYMARKET_EXECUTION_CSV_PATH"),
+        "state_path_raw": pick("SIGNAL_DECK_EXECUTION_STATE_PATH") or pick("POLYMARKET_EXECUTION_STATE_PATH"),
+        "private_key": pick("POLYMARKET_PRIVATE_KEY"),
+        "proxy_address": pick("POLYMARKET_PROXY_ADDRESS") or pick("POLYMARKET_FUNDER"),
+        "api_key": pick("POLYMARKET_API_KEY"),
+        "api_secret": pick("POLYMARKET_API_SECRET"),
+        "api_passphrase": pick("POLYMARKET_API_PASSPHRASE"),
+        "clob_host": pick("POLYMARKET_CLOB_HOST", "https://clob.polymarket.com"),
+        "chain_id": _parse_int(pick("POLYMARKET_CHAIN_ID", "137"), 137),
+        "signature_type": _parse_int(pick("POLYMARKET_SIGNATURE_TYPE", "0"), 0),
+        "relayer_host": pick("POLYMARKET_RELAYER_HOST", "https://relayer-v2.polymarket.com"),
+        "relayer_api_key": pick("POLYMARKET_RELAYER_API_KEY"),
+        "relayer_api_key_address": pick("POLYMARKET_RELAYER_API_KEY_ADDRESS"),
+    }
+
+
+def load_runtime_config(env_path: Path | None = None, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+    values = _load_runtime_values(env_path=env_path, overrides=overrides)
+
+    creds_present = bool(
+        values["private_key"]
+        and values["proxy_address"]
+        and values["api_key"]
+        and values["api_secret"]
+        and values["api_passphrase"]
     )
-    csv_path_raw = pick("SIGNAL_DECK_EXECUTION_CSV_PATH") or pick("POLYMARKET_EXECUTION_CSV_PATH")
-    state_path_raw = pick("SIGNAL_DECK_EXECUTION_STATE_PATH") or pick("POLYMARKET_EXECUTION_STATE_PATH")
-
-    private_key = pick("POLYMARKET_PRIVATE_KEY")
-    proxy_address = pick("POLYMARKET_PROXY_ADDRESS") or pick("POLYMARKET_FUNDER")
-    api_key = pick("POLYMARKET_API_KEY")
-    api_secret = pick("POLYMARKET_API_SECRET")
-    api_passphrase = pick("POLYMARKET_API_PASSPHRASE")
-    clob_host = pick("POLYMARKET_CLOB_HOST", "https://clob.polymarket.com")
-    chain_id = pick("POLYMARKET_CHAIN_ID", "137")
-
-    creds_present = bool(private_key and proxy_address and api_key and api_secret and api_passphrase)
 
     return {
-        "mode": mode,
-        "env_path": str(env_path),
-        "csv_path": Path(csv_path_raw).expanduser() if csv_path_raw else DEFAULT_EXECUTION_CSV_PATH,
-        "state_path": Path(state_path_raw).expanduser() if state_path_raw else DEFAULT_EXECUTION_STATE_PATH,
-        "clob_host": clob_host,
-        "chain_id": chain_id,
-        "private_key_present": bool(private_key),
-        "proxy_address_present": bool(proxy_address),
-        "api_key_present": bool(api_key),
-        "api_secret_present": bool(api_secret),
-        "api_passphrase_present": bool(api_passphrase),
+        "mode": values["mode"],
+        "env_path": str(values["env_path"]),
+        "csv_path": Path(values["csv_path_raw"]).expanduser() if values["csv_path_raw"] else DEFAULT_EXECUTION_CSV_PATH,
+        "state_path": Path(values["state_path_raw"]).expanduser() if values["state_path_raw"] else DEFAULT_EXECUTION_STATE_PATH,
+        "probe_state_path": DEFAULT_PROBE_STATE_PATH,
+        "clob_host": values["clob_host"],
+        "chain_id": values["chain_id"],
+        "signature_type": values["signature_type"],
+        "relayer_host": values["relayer_host"],
+        "private_key_present": bool(values["private_key"]),
+        "proxy_address_present": bool(values["proxy_address"]),
+        "api_key_present": bool(values["api_key"]),
+        "api_secret_present": bool(values["api_secret"]),
+        "api_passphrase_present": bool(values["api_passphrase"]),
+        "relayer_api_key_present": bool(values["relayer_api_key"]),
+        "relayer_api_key_address_present": bool(values["relayer_api_key_address"]),
         "creds_present": creds_present,
     }
+
+
+def _mask_secret(value: str, *, keep_left: int = 6, keep_right: int = 4) -> str:
+    if not value:
+        return ""
+    if len(value) <= keep_left + keep_right:
+        return value
+    return f"{value[:keep_left]}...{value[-keep_right:]}"
+
+
+def _write_shell_exports(path: Path, values: dict[str, str]) -> None:
+    _ensure_parent(path)
+    lines = ["# Managed by probe_polymarket_api.py"]
+    for key in sorted(values):
+        lines.append(f"export {key}={json.dumps(str(values[key]))}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _persist_api_creds(env_path: Path, api_key: str, api_secret: str, api_passphrase: str) -> None:
+    values = _load_shell_exports(env_path)
+    values["POLYMARKET_API_KEY"] = api_key
+    values["POLYMARKET_API_SECRET"] = api_secret
+    values["POLYMARKET_API_PASSPHRASE"] = api_passphrase
+    _write_shell_exports(env_path, values)
+
+
+def probe_polymarket_connection(
+    *,
+    env_path: Path | None = None,
+    overrides: dict[str, Any] | None = None,
+    persist_api_creds: bool = False,
+) -> dict[str, Any]:
+    values = _load_runtime_values(env_path=env_path, overrides=overrides)
+    config = load_runtime_config(env_path=env_path, overrides=overrides)
+    checked_at = datetime.now().isoformat(timespec="seconds")
+    result: dict[str, Any] = {
+        "ok": False,
+        "checked_at": checked_at,
+        "python": sys.version.split()[0],
+        "config": {
+            "env_path": str(values["env_path"]),
+            "clob_host": values["clob_host"],
+            "chain_id": values["chain_id"],
+            "signature_type": values["signature_type"],
+            "relayer_host": values["relayer_host"],
+            "private_key_present": config["private_key_present"],
+            "proxy_address_present": config["proxy_address_present"],
+            "api_key_present": config["api_key_present"],
+            "api_secret_present": config["api_secret_present"],
+            "api_passphrase_present": config["api_passphrase_present"],
+            "relayer_api_key_present": config["relayer_api_key_present"],
+            "relayer_api_key_address_present": config["relayer_api_key_address_present"],
+        },
+        "clob": {},
+        "relayer": {},
+        "errors": [],
+    }
+
+    private_key = values["private_key"]
+    if not private_key:
+        result["errors"].append("POLYMARKET_PRIVATE_KEY missing")
+        _write_execution_state(config["probe_state_path"], result)
+        return result
+
+    try:
+        from eth_account import Account
+        from py_clob_client.client import ClobClient
+    except Exception as exc:
+        result["errors"].append(
+            f"Polymarket SDK unavailable: {exc}. Use Python >= 3.9.10 with py-clob-client installed."
+        )
+        _write_execution_state(config["probe_state_path"], result)
+        return result
+
+    signer_address = Account.from_key(private_key).address
+    funder = values["proxy_address"] or signer_address
+    result["clob"]["signer_address"] = signer_address
+    result["clob"]["funder_address"] = funder
+
+    try:
+        l1 = ClobClient(
+            values["clob_host"],
+            chain_id=values["chain_id"],
+            key=private_key,
+            signature_type=values["signature_type"],
+            funder=funder,
+        )
+        result["clob"]["get_ok"] = l1.get_ok()
+        result["clob"]["server_time"] = l1.get_server_time()
+        creds = l1.create_or_derive_api_creds()
+        result["clob"]["derived_api_key"] = _mask_secret(str(creds.api_key), keep_left=8, keep_right=6)
+        if persist_api_creds:
+            _persist_api_creds(
+                Path(values["env_path"]),
+                api_key=str(creds.api_key),
+                api_secret=str(creds.api_secret),
+                api_passphrase=str(creds.api_passphrase),
+            )
+            result["clob"]["persisted_api_creds"] = True
+        l2 = ClobClient(
+            values["clob_host"],
+            chain_id=values["chain_id"],
+            key=private_key,
+            creds=creds,
+            signature_type=values["signature_type"],
+            funder=funder,
+        )
+        api_keys_payload = l2.get_api_keys()
+        api_keys = api_keys_payload.get("apiKeys") if isinstance(api_keys_payload, dict) else []
+        orders_payload = l2.get_orders()
+        open_orders_count = len(orders_payload) if isinstance(orders_payload, list) else 0
+        result["clob"]["api_keys_count"] = len(api_keys or [])
+        result["clob"]["open_orders_count"] = open_orders_count
+        result["clob"]["status"] = "ok"
+    except Exception as exc:
+        result["clob"]["status"] = "error"
+        result["errors"].append(f"CLOB probe failed: {exc}")
+
+    relayer_api_key = values["relayer_api_key"]
+    relayer_api_key_address = values["relayer_api_key_address"]
+    if relayer_api_key and relayer_api_key_address:
+        url = values["relayer_host"].rstrip("/") + "/relayer/api/keys"
+        request = Request(
+            url,
+            headers={
+                "RELAYER_API_KEY": relayer_api_key,
+                "RELAYER_API_KEY_ADDRESS": relayer_api_key_address,
+                "User-Agent": "PolymarketAutoTrader/1.0",
+                "Accept": "application/json,text/plain,*/*",
+            },
+        )
+        try:
+            with urlopen(request, timeout=15) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            keys = payload if isinstance(payload, list) else []
+            result["relayer"] = {
+                "status": "ok",
+                "keys_count": len(keys),
+                "key_address": relayer_api_key_address,
+                "api_key": _mask_secret(relayer_api_key, keep_left=8, keep_right=6),
+            }
+        except HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            result["relayer"] = {"status": "error", "http_status": exc.code}
+            result["errors"].append(f"Relayer probe failed: HTTP {exc.code}: {body[:180]}")
+        except URLError as exc:
+            result["relayer"] = {"status": "error"}
+            result["errors"].append(f"Relayer probe failed: {exc}")
+    else:
+        result["relayer"] = {"status": "skipped"}
+
+    result["ok"] = result["clob"].get("status") == "ok" and result["relayer"].get("status") in {"ok", "skipped"}
+    _write_execution_state(config["probe_state_path"], result)
+    return result
 
 
 def _append_execution_row(csv_path: Path, row: dict[str, str]) -> None:

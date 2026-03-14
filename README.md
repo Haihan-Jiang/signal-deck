@@ -110,9 +110,13 @@ Optional live credentials are read from the same file:
 ```bash
 export POLYMARKET_PRIVATE_KEY="..."
 export POLYMARKET_PROXY_ADDRESS="..."
+export POLYMARKET_SIGNATURE_TYPE="0"
 export POLYMARKET_API_KEY="..."
 export POLYMARKET_API_SECRET="..."
 export POLYMARKET_API_PASSPHRASE="..."
+export POLYMARKET_RELAYER_HOST="https://relayer-v2.polymarket.com"
+export POLYMARKET_RELAYER_API_KEY="..."
+export POLYMARKET_RELAYER_API_KEY_ADDRESS="..."
 ```
 
 Current behavior:
@@ -125,6 +129,27 @@ Execution rows are available over:
 
 - `GET /api/execution/latest`
 - `GET /logs/polymarket_execution.csv`
+
+## Polymarket Connectivity Probe
+
+Use the read-only probe before wiring any live order path:
+
+```bash
+~/.signal-deck/venv312/bin/python probe_polymarket_api.py --persist-api-creds
+```
+
+It verifies:
+
+- public CLOB connectivity
+- wallet-based CLOB auth
+- CLOB API key derivation / retrieval
+- relayer API key access
+
+Probe results are written to:
+
+- `~/.signal-deck/logs/polymarket_probe.json`
+
+The probe does not create or submit orders.
 
 ## Telegram Commands
 
