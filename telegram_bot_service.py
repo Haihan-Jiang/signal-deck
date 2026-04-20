@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import time
 from datetime import datetime
@@ -28,6 +29,10 @@ DEFAULT_IDLE_SLEEP = 1.0
 SERVICE_LABELS = {
     "dryrun": "com.haihan.signaldeck.dryrun",
     "telegrambot": "com.haihan.signaldeck.telegrambot",
+}
+SYSTEMD_UNITS = {
+    "dryrun": "polymarket-autotrader-dryrun.service",
+    "telegrambot": "polymarket-autotrader-telegrambot.service",
 }
 
 
@@ -247,15 +252,16 @@ def launchctl_snapshot(label: str) -> dict[str, str]:
             text=True,
         )
     except Exception as exc:
-        return {"loaded": "0", "error": str(exc)}
+        return {"manager": "launchctl", "loaded": "0", "error": str(exc)}
 
     if result.returncode != 0:
         return {
+            "manager": "launchctl",
             "loaded": "0",
             "error": (result.stderr or result.stdout or f"launchctl exit {result.returncode}").strip(),
         }
 
-    snapshot = {"loaded": "1"}
+    snapshot = {"manager": "launchctl", "loaded": "1"}
     for raw_line in result.stdout.splitlines():
         line = raw_line.strip()
         if line.startswith("state ="):
@@ -273,14 +279,76 @@ def launchctl_snapshot(label: str) -> dict[str, str]:
     return snapshot
 
 
+def systemd_snapshot(unit: str) -> dict[str, str]:
+    try:
+        result = subprocess.run(
+            [
+                "systemctl",
+                "--user",
+                "show",
+                unit,
+                "--property=LoadState,ActiveState,SubState,MainPID,NRestarts,ExecMainStatus,Environment",
+                "--no-pager",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except Exception as exc:
+        return {"manager": "systemd", "loaded": "0", "error": str(exc)}
+
+    if result.returncode != 0:
+        return {
+            "manager": "systemd",
+            "loaded": "0",
+            "error": (result.stderr or result.stdout or f"systemctl exit {result.returncode}").strip(),
+        }
+
+    raw: dict[str, str] = {}
+    for raw_line in result.stdout.splitlines():
+        if "=" not in raw_line:
+            continue
+        key, value = raw_line.split("=", 1)
+        raw[key.strip()] = value.strip()
+
+    load_state = raw.get("LoadState", "")
+    active_state = raw.get("ActiveState", "")
+    sub_state = raw.get("SubState", "")
+    pid = raw.get("MainPID", "")
+    env = raw.get("Environment", "")
+
+    snapshot = {
+        "manager": "systemd",
+        "loaded": "1" if load_state == "loaded" else "0",
+        "state": f"{active_state}/{sub_state}".strip("/"),
+        "pid": "" if pid == "0" else pid,
+        "runs": raw.get("NRestarts", ""),
+        "last_exit_code": raw.get("ExecMainStatus", ""),
+    }
+    for part in env.split():
+        if part.startswith("SIGNAL_DECK_LOOP_INTERVAL="):
+            snapshot["loop_interval"] = part.split("=", 1)[1]
+            break
+    return snapshot
+
+
+def service_snapshot(kind: str) -> dict[str, str]:
+    if shutil.which("systemctl"):
+        snapshot = systemd_snapshot(SYSTEMD_UNITS[kind])
+        if not snapshot.get("error") or not shutil.which("launchctl"):
+            return snapshot
+    return launchctl_snapshot(SERVICE_LABELS[kind])
+
+
 def build_botstatus_text() -> str:
-    dryrun = launchctl_snapshot(SERVICE_LABELS["dryrun"])
-    telegrambot = launchctl_snapshot(SERVICE_LABELS["telegrambot"])
+    dryrun = service_snapshot("dryrun")
+    telegrambot = service_snapshot("telegrambot")
     dryrun_log = tail_last_nonempty_line(DRYRUN_LOG_PATH)
     telegram_log = tail_last_nonempty_line(TELEGRAM_LOG_PATH)
 
     lines = [
         "Polymarket Auto Trader botstatus",
+        f"manager={dryrun.get('manager') or telegrambot.get('manager') or 'launchctl'}",
         (
             f"dryrun: loaded={dryrun.get('loaded', '0')} "
             f"state={dryrun.get('state', '-')} "
