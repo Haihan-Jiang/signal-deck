@@ -499,6 +499,68 @@
       color: #0f6d4a;
     }
 
+    .execution-preview {
+      border: 1px solid #98c9bb;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #f3fbf7, #f8fdfb);
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .execution-preview-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .execution-preview-title {
+      margin: 0;
+      font-size: 0.96rem;
+      font-weight: 700;
+      color: #0f6d4a;
+    }
+
+    .execution-preview-body {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .execution-preview-item {
+      border: 1px solid #b8d6cf;
+      border-radius: 9px;
+      background: #fbfefc;
+      padding: 7px;
+    }
+
+    .execution-preview-item .k {
+      margin: 0 0 4px;
+      font-size: 0.68rem;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      text-transform: uppercase;
+    }
+
+    .execution-preview-item .v {
+      margin: 0;
+      font-family: var(--mono);
+      font-size: 0.84rem;
+      font-weight: 600;
+      color: #173f38;
+      word-break: break-word;
+    }
+
+    .execution-preview-item .v.pos {
+      color: #0f6d4a;
+    }
+
+    .execution-preview-item .v.neg {
+      color: #9f2d18;
+    }
+
     .history-charts {
       display: grid;
       gap: 8px;
@@ -594,7 +656,7 @@
         </div>
         <div class="btn-row">
           <button class="btn-aux" id="btnLoadHistoryGames">加载历史比赛</button>
-          <span class="hint" id="historyHint">点击任意比赛会按后台默认最大利润策略（180/6/[0.80,0.95]）显示胜负、买入建议和图表。</span>
+          <span class="hint" id="historyHint">点击任意比赛会按后台默认保守策略（140/7/[0.82,0.95]）显示胜负、买入建议和图表。</span>
         </div>
         <div id="historyGamesWrap" class="empty">先点“加载历史比赛”。</div>
 
@@ -616,7 +678,7 @@
       </section>
 
       <section class="box" id="dryrunBox">
-        <h3>Dry Run 记录</h3>
+        <h3>策略模拟记录（Dry Run）</h3>
         <div class="btn-row">
           <button class="btn-aux" id="btnLoadDryrun">刷新记录</button>
           <label>日期
@@ -627,11 +689,7 @@
             <input id="dryrunAutoRefresh" type="checkbox" checked />
             <span>AJAX 自动刷新（10s）</span>
           </label>
-          <label class="check">
-            <input id="dryrunTriggeredOnly" type="checkbox" />
-            <span>只看最近触发比赛</span>
-          </label>
-          <span class="hint" id="dryrunHint">显示最近 dry-run 文本快照和 Excel 记录。</span>
+          <span class="hint" id="dryrunHint">显示策略模拟快照和理论交易流水，不是 Polymarket 真实下单记录。</span>
         </div>
         <div class="dryrun-links">
           <a class="link-chip" id="linkDryrunCsv" href="/logs/dryrun_signals.csv" target="_blank" rel="noreferrer">打开 CSV</a>
@@ -640,10 +698,9 @@
           <a class="link-chip" id="linkDryrunCron" href="/logs/dryrun_cron.log" target="_blank" rel="noreferrer">打开 Cron Log</a>
         </div>
         <div class="metrics dryrun-pnl-metrics" id="dryrunPnlMetrics"></div>
-        <div class="hint" id="dryrunPnlHint">理论盈亏按每笔 $100 dry-run 预算计算，成交价使用 `target_max_buy_price`，成本使用 `fee_total`。</div>
+        <div class="hint" id="dryrunPnlHint">理论盈亏按每笔 $100 dry-run 预算计算，成交价使用 `target_max_buy_price`，成本使用 `fee_total`；这里只是模拟，不是真实成交。</div>
         <pre class="dryrun-pre" id="dryrunText">加载中...</pre>
         <div class="table-wrap" id="dryrunTradesWrap"></div>
-        <div class="table-wrap" id="dryrunTableWrap"></div>
       </section>
 
       <section class="box" id="journalBox">
@@ -659,19 +716,34 @@
         <div class="table-wrap" id="journalTableWrap"></div>
       </section>
 
+      <section class="box" id="executionBox">
+        <h3>API 执行预览（Polymarket）</h3>
+        <div class="btn-row">
+          <button class="btn-aux" id="btnExecutionRefresh">刷新状态</button>
+          <span class="hint" id="executionHint">显示 CLOB / relayer 连通状态，以及最近一次 API 执行预览；当前仍不是 Polymarket 真实成交回执。</span>
+        </div>
+        <div class="dryrun-links">
+          <a class="link-chip" id="linkExecutionCsv" href="/logs/polymarket_execution.csv" target="_blank" rel="noreferrer">打开 Execution CSV</a>
+          <a class="link-chip" id="linkExecutionProbe" href="/logs/polymarket_probe.json" target="_blank" rel="noreferrer">打开 Probe JSON</a>
+        </div>
+        <div class="execution-preview" id="executionPreview"></div>
+        <div class="metrics journal-summary" id="executionSummary"></div>
+        <div class="table-wrap" id="executionTableWrap"></div>
+      </section>
+
     </section>
   </main>
 
   <script>
     const DEFAULT_WINNER_STRATEGY = Object.freeze({
-      maxTimeLeft: 180,
-      minLead: 6,
-      pMin: 0.80,
+      maxTimeLeft: 140,
+      minLead: 7,
+      pMin: 0.82,
       pMax: 0.95,
-      minEdge: 0.025,
-      maxBuyPrice: 0.91,
+      minEdge: 0.03,
+      maxBuyPrice: 0.89,
       feeTotal: 0.02,
-      capWinRate: 0.9787,
+      capWinRate: 1.0000,
     });
 
     function installLegacyGhostUi() {
@@ -856,6 +928,7 @@
       lastDryrunRows: [],
       lastDryrunTrades: [],
       manualJournalRows: [],
+      executionRows: [],
       manualJournalEditingId: "",
       dryrunRefreshTimer: null,
       dryrunRefreshInFlight: false,
@@ -972,13 +1045,11 @@
       dryrunDate: document.getElementById("dryrunDate"),
       btnDryrunClearDate: document.getElementById("btnDryrunClearDate"),
       dryrunAutoRefresh: document.getElementById("dryrunAutoRefresh"),
-      dryrunTriggeredOnly: document.getElementById("dryrunTriggeredOnly"),
       dryrunHint: document.getElementById("dryrunHint"),
       dryrunPnlHint: document.getElementById("dryrunPnlHint"),
       dryrunText: document.getElementById("dryrunText"),
       dryrunPnlMetrics: document.getElementById("dryrunPnlMetrics"),
       dryrunTradesWrap: document.getElementById("dryrunTradesWrap"),
-      dryrunTableWrap: document.getElementById("dryrunTableWrap"),
       linkDryrunCsv: document.getElementById("linkDryrunCsv"),
       linkDryrunTrades: document.getElementById("linkDryrunTrades"),
       linkDryrunTxt: document.getElementById("linkDryrunTxt"),
@@ -988,6 +1059,13 @@
       journalSummary: document.getElementById("journalSummary"),
       journalTableWrap: document.getElementById("journalTableWrap"),
       linkJournalCsv: document.getElementById("linkJournalCsv"),
+      btnExecutionRefresh: document.getElementById("btnExecutionRefresh"),
+      executionHint: document.getElementById("executionHint"),
+      executionPreview: document.getElementById("executionPreview"),
+      executionSummary: document.getElementById("executionSummary"),
+      executionTableWrap: document.getElementById("executionTableWrap"),
+      linkExecutionCsv: document.getElementById("linkExecutionCsv"),
+      linkExecutionProbe: document.getElementById("linkExecutionProbe"),
       logBody: document.getElementById("logBody"),
       btnStart: document.getElementById("btnStart"),
       btnStop: document.getElementById("btnStop"),
@@ -1287,7 +1365,7 @@
       applyModeLabels();
       applyModeVisibility();
       updateBudgetCalc();
-      el.budgetHint.textContent = "已应用默认最大利润策略：选比赛后可直接开始轮询。";
+      el.budgetHint.textContent = "已应用默认保守策略：选比赛后可直接开始轮询。";
       el.robustGateHint.textContent = "点击“历史稳健模式（自动门控）”可启用门控拦截。";
       loadGamePicker().catch((err) => { el.gamePickerHint.textContent = `加载失败: ${err}`; });
     }
@@ -1337,7 +1415,7 @@
         maxBuyPrice: DEFAULT_WINNER_STRATEGY.maxBuyPrice,
         feeTotal: DEFAULT_WINNER_STRATEGY.feeTotal,
         capWinRate: DEFAULT_WINNER_STRATEGY.capWinRate,
-        simpleHint: "后台默认策略已生效。",
+        simpleHint: "后台默认保守策略已生效。",
         budgetHint: "历史回测与 Dry Run 已对齐。",
       });
     }
@@ -1503,7 +1581,7 @@
       el.capDailyStopPct.value = "0.02";
       el.historyFeeTotal.value = DEFAULT_WINNER_STRATEGY.feeTotal.toFixed(2);
 
-      el.winnerTestHint.textContent = "已填充测试参数：180s / 6分 / [0.80, 0.95] / min_edge 0.025 / 买价<=0.91。";
+      el.winnerTestHint.textContent = "已填充测试参数：140s / 7分 / [0.82, 0.95] / min_edge 0.030 / 买价<=0.89。";
       updateBudgetCalc();
     }
 
@@ -1703,6 +1781,10 @@
 
     async function apiManualTransactions(limit = 200) {
       return apiGet(`/api/manual-transactions?limit=${encodeURIComponent(String(limit))}`);
+    }
+
+    async function apiExecutionLatest(limit = 40) {
+      return apiGet(`/api/execution/latest?limit=${encodeURIComponent(String(limit))}`);
     }
 
     function realtimeTelegramNotifyKey(data) {
@@ -2082,15 +2164,171 @@
       el.journalHint.textContent = `已加载 ${rows.length} 条真实交易记录。`;
     }
 
-    function filteredDryrunRows(rows) {
-      if (!el.dryrunTriggeredOnly.checked) {
-        return rows;
+    function executionDecision(row) {
+      const intentStatus = String(row?.intent_status || "").toLowerCase();
+      const executionStatus = String(row?.execution_status || "").toLowerCase();
+      if (intentStatus === "rejected") {
+        return { label: "REJECTED", cls: "neg" };
       }
-      return rows.filter((row) => {
-        const rowType = String(row.row_type || "").toLowerCase();
-        const stateText = String(row.state || "").toUpperCase();
-        return rowType === "game" && stateText === "GUESS";
-      });
+      if (executionStatus === "paper_recorded" || executionStatus === "armed_ready") {
+        return { label: "WOULD_EXECUTE", cls: "pos" };
+      }
+      if (executionStatus.startsWith("live_") && executionStatus.includes("blocked")) {
+        return { label: "BLOCKED", cls: "neg" };
+      }
+      if (executionStatus === "live_not_implemented" || executionStatus === "no_market" || executionStatus === "no_price_limit" || executionStatus === "no_contracts") {
+        return { label: "BLOCKED", cls: "neg" };
+      }
+      return { label: "PENDING", cls: "" };
+    }
+
+    function latestExecutionRow(data) {
+      const stateRow = data && typeof data === "object" ? (data.state?.last_row || null) : null;
+      if (stateRow && typeof stateRow === "object") {
+        return stateRow;
+      }
+      const rows = Array.isArray(data?.rows) ? data.rows : [];
+      return rows.length ? rows[rows.length - 1] : null;
+    }
+
+    function renderExecutionPreview(data) {
+      const row = latestExecutionRow(data);
+      const probe = data && typeof data === "object" ? (data.probe || {}) : {};
+      if (!row) {
+        const clobOk = String(probe?.clob?.status || "").toLowerCase() === "ok";
+        const relayerStatus = String(probe?.relayer?.status || "").toLowerCase();
+        const relayerOk = relayerStatus === "ok" || relayerStatus === "skipped";
+        el.executionPreview.innerHTML = `
+          <div class="execution-preview-head">
+            <p class="execution-preview-title">最近一次自动下单预览</p>
+            <span class="pill">${clobOk && relayerOk ? "READY_FOR_PAPER" : "API_NOT_READY"}</span>
+          </div>
+          <div class="empty">当前还没有执行意图。API ${clobOk && relayerOk ? "已连通，等策略第一次触发后这里会显示自动下单预览。" : "还未完全连通，先看下方状态卡。"} </div>
+        `;
+        return;
+      }
+
+      const decision = executionDecision(row);
+      const mode = String(row.mode || data?.config?.mode || "-").toUpperCase();
+      const action = [String(row.side || ""), String(row.team || "")].filter(Boolean).join(" ").trim() || "-";
+      const priceLimit = row.price_limit ? fmtNum(row.price_limit, 4) : "-";
+      const contracts = row.contracts ? fmtNum(row.contracts, 2) : "-";
+      const stake = row.stake_amount ? fmtMoney(row.stake_amount, 2) : "-";
+      const items = [
+        { k: "Match", v: row.rivalry || row.event_id || "-", cls: "" },
+        { k: "Decision", v: decision.label, cls: decision.cls },
+        { k: "Mode", v: mode, cls: "" },
+        { k: "Action", v: action, cls: "" },
+        { k: "Limit Price", v: priceLimit, cls: "" },
+        { k: "Contracts", v: contracts, cls: "" },
+        { k: "Stake", v: stake, cls: "" },
+        { k: "Reason", v: row.reason || "-", cls: decision.cls === "neg" ? "neg" : "" },
+      ];
+      el.executionPreview.innerHTML = `
+        <div class="execution-preview-head">
+          <p class="execution-preview-title">最近一次自动下单预览</p>
+          <span class="pill">${esc(decision.label)}</span>
+        </div>
+        <div class="execution-preview-body">
+          ${items.map((item) => `
+            <div class="execution-preview-item">
+              <p class="k">${esc(item.k)}</p>
+              <p class="v ${item.cls}">${esc(String(item.v || "-"))}</p>
+            </div>
+          `).join("")}
+        </div>
+      `;
+    }
+
+    function renderExecutionSummary(data) {
+      const config = data && typeof data === "object" ? (data.config || {}) : {};
+      const summary = data && typeof data === "object" ? (data.summary || {}) : {};
+      const probe = data && typeof data === "object" ? (data.probe || {}) : {};
+      const clobOk = String(probe?.clob?.status || "").toLowerCase() === "ok";
+      const relayerStatus = String(probe?.relayer?.status || "").toLowerCase();
+      const relayerOk = relayerStatus === "ok" || relayerStatus === "skipped";
+      const cards = [
+        { k: "Execution Mode", v: String(config.mode || "-"), cls: "" },
+        { k: "CLOB", v: clobOk ? "OK" : "未连接", cls: clobOk ? "pos" : "neg" },
+        { k: "Relayer", v: relayerStatus ? relayerStatus.toUpperCase() : "-", cls: relayerOk ? "pos" : "neg" },
+        { k: "最近 Probe", v: String(probe.checked_at || "-"), cls: "" },
+        { k: "Signer", v: String(probe?.clob?.signer_address || "-"), cls: "" },
+        { k: "Open Orders", v: String(Number(probe?.clob?.open_orders_count || 0)), cls: "" },
+        { k: "Execution Rows", v: String(Number(summary.total_rows || 0)), cls: "" },
+        { k: "最近 Mode", v: String(summary.mode || config.mode || "-"), cls: "" },
+      ];
+      el.executionSummary.innerHTML = cards.map((item) => `
+        <div class="metric">
+          <p class="k">${esc(item.k)}</p>
+          <p class="v ${item.cls}">${esc(item.v)}</p>
+        </div>
+      `).join("");
+    }
+
+    function renderExecutionTable(rows) {
+      if (!Array.isArray(rows) || !rows.length) {
+        el.executionTableWrap.innerHTML = `<div class="empty">还没有 API 执行记录。这里显示的是 paper / armed / live 的执行行，不等于 Polymarket 真实成交。</div>`;
+        return;
+      }
+      const body = rows.map((row) => {
+        const intentStatus = String(row.intent_status || "-");
+        const execStatus = String(row.execution_status || "-");
+        const statusClass = execStatus.includes("rejected") || execStatus.includes("blocked") || execStatus.includes("error")
+          ? "neg"
+          : execStatus.includes("paper") || execStatus.includes("armed") || execStatus.includes("accepted")
+            ? "pos"
+            : "";
+        return `
+          <tr>
+            <td class="mono">${esc((row.run_ts || "").replace("T", " ").slice(5, 19) || "-")}</td>
+            <td class="mono">${esc(row.mode || "-")}</td>
+            <td class="tiny">${esc(row.rivalry || row.event_id || "-")}</td>
+            <td class="mono">${esc(row.side || "-")} ${esc(row.team || "")}</td>
+            <td class="mono">${esc(row.price_limit || "-")}</td>
+            <td class="mono">${esc(row.contracts || "-")}</td>
+            <td class="mono">${esc(intentStatus)}</td>
+            <td class="mono ${statusClass}">${esc(execStatus)}</td>
+            <td class="tiny">${esc(row.reason || "-")}</td>
+          </tr>
+        `;
+      }).join("");
+      el.executionTableWrap.innerHTML = `
+        <table class="discover-list">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Mode</th>
+              <th>Rivalry</th>
+              <th>Side</th>
+              <th>Limit</th>
+              <th>Contracts</th>
+              <th>Intent</th>
+              <th>Execution</th>
+              <th>Reason</th>
+            </tr>
+          </thead>
+          <tbody>${body}</tbody>
+        </table>
+      `;
+    }
+
+    async function loadExecutionStatus({ silent = false } = {}) {
+      if (!silent) {
+        el.executionHint.textContent = "加载 Polymarket API 状态中...";
+      }
+      const data = await apiExecutionLatest(40);
+      const rows = Array.isArray(data.rows) ? data.rows : [];
+      state.executionRows = rows;
+      renderExecutionPreview(data);
+      renderExecutionSummary(data);
+      renderExecutionTable(rows);
+      el.linkExecutionCsv.href = data.files && data.files.csv ? data.files.csv : "/logs/polymarket_execution.csv";
+      el.linkExecutionProbe.href = data.files && data.files.probe ? data.files.probe : "/logs/polymarket_probe.json";
+      const probe = data && typeof data === "object" ? (data.probe || {}) : {};
+      const clob = String(probe?.clob?.status || "-").toUpperCase();
+      const relayer = String(probe?.relayer?.status || "-").toUpperCase();
+      const checkedAt = String(probe.checked_at || "-");
+      el.executionHint.textContent = `CLOB ${clob} / Relayer ${relayer} / Probe ${checkedAt} / 最近执行 ${rows.length} 条。`;
     }
 
     function renderDryrunPnlSummary(trades) {
@@ -2101,11 +2339,11 @@
       const tradeBudget = summary.trade_budget;
       const sizingMode = String(summary.sizing_mode || "");
       if (sizingMode === "trade_budget" && tradeBudget !== null && tradeBudget !== undefined && !Number.isNaN(Number(tradeBudget))) {
-        el.dryrunPnlHint.textContent = `理论盈亏按每笔 ${fmtMoney(tradeBudget, 0)} dry-run 预算计算，成交价使用 target_max_buy_price，成本使用 fee_total。`;
+        el.dryrunPnlHint.textContent = `理论盈亏按每笔 ${fmtMoney(tradeBudget, 0)} dry-run 预算计算，成交价使用 target_max_buy_price，成本使用 fee_total；这里只是模拟，不是真实成交。`;
       } else if (sizingMode === "fixed_contracts" && summary.contracts !== null && summary.contracts !== undefined && !Number.isNaN(Number(summary.contracts))) {
-        el.dryrunPnlHint.textContent = `理论盈亏按每笔 ${fmtNum(summary.contracts, 2)} 张 dry-run 合约计算，成交价使用 target_max_buy_price，成本使用 fee_total。`;
+        el.dryrunPnlHint.textContent = `理论盈亏按每笔 ${fmtNum(summary.contracts, 2)} 张 dry-run 合约计算，成交价使用 target_max_buy_price，成本使用 fee_total；这里只是模拟，不是真实成交。`;
       } else {
-        el.dryrunPnlHint.textContent = "理论盈亏按 dry-run 默认资金规则计算，成交价使用 target_max_buy_price，成本使用 fee_total。";
+        el.dryrunPnlHint.textContent = "理论盈亏按 dry-run 默认资金规则计算，成交价使用 target_max_buy_price，成本使用 fee_total；这里只是模拟，不是真实成交。";
       }
       const cards = [
         { k: "累计净盈亏", v: fmtSignedMoney(netPnl), cls: netPnl > 0 ? "pos" : netPnl < 0 ? "neg" : "" },
@@ -2168,49 +2406,6 @@
       `;
     }
 
-    function renderDryrunTable(rows) {
-      const visibleRows = filteredDryrunRows(rows);
-      if (!Array.isArray(visibleRows) || !visibleRows.length) {
-        const message = el.dryrunTriggeredOnly.checked
-          ? "最近记录里没有触发比赛。"
-          : "暂无 dry-run 记录。";
-        el.dryrunTableWrap.innerHTML = `<div class="empty">${message}</div>`;
-        return;
-      }
-      const body = visibleRows.map((row) => {
-        const rivalry = row.rivalry || row.event_id || row.row_key || "-";
-        const action = row.suggested_action || row.action || "-";
-        const price = row.target_max_buy_price || row.recommended_max_buy_price || "-";
-        return `
-          <tr>
-            <td class="mono">${esc((row.run_ts || "").replace("T", " ").slice(5, 19) || "-")}</td>
-            <td>${esc(row.row_type || "-")}</td>
-            <td>${esc(row.state || "-")}</td>
-            <td class="tiny">${esc(rivalry)}</td>
-            <td class="mono">${esc(action)}</td>
-            <td class="mono">${esc(price)}</td>
-            <td class="tiny">${esc(row.reason || "-")}</td>
-          </tr>
-        `;
-      }).join("");
-      el.dryrunTableWrap.innerHTML = `
-        <table class="discover-list">
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>Type</th>
-              <th>State</th>
-              <th>Rivalry</th>
-              <th>Action</th>
-              <th>Target Buy</th>
-              <th>Reason</th>
-            </tr>
-          </thead>
-          <tbody>${body}</tbody>
-        </table>
-      `;
-    }
-
     async function loadDryrun(options = {}) {
       const silent = Boolean(options.silent);
       const source = String(options.source || "manual");
@@ -2238,17 +2433,14 @@
         el.dryrunText.textContent = data.txt || "暂无 dry-run 文本快照。";
         renderDryrunPnlSummary(trades);
         renderDryrunTrades(tradeRows);
-        renderDryrunTable(rows);
         const activeDate = String(data.date_filter || el.dryrunDate.value || "").trim();
-        const visibleCount = filteredDryrunRows(rows).length;
         const csvUpdated = meta.csv_mtime ? new Date(Number(meta.csv_mtime) * 1000).toLocaleString() : "-";
         const tradesUpdated = meta.trades_csv_mtime ? new Date(Number(meta.trades_csv_mtime) * 1000).toLocaleString() : "-";
-        const scopeText = el.dryrunTriggeredOnly.checked
-          ? `当前显示 ${visibleCount}/${rows.length} 条（仅触发）`
-          : `当前显示 ${rows.length} 条记录`;
+        const scopeText = `signals ${rows.length} 条；trades ${tradeRows.length} 条`;
         const dateText = activeDate ? `日期 ${activeDate}；` : "";
         const autoText = source === "auto" ? `AJAX 自动刷新于 ${new Date(state.dryrunLastLoadedAt).toLocaleTimeString()}；` : "";
         el.dryrunHint.textContent = `${autoText}${dateText}CSV ${meta.csv_exists ? "已生成" : "未生成"}，最近更新时间 ${csvUpdated}；Trades ${meta.trades_csv_exists ? "已生成" : "未生成"}，最近更新时间 ${tradesUpdated}；${scopeText}。`;
+        await loadExecutionStatus({ silent: true });
       } finally {
         state.dryrunRefreshInFlight = false;
       }
@@ -2776,6 +2968,7 @@
       loadDryrun().catch((err) => { el.dryrunHint.textContent = `加载失败: ${err}`; });
     });
     el.btnJournalRefresh.addEventListener("click", () => loadManualJournal().catch((err) => { el.journalHint.textContent = `加载失败: ${err}`; }));
+    el.btnExecutionRefresh.addEventListener("click", () => loadExecutionStatus().catch((err) => { el.executionHint.textContent = `加载失败: ${err}`; }));
     el.dryrunAutoRefresh.addEventListener("change", () => {
       if (el.dryrunAutoRefresh.checked) {
         startDryrunAutoRefresh();
@@ -2785,16 +2978,6 @@
       } else {
         stopDryrunAutoRefresh();
         el.dryrunHint.textContent = "已关闭 AJAX 自动刷新。";
-      }
-    });
-    el.dryrunTriggeredOnly.addEventListener("change", () => {
-      renderDryrunTable(state.lastDryrunRows);
-      const visibleCount = filteredDryrunRows(state.lastDryrunRows).length;
-      const totalCount = Array.isArray(state.lastDryrunRows) ? state.lastDryrunRows.length : 0;
-      if (el.dryrunTriggeredOnly.checked) {
-        el.dryrunHint.textContent = `当前显示 ${visibleCount}/${totalCount} 条（仅触发比赛）。`;
-      } else {
-        el.dryrunHint.textContent = `当前显示 ${totalCount} 条记录。`;
       }
     });
     (function initDate() {
@@ -2814,6 +2997,7 @@
       loadHistoryGames().catch((err) => { el.historyHint.textContent = `加载失败: ${err}`; });
       loadDryrun().catch((err) => { el.dryrunHint.textContent = `加载失败: ${err}`; });
       loadManualJournal().catch((err) => { el.journalHint.textContent = `加载失败: ${err}`; });
+      loadExecutionStatus().catch((err) => { el.executionHint.textContent = `加载失败: ${err}`; });
       updateBudgetCalc();
       startHotReloadWatcher();
       startDryrunAutoRefresh();

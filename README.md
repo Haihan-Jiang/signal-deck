@@ -151,6 +151,28 @@ Probe results are written to:
 
 The probe does not create or submit orders.
 
+## Linux Server Deployment
+
+For a remote Linux host, use the packaged `systemd --user` installer:
+
+```bash
+mkdir -p ~/.signal-deck/runtime
+cp deploy/polymarket.env.example ~/.signal-deck/runtime/polymarket.env
+cp deploy/telegram.env.example ~/.signal-deck/runtime/telegram.env
+python3 probe_polymarket_api.py --persist-api-creds
+SIGNAL_DECK_DASHBOARD_HOST=0.0.0.0 \
+SIGNAL_DECK_DASHBOARD_PORT=8787 \
+SIGNAL_DECK_LOOP_INTERVAL=5 \
+./install_linux_services.sh
+```
+
+See [deploy/README_SERVER.md](deploy/README_SERVER.md) for the full server layout.
+
+Important:
+
+- only deploy `live` in an environment where Polymarket trading is permitted
+- the packaged remote default should stay `armed` until the live order path is fully implemented and validated
+
 ## Telegram Commands
 
 There is also a separate Telegram bot command service for group/private chat

@@ -496,6 +496,7 @@ def read_execution_latest(limit: int = 40, *, env_path: Path | None = None, over
     config = load_runtime_config(env_path=env_path, overrides=overrides)
     csv_path: Path = config["csv_path"]
     state_path: Path = config["state_path"]
+    probe_state_path: Path = config["probe_state_path"]
     rows: list[dict[str, str]] = []
     if csv_path.exists():
         with csv_path.open("r", newline="", encoding="utf-8") as fh:
@@ -518,6 +519,13 @@ def read_execution_latest(limit: int = 40, *, env_path: Path | None = None, over
         except Exception:
             latest_state = {}
 
+    probe_state: dict[str, Any] = {}
+    if probe_state_path.exists():
+        try:
+            probe_state = json.loads(probe_state_path.read_text(encoding="utf-8"))
+        except Exception:
+            probe_state = {}
+
     return {
         "rows": rows,
         "summary": summary,
@@ -531,11 +539,14 @@ def read_execution_latest(limit: int = 40, *, env_path: Path | None = None, over
             "creds_present": config["creds_present"],
         },
         "state": latest_state,
+        "probe": probe_state,
         "meta": {
             "csv_exists": csv_path.exists(),
             "csv_mtime": csv_path.stat().st_mtime if csv_path.exists() else None,
             "csv_size": csv_path.stat().st_size if csv_path.exists() else 0,
             "state_exists": state_path.exists(),
             "state_mtime": state_path.stat().st_mtime if state_path.exists() else None,
+            "probe_exists": probe_state_path.exists(),
+            "probe_mtime": probe_state_path.stat().st_mtime if probe_state_path.exists() else None,
         },
     }

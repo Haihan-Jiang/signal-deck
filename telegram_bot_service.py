@@ -143,7 +143,7 @@ def parse_rules_line(text: str) -> str:
     for line in text.splitlines():
         if line.startswith("Rules:"):
             return line.removeprefix("Rules:").strip()
-    return "time_left<=180s, lead>=6, p=[0.80,0.95], min_edge=0.025, fee_total=0.020, max_buy=0.910"
+    return "time_left<=140s, lead>=7, p=[0.82,0.95], min_edge=0.030, fee_total=0.020, max_buy=0.890"
 
 
 def parse_generated_at(text: str) -> str:
@@ -180,7 +180,7 @@ def build_status_text() -> str:
 
     lines = [
         "Polymarket Auto Trader status",
-        "strategy=max_profit_95",
+        "strategy=conservative_140_7",
         f"rules={parse_rules_line(txt)}",
         f"snapshot={parse_generated_at(txt)}",
         f"net_pnl={fmt_money(summary.get('net_pnl'))}",

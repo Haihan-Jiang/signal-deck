@@ -28,7 +28,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 from zoneinfo import ZoneInfo
 
 from live_experiment_signal import get_espn_state, get_kalshi_prices, get_polymarket_prices
-from polymarket_executor import DEFAULT_EXECUTION_CSV_PATH, read_execution_latest
+from polymarket_executor import DEFAULT_EXECUTION_CSV_PATH, DEFAULT_PROBE_STATE_PATH, read_execution_latest
 from signal_engine import compute_signal
 
 
@@ -40,18 +40,19 @@ DRYRUN_TXT = LOG_DIR / "dryrun_latest.txt"
 DRYRUN_CRON_LOG = LOG_DIR / "dryrun_cron.log"
 DRYRUN_TRADE_CSV = LOG_DIR / "dryrun_trades.csv"
 POLYMARKET_EXECUTION_CSV = DEFAULT_EXECUTION_CSV_PATH
+POLYMARKET_PROBE_JSON = DEFAULT_PROBE_STATE_PATH
 DRYRUN_TRADE_STATE = LOG_DIR / "dryrun_trade_state.json"
 MANUAL_TX_JSON = LOG_DIR / "manual_transactions.json"
 MANUAL_TX_CSV = LOG_DIR / "manual_transactions.csv"
 TELEGRAM_ENV_PATH = Path.home() / ".signal-deck" / "runtime" / "telegram.env"
 TELEGRAM_DASHBOARD_ALERT_STATE = LOG_DIR / "telegram_dashboard_alert_state.json"
 FIXED_TELEGRAM_ALERT_RULES = {
-    "winner_max_time_left": 180.0,
-    "winner_min_lead": 6.0,
-    "winner_p_min": 0.80,
+    "winner_max_time_left": 140.0,
+    "winner_min_lead": 7.0,
+    "winner_p_min": 0.82,
     "winner_p_max": 0.95,
-    "winner_min_edge": 0.025,
-    "winner_max_buy_price": 0.91,
+    "winner_min_edge": 0.03,
+    "winner_max_buy_price": 0.89,
 }
 DEFAULT_WINNER_STRATEGY = {
     **FIXED_TELEGRAM_ALERT_RULES,
@@ -322,7 +323,7 @@ def build_dashboard_telegram_alert(payload: dict[str, Any]) -> dict[str, Any]:
         [
             "⚡ PAGE SIGNAL",
             "🖥 source=dashboard_live",
-            "📌 strategy=max_profit_95",
+            "📌 strategy=conservative_140_7",
             f"🏀 game={rivalry}",
             f"💰 action=BUY {guess_team or '-'}",
             f"📈 guess_prob={_fmt_alert_num(payload.get('guess_prob'), 4)}",
@@ -2429,9 +2430,11 @@ class Handler(BaseHTTPRequestHandler):
                         "summary": payload["summary"],
                         "config": payload["config"],
                         "state": payload["state"],
+                        "probe": payload["probe"],
                         "meta": payload["meta"],
                         "files": {
                             "csv": "/logs/polymarket_execution.csv",
+                            "probe": "/logs/polymarket_probe.json",
                         },
                     },
                 )
@@ -2477,6 +2480,13 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_json(HTTPStatus.NOT_FOUND, {"error": "polymarket_execution.csv not found"})
                     return
                 self._send_bytes(HTTPStatus.OK, POLYMARKET_EXECUTION_CSV.read_bytes(), "text/csv; charset=utf-8")
+                return
+
+            if path == "/logs/polymarket_probe.json":
+                if not POLYMARKET_PROBE_JSON.exists():
+                    self._send_json(HTTPStatus.NOT_FOUND, {"error": "polymarket_probe.json not found"})
+                    return
+                self._send_bytes(HTTPStatus.OK, POLYMARKET_PROBE_JSON.read_bytes(), "application/json; charset=utf-8")
                 return
 
             if path == "/logs/manual_transactions.csv":

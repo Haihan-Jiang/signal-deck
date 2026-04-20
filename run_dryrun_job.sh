@@ -12,8 +12,9 @@ mkdir -p "$LOG_DIR"
 # Local time window:
 # - Weekdays: 15:00-23:59
 # - Weekends: 10:00-23:59
-WEEKDAY="$(date '+%u')"
-HOUR="$(date '+%H')"
+RUN_TZ="${SIGNAL_DECK_RUN_TZ:-America/Los_Angeles}"
+WEEKDAY="$(TZ="$RUN_TZ" date '+%u')"
+HOUR="$(TZ="$RUN_TZ" date '+%H')"
 
 RUN_JOB=0
 if [ "$WEEKDAY" -ge 1 ] && [ "$WEEKDAY" -le 5 ]; then
@@ -41,10 +42,10 @@ exec "$PYTHON_BIN" "$SCRIPT_PATH" \
   --disable-gate \
   --limit 20 \
   --timeout 6 \
-  --winner-max-time-left 180 \
-  --winner-min-lead 6 \
-  --winner-p-min 0.80 \
+  --winner-max-time-left 140 \
+  --winner-min-lead 7 \
+  --winner-p-min 0.82 \
   --winner-p-max 0.95 \
-  --winner-min-edge 0.025 \
-  --winner-max-buy-price 0.91 \
+  --winner-min-edge 0.03 \
+  --winner-max-buy-price 0.89 \
   --fee-total 0.02
