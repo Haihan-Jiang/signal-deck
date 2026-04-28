@@ -42,10 +42,10 @@ exec "$PYTHON_BIN" "$SCRIPT_PATH" \
   --disable-gate \
   --limit 20 \
   --timeout 6 \
-  --winner-max-time-left 140 \
+  --winner-max-time-left 180 \
   --winner-min-lead 7 \
   --winner-p-min 0.82 \
-  --winner-p-max 0.95 \
+  --winner-p-max 0.98 \
   --winner-min-edge 0.03 \
   --winner-max-buy-price 0.89 \
   --fee-total 0.02

@@ -15,9 +15,9 @@ The deployment package keeps the repository safe by default:
 
 The current runtime preset is:
 
-- `time_left <= 140`
+- `time_left <= 180`
 - `lead >= 7`
-- `p in [0.82, 0.95]`
+- `p in [0.82, 0.98]`
 - `min_edge = 0.03`
 - `max_buy = 0.89`
 - `fee_total = 0.02`

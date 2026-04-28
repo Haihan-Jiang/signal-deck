@@ -47,10 +47,10 @@ MANUAL_TX_CSV = LOG_DIR / "manual_transactions.csv"
 TELEGRAM_ENV_PATH = Path.home() / ".signal-deck" / "runtime" / "telegram.env"
 TELEGRAM_DASHBOARD_ALERT_STATE = LOG_DIR / "telegram_dashboard_alert_state.json"
 FIXED_TELEGRAM_ALERT_RULES = {
-    "winner_max_time_left": 140.0,
+    "winner_max_time_left": 180.0,
     "winner_min_lead": 7.0,
     "winner_p_min": 0.82,
-    "winner_p_max": 0.95,
+    "winner_p_max": 0.98,
     "winner_min_edge": 0.03,
     "winner_max_buy_price": 0.89,
 }
@@ -323,7 +323,7 @@ def build_dashboard_telegram_alert(payload: dict[str, Any]) -> dict[str, Any]:
         [
             "⚡ PAGE SIGNAL",
             "🖥 source=dashboard_live",
-            "📌 strategy=conservative_140_7",
+            "📌 strategy=balanced_180_7",
             f"🏀 game={rivalry}",
             f"💰 action=BUY {guess_team or '-'}",
             f"📈 guess_prob={_fmt_alert_num(payload.get('guess_prob'), 4)}",

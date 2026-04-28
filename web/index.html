@@ -656,7 +656,7 @@
         </div>
         <div class="btn-row">
           <button class="btn-aux" id="btnLoadHistoryGames">加载历史比赛</button>
-          <span class="hint" id="historyHint">点击任意比赛会按后台默认保守策略（140/7/[0.82,0.95]）显示胜负、买入建议和图表。</span>
+          <span class="hint" id="historyHint">点击任意比赛会按后台默认保守策略（180/7/[0.82,0.98]）显示胜负、买入建议和图表。</span>
         </div>
         <div id="historyGamesWrap" class="empty">先点“加载历史比赛”。</div>
 
@@ -736,10 +736,10 @@
 
   <script>
     const DEFAULT_WINNER_STRATEGY = Object.freeze({
-      maxTimeLeft: 140,
+      maxTimeLeft: 180,
       minLead: 7,
       pMin: 0.82,
-      pMax: 0.95,
+      pMax: 0.98,
       minEdge: 0.03,
       maxBuyPrice: 0.89,
       feeTotal: 0.02,
@@ -1581,7 +1581,7 @@
       el.capDailyStopPct.value = "0.02";
       el.historyFeeTotal.value = DEFAULT_WINNER_STRATEGY.feeTotal.toFixed(2);
 
-      el.winnerTestHint.textContent = "已填充测试参数：140s / 7分 / [0.82, 0.95] / min_edge 0.030 / 买价<=0.89。";
+      el.winnerTestHint.textContent = "已填充测试参数：180s / 7分 / [0.82, 0.98] / min_edge 0.030 / 买价<=0.89。";
       updateBudgetCalc();
     }
 

@@ -101,10 +101,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-require-live", dest="require_live", action="store_false")
     parser.add_argument("--fallback-pre", dest="fallback_pre", action="store_true")
     parser.add_argument("--no-fallback-pre", dest="fallback_pre", action="store_false")
-    parser.add_argument("--winner-max-time-left", type=float, default=140.0)
+    parser.add_argument("--winner-max-time-left", type=float, default=180.0)
     parser.add_argument("--winner-min-lead", type=float, default=7.0)
     parser.add_argument("--winner-p-min", type=float, default=0.82)
-    parser.add_argument("--winner-p-max", type=float, default=0.95)
+    parser.add_argument("--winner-p-max", type=float, default=0.98)
     parser.add_argument("--winner-min-edge", type=float, default=0.03)
     parser.add_argument("--winner-max-buy-price", type=float, default=0.89)
     parser.add_argument("--fee-total", type=float, default=0.02)
@@ -485,7 +485,7 @@ def build_telegram_signal_text(run_ts: str, args: argparse.Namespace, result: di
     action_label = display_action_label(result.get("suggested_action"), result.get("guess_team")) or "-"
     lines = [
         "🚨 Polymarket Auto Trader Alert",
-        "📌 strategy=conservative_140_7",
+        "📌 strategy=balanced_180_7",
         f"🏀 game={rivalry}",
         f"📍 state={result.get('state') or '-'}",
         f"💰 action={action_label}",
