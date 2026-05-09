@@ -9,6 +9,10 @@ It combines:
 
 It is **signal-only** and does **not** place orders.
 
+The repository also includes a separate lowest-cost stock paper-trading runner
+for Alpaca paper accounts. That stock runner is isolated from the event-contract
+signal tools and refuses to use Alpaca's live endpoint.
+
 ## Features
 
 - Realtime signal engine (`BUY_YES` / `BUY_NO` / `NO_TRADE` / `WAITING`)
@@ -45,10 +49,90 @@ With `--hotreload`, backend files and `web/index.html` changes trigger auto-rest
 - `signal_engine.py`: core signal computation
 - `realtime_signal.py`: generic JSON endpoint polling signal runner
 - `live_experiment_signal.py`: provider-specific realtime runner (`kalshi_espn`, `polymarket_espn`)
+- `stock_paper_trader.py`: lowest-cost Alpaca stock paper-trading runner using free IEX data
 - `dryrun_recorder.py`: scheduled dry-run recorder and Telegram alert sender
 - `discover_sources.py`: discover ESPN/Kalshi/Polymarket IDs
 - `dashboard_server.py`: local web API + dashboard host
 - `web/index.html`: dashboard UI
+
+## Lowest-Cost Stock Paper Trading
+
+This path uses:
+
+- Alpaca paper trading API for simulated order submission
+- Alpaca's free IEX stock data feed by default
+- Python standard library only; no paid data subscription or package install
+- dry-run mode by default
+
+Create `~/.signal-deck/runtime/alpaca.env`:
+
+```bash
+export APCA_API_KEY_ID="<YOUR_ALPACA_PAPER_KEY>"
+export APCA_API_SECRET_KEY="<YOUR_ALPACA_PAPER_SECRET>"
+export ALPACA_PAPER_BASE_URL="https://paper-api.alpaca.markets"
+export ALPACA_DATA_FEED="iex"
+```
+
+Evaluate one symbol without placing any paper order:
+
+```bash
+python3 stock_paper_trader.py --symbol SPY --max-notional 10
+```
+
+Submit simulated paper orders when the strategy has a BUY or SELL signal:
+
+```bash
+python3 stock_paper_trader.py --symbol SPY --mode paper --max-notional 10
+```
+
+Run a simple polling loop:
+
+```bash
+python3 stock_paper_trader.py \
+  --symbol SPY \
+  --mode paper \
+  --max-notional 10 \
+  --loop \
+  --interval 60
+```
+
+Use Alpaca's IEX WebSocket stream instead of REST polling:
+
+```bash
+python3 stock_paper_trader.py \
+  --symbol SPY \
+  --data-mode stream \
+  --max-notional 10
+```
+
+Stream mode evaluates on Alpaca's live `1Min` bar events and keeps the latest
+quote from the same WebSocket connection for spread checks.
+
+Run the WebSocket stream continuously and submit simulated paper orders:
+
+```bash
+python3 stock_paper_trader.py \
+  --symbol SPY \
+  --data-mode stream \
+  --mode paper \
+  --max-notional 10 \
+  --loop
+```
+
+The default strategy is intentionally small: it buys with up to `--max-notional`
+when the short moving average is above the long moving average, sells the current
+paper position when the short moving average falls below the long moving average,
+skips wide spreads, skips duplicate open orders, and does not submit while the
+market is closed unless `--allow-closed-market` is set.
+
+JSONL audit logs are written to:
+
+```text
+~/.signal-deck/logs/stock_paper_trades.jsonl
+```
+
+Each log row includes timing fields for the market event timestamp, account-state
+checks, signal computation, and paper order submission response time.
 
 ## Common Workflow
 
