@@ -3292,6 +3292,12 @@ def build_collection_plan_from_coverage_gate(
         platform = str(target.get("platform") or "Unknown")
         role_family = str(target.get("role_family") or "Other")
         query = _collection_query_for_role(role_family)
+        query_variants = _collection_query_variants_for_role(role_family)
+        search_urls: list[str] = []
+        for variant in query_variants:
+            for url in _collection_search_urls(platform, variant):
+                if url not in search_urls:
+                    search_urls.append(url)
         tasks.append(
             {
                 "platform": platform,
@@ -3300,7 +3306,8 @@ def build_collection_plan_from_coverage_gate(
                 "positions_remaining": int(target.get("positions_remaining") or 0),
                 "suggested_batch_size": min(batch_size, int(target.get("positions_remaining") or 0)),
                 "query": query,
-                "search_urls": _collection_search_urls(platform, query),
+                "query_variants": query_variants,
+                "search_urls": search_urls,
                 "output_expectation": {
                     "format": "jsonl",
                     "required_fields": ["platform", "company", "title", "apply_url"],
@@ -3375,6 +3382,13 @@ def render_collection_plan_markdown(plan: dict[str, Any]) -> str:
                 )
             )
             lines.append(f"   query: {task.get('query')}")
+            variants = [
+                variant
+                for variant in _string_list(task.get("query_variants"))
+                if variant != task.get("query")
+            ]
+            if variants:
+                lines.append(f"   variants: {', '.join(variants[:5])}")
             for url in task.get("search_urls", [])[:4]:
                 lines.append(f"   search: {url}")
     else:
@@ -6206,6 +6220,7 @@ def _register_research_position(
         position_key = f"{path.name}:{index}"
     else:
         position_key = path.name
+    role_family = _research_position_role_family(payload)
     record = positions.setdefault(
         position_key,
         {
@@ -6214,14 +6229,41 @@ def _register_research_position(
             "job_id": job_id or None,
             "company": payload.get("company"),
             "title": payload.get("title"),
-            "role_family": _infer_role_family(str(payload.get("title") or payload.get("title_text") or "")),
+            "role_family": role_family,
             "apply_url": shorten_apply_url(apply_url, payload) if apply_url else None,
             "source_files": [],
         },
     )
+    if record.get("role_family") == "Other" and role_family != "Other":
+        record["role_family"] = role_family
+    for key in ["company", "title", "apply_url"]:
+        if record.get(key):
+            continue
+        if key == "apply_url":
+            record[key] = shorten_apply_url(apply_url, payload) if apply_url else None
+        else:
+            record[key] = payload.get(key)
     if path.name not in record["source_files"]:
         record["source_files"].append(path.name)
     return record
+
+
+def _research_position_role_family(payload: dict[str, Any]) -> str:
+    role_family = str(payload.get("role_family") or payload.get("role_variant") or "").strip()
+    if role_family and role_family != "Other":
+        return role_family
+    evidence = " ".join(
+        str(payload.get(key) or "")
+        for key in [
+            "title",
+            "title_text",
+            "job_title",
+            "description",
+            "summary",
+            "page_excerpt",
+        ]
+    )
+    return _infer_role_family(evidence)
 
 
 def _research_item(
@@ -7616,6 +7658,44 @@ def _collection_query_for_role(role_family: str) -> str:
     return queries.get(role_family, f"{role_family} software engineer")
 
 
+def _collection_query_variants_for_role(role_family: str) -> list[str]:
+    variants = {
+        "Site Reliability": [
+            "site reliability engineer OR sre production reliability",
+            "site reliability engineer",
+            "sre engineer",
+            "production engineer reliability",
+            "observability engineer",
+        ],
+        "Platform Infrastructure": [
+            "platform engineer infrastructure kubernetes cloud",
+            "platform engineer",
+            "infrastructure engineer kubernetes",
+            "developer experience engineer infrastructure",
+            "linux systems engineer platform",
+        ],
+        "Cloud DevOps": [
+            "cloud devops engineer aws azure gcp infrastructure",
+            "devops engineer",
+            "cloud infrastructure engineer",
+            "cloud operations engineer",
+            "gitops engineer kubernetes",
+        ],
+        "Software Backend": [
+            "backend software engineer infrastructure distributed systems",
+            "backend software engineer",
+            "back-end developer",
+            "server-side software engineer",
+            "java python go backend engineer",
+        ],
+    }.get(role_family, [f"{role_family} software engineer"])
+    unique: list[str] = []
+    for variant in variants:
+        if variant not in unique:
+            unique.append(variant)
+    return unique
+
+
 def _collection_search_urls(platform: str, query: str) -> list[str]:
     encoded_query = urllib.parse.quote_plus(query)
     platform_text = str(platform or "").lower()
@@ -7974,10 +8054,42 @@ def _candidate_matches_role_family(candidate: dict[str, Any], role_family: str) 
     title_text = _normalize(str(candidate.get("title") or ""))
     description_text = _normalize(str(candidate.get("description") or ""))
     role_keywords = {
-        "Site Reliability": ["site reliability", "sre", "production reliability", "reliability engineer"],
-        "Platform Infrastructure": ["platform", "infrastructure", "kubernetes", "ci cd", "devops platform"],
-        "Cloud DevOps": ["devops", "cloud", "aws", "azure", "gcp"],
-        "Software Backend": ["backend", "api", "distributed systems", "software engineer"],
+        "Site Reliability": [
+            "site reliability",
+            "sre",
+            "production reliability",
+            "reliability engineer",
+            "observability engineer",
+            "incident management",
+        ],
+        "Platform Infrastructure": [
+            "platform",
+            "infrastructure",
+            "kubernetes",
+            "ci cd",
+            "devops platform",
+            "developer experience",
+            "devex",
+            "linux systems",
+            "build automation",
+            "build release",
+            "build & release",
+        ],
+        "Cloud DevOps": ["devops", "cloud", "aws", "azure", "gcp", "gitops"],
+        "Software Backend": [
+            "backend",
+            "back end",
+            "back-end",
+            "api",
+            "distributed systems",
+            "software engineer",
+            "software developer",
+            "server side",
+            "server-side",
+            "java developer",
+            "python developer",
+            "golang engineer",
+        ],
     }
     keywords = role_keywords.get(role_family, [_normalize(role_family)])
     if any(keyword in title_text for keyword in keywords):
@@ -8051,19 +8163,22 @@ def _extract_candidate_links_from_search_html(
 def _candidate_discovery_search_urls(task: dict[str, Any]) -> list[str]:
     platform = str(task.get("platform") or "")
     query = str(task.get("query") or "")
+    query_variants = _string_list(task.get("query_variants")) or ([query] if query else [])
     urls: list[str] = []
-    for url in _string_list(task.get("search_urls")):
-        if url not in urls:
-            urls.append(url)
     site = _platform_primary_search_domain(platform)
-    if site and query:
-        encoded = urllib.parse.quote_plus(f"site:{site} {query}")
+    for variant in query_variants:
+        if not site or not variant:
+            continue
+        encoded = urllib.parse.quote_plus(f"site:{site} {variant}")
         for url in [
             f"https://www.bing.com/search?format=rss&q={encoded}&count=50",
             f"https://www.bing.com/search?q={encoded}&count=50",
         ]:
             if url not in urls:
                 urls.append(url)
+    for url in _string_list(task.get("search_urls")):
+        if url not in urls:
+            urls.append(url)
     return urls
 
 
@@ -8275,7 +8390,14 @@ def _application_collection_gaps(
 def _infer_role_family(title: str) -> str:
     text = _normalize(title)
     engineering_signal = _title_has_engineering_signal(text)
-    if "site reliability" in text or re.search(r"\bsre\b", text) or "reliability engineer" in text:
+    if (
+        "site reliability" in text
+        or re.search(r"\bsre\b", text)
+        or "reliability engineer" in text
+        or "observability engineer" in text
+        or "production reliability" in text
+        or "incident management engineer" in text
+    ):
         return "Site Reliability"
     if (
         "devops" in text
@@ -8283,13 +8405,44 @@ def _infer_role_family(title: str) -> str:
         or "cloud infrastructure" in text
         or "cloud operations" in text
         or "cloud ops" in text
+        or "gitops" in text
     ):
         return "Cloud DevOps"
-    if engineering_signal and any(term in text for term in ["platform", "infrastructure", "kubernetes", "ci cd"]):
+    if engineering_signal and any(
+        term in text
+        for term in [
+            "platform",
+            "infrastructure",
+            "kubernetes",
+            "ci cd",
+            "developer experience",
+            "devex",
+            "build automation",
+            "build release",
+            "build & release",
+            "linux systems",
+            "systems engineer",
+        ]
+    ):
         return "Platform Infrastructure"
     if engineering_signal and "cloud" in text:
         return "Cloud DevOps"
-    if any(term in text for term in ["backend", "api", "software engineer"]):
+    if any(
+        term in text
+        for term in [
+            "backend",
+            "back end",
+            "back-end",
+            "api",
+            "server side",
+            "server-side",
+            "software engineer",
+            "software developer",
+            "java developer",
+            "python developer",
+            "golang engineer",
+        ]
+    ):
         return "Software Backend"
     if engineering_signal and any(term in text for term in ["ai", "ml", "machine learning", "data"]):
         return "Data AI"

@@ -2548,9 +2548,12 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(task["platform"], "Ashby")
         self.assertEqual(task["suggested_batch_size"], 25)
         self.assertIn("cloud devops", task["query"])
+        self.assertIn("devops engineer", task["query_variants"])
+        self.assertGreater(len(task["search_urls"]), 2)
         self.assertTrue(any("jobs.ashbyhq.com" in url for url in task["search_urls"]))
         markdown = render_collection_plan_markdown(plan)
         self.assertIn("Collection Plan", markdown)
+        self.assertIn("variants:", markdown)
         self.assertIn("import-candidates", markdown)
 
     def test_write_collection_plan_outputs_reports(self) -> None:
@@ -2915,6 +2918,47 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(research["platforms"]["Lever"]["positions_observed"], 1)
             self.assertIn("Lever::Software Backend", research["coverage_groups"])
 
+    def test_application_research_uses_observed_role_family_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            stale_json = Path(temp_dir) / "stale_candidate.json"
+            observed_jsonl = Path(temp_dir) / "observed_candidates.jsonl"
+            stale_json.write_text(
+                json.dumps(
+                    {
+                        "jobs": [
+                            {
+                                "platform": "Greenhouse",
+                                "company": "Example",
+                                "title": "Engineer II",
+                                "apply_url": "https://job-boards.greenhouse.io/example/jobs/123",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            observed_jsonl.write_text(
+                json.dumps(
+                    {
+                        "status": "OBSERVED_CANDIDATE",
+                        "platform": "Greenhouse",
+                        "company": "Example",
+                        "title": "Engineer II",
+                        "role_family": "Platform Infrastructure",
+                        "description": "Own Kubernetes platform infrastructure for production services.",
+                        "apply_url": "https://job-boards.greenhouse.io/example/jobs/123",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            research = build_application_research(temp_dir, position_target=100)
+
+            self.assertEqual(research["positions_observed_total"], 1)
+            self.assertIn("Greenhouse::Platform Infrastructure", research["coverage_groups"])
+            self.assertNotIn("Greenhouse::Other", research["coverage_groups"])
+
     def test_devops_role_family_beats_platform_description_terms(self) -> None:
         candidates = [
             {
@@ -2934,6 +2978,43 @@ class JobApplyAgentTests(unittest.TestCase):
             rows = load_candidate_rows(output_path)
 
             self.assertEqual(rows[0]["role_family"], "Cloud DevOps")
+
+    def test_role_family_infers_common_collection_query_variants(self) -> None:
+        candidates = [
+            {
+                "company": "Example",
+                "title": "Observability Engineer",
+                "apply_url": "https://jobs.ashbyhq.com/example/observability",
+            },
+            {
+                "company": "Example",
+                "title": "Build & Release Engineer",
+                "apply_url": "https://jobs.lever.co/example/build-release",
+            },
+            {
+                "company": "Example",
+                "title": "Senior Back-End Developer",
+                "apply_url": "https://job-boards.greenhouse.io/example/jobs/456",
+            },
+            {
+                "company": "Example",
+                "title": "GitOps Engineer",
+                "apply_url": "https://jobs.lever.co/example/gitops",
+            },
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_path = Path(temp_dir) / "candidates.json"
+            output_path = Path(temp_dir) / "observed_candidates.jsonl"
+            input_path.write_text(json.dumps({"candidates": candidates}), encoding="utf-8")
+
+            import_candidate_observations(input_path, output_path, source="test")
+            rows = load_candidate_rows(output_path)
+
+            self.assertEqual(rows[0]["role_family"], "Site Reliability")
+            self.assertEqual(rows[1]["role_family"], "Platform Infrastructure")
+            self.assertEqual(rows[2]["role_family"], "Software Backend")
+            self.assertEqual(rows[3]["role_family"], "Cloud DevOps")
 
     def test_application_research_ignores_closed_job_registry(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
