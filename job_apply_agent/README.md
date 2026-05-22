@@ -272,6 +272,12 @@ apply state machine:
 python3 -m job_apply_agent synthetic-exec --count 100
 ```
 
+To satisfy a 100-position target for each synthetic platform:
+
+```bash
+python3 -m job_apply_agent synthetic-exec --per-platform-target 100
+```
+
 This writes:
 
 ```text

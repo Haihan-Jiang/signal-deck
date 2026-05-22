@@ -264,6 +264,12 @@ def main() -> int:
         help="execute synthetic applications through the offline apply state machine",
     )
     synthetic_exec_parser.add_argument("--count", type=int, default=100)
+    synthetic_exec_parser.add_argument(
+        "--per-platform-target",
+        type=int,
+        default=None,
+        help="run this many synthetic applications for each synthetic platform",
+    )
     synthetic_exec_parser.add_argument("--include-values", action="store_true")
     synthetic_exec_parser.add_argument("--json-output", default=str(DEFAULT_SYNTHETIC_EXEC_JSON))
     synthetic_exec_parser.add_argument("--markdown-output", default=str(DEFAULT_SYNTHETIC_EXEC_MARKDOWN))
@@ -500,10 +506,16 @@ def main() -> int:
             args.markdown_output,
             count=args.count,
             include_values=args.include_values,
+            per_platform_target=args.per_platform_target,
         )
         print(f"Wrote synthetic apply execution JSON to {args.json_output}")
         print(f"Wrote synthetic apply execution Markdown to {args.markdown_output}")
         print(f"Runs: {report.get('run_count', 0)}")
+        if report.get("per_platform_target"):
+            print(
+                f"Per-platform target: {report.get('per_platform_target')} "
+                f"achieved={str(bool(report.get('platform_target_achieved'))).lower()}"
+            )
         print(f"Actual submit count: {report.get('actual_submit_count', 0)}")
         for outcome, count in report.get("outcome_counts", {}).items():
             print(f"{outcome}: {count}")

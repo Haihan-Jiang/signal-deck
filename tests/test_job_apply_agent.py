@@ -1204,14 +1204,36 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Synthetic Apply Execution", markdown)
         self.assertIn("Actual submit count: 0", markdown)
 
+    def test_synthetic_apply_execution_can_target_each_platform(self) -> None:
+        report = run_synthetic_apply_execution(per_platform_target=3)
+
+        self.assertEqual(report["run_count"], 12)
+        self.assertEqual(report["per_platform_target"], 3)
+        self.assertTrue(report["platform_target_achieved"])
+        self.assertEqual(report["platform_target_shortfalls"], {
+            "Ashby": 0,
+            "Greenhouse": 0,
+            "Lever": 0,
+            "LinkedIn": 0,
+        })
+        self.assertEqual(report["actual_submit_count"], 0)
+        for count in report["platform_counts"].values():
+            self.assertEqual(count, 3)
+
     def test_write_synthetic_apply_execution_outputs_reports(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             json_output = Path(temp_dir) / "execution.json"
             markdown_output = Path(temp_dir) / "execution.md"
 
-            report = write_synthetic_apply_execution(json_output, markdown_output, count=8)
+            report = write_synthetic_apply_execution(
+                json_output,
+                markdown_output,
+                count=8,
+                per_platform_target=2,
+            )
 
             self.assertEqual(report["run_count"], 8)
+            self.assertTrue(report["platform_target_achieved"])
             self.assertTrue(json_output.exists())
             self.assertTrue(markdown_output.exists())
             self.assertIn("Synthetic Apply Execution", markdown_output.read_text())

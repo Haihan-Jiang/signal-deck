@@ -35,6 +35,7 @@ CLOSED_APPLICATION_PHRASES = [
     "posting has expired",
 ]
 DEFAULT_LIVE_CHECK_LIMIT = 25
+SYNTHETIC_APPLICATION_PLATFORMS = ["LinkedIn", "Ashby", "Greenhouse", "Lever"]
 
 
 @dataclass(frozen=True)
@@ -1463,10 +1464,15 @@ def execute_form_plan_offline(
 def run_synthetic_apply_execution(
     count: int = 100,
     include_values: bool = False,
+    per_platform_target: int | None = None,
 ) -> dict[str, Any]:
     profile = build_synthetic_candidate_profile()
     executions: list[dict[str, Any]] = []
-    for index in range(1, max(count, 0) + 1):
+    if per_platform_target is not None:
+        run_count = max(per_platform_target, 0) * len(SYNTHETIC_APPLICATION_PLATFORMS)
+    else:
+        run_count = max(count, 0)
+    for index in range(1, run_count + 1):
         snapshot = _build_synthetic_application_snapshot(index)
         plan = build_form_fill_plan(
             snapshot,
@@ -1484,16 +1490,29 @@ def run_synthetic_apply_execution(
         )
         executions.append(execution)
 
+    platform_counts = _count_by(executions, "platform")
+    platform_target = int(per_platform_target or 0)
+    platform_target_shortfalls = {
+        platform: max(0, platform_target - int(platform_counts.get(platform, 0)))
+        for platform in SYNTHETIC_APPLICATION_PLATFORMS
+    }
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "execution": "offline_synthetic_apply_executor",
-        "requested_count": count,
+        "requested_count": run_count,
+        "per_platform_target": platform_target,
+        "platform_target_achieved": (
+            all(count == 0 for count in platform_target_shortfalls.values())
+            if platform_target
+            else None
+        ),
+        "platform_target_shortfalls": platform_target_shortfalls if platform_target else {},
         "run_count": len(executions),
         "real_platform_submission": False,
         "actual_submit_count": sum(int(item.get("actual_submit_count", 0)) for item in executions),
         "outcome_counts": _count_by(executions, "outcome"),
         "policy_stop_counts": _count_by(executions, "policy_stop"),
-        "platform_counts": _count_by(executions, "platform"),
+        "platform_counts": platform_counts,
         "executed_step_count": sum(int(item.get("executed_step_count", 0)) for item in executions),
         "stop_step_count": sum(int(item.get("stop_step_count", 0)) for item in executions),
         "runs": executions,
@@ -1505,8 +1524,13 @@ def write_synthetic_apply_execution(
     markdown_output: str | Path,
     count: int = 100,
     include_values: bool = False,
+    per_platform_target: int | None = None,
 ) -> dict[str, Any]:
-    report = run_synthetic_apply_execution(count=count, include_values=include_values)
+    report = run_synthetic_apply_execution(
+        count=count,
+        include_values=include_values,
+        per_platform_target=per_platform_target,
+    )
     json_path = Path(json_output)
     markdown_path = Path(markdown_output)
     json_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2464,6 +2488,8 @@ def render_synthetic_apply_execution_markdown(report: dict[str, Any]) -> str:
         f"Generated: {report.get('generated_at')}",
         f"Runs: {report.get('run_count', 0)}",
         f"Execution: {report.get('execution')}",
+        f"Per-platform target: {report.get('per_platform_target', 0)}",
+        f"Platform target achieved: {str(report.get('platform_target_achieved')).lower()}",
         f"Real platform submission: {str(bool(report.get('real_platform_submission'))).lower()}",
         f"Actual submit count: {report.get('actual_submit_count', 0)}",
         f"Executed steps: {report.get('executed_step_count', 0)}",
@@ -3799,7 +3825,6 @@ def _learning_storage_rank(storage: str) -> int:
 
 
 def _build_synthetic_application_snapshot(index: int) -> dict[str, Any]:
-    platforms = ["LinkedIn", "Ashby", "Greenhouse", "Lever"]
     role_titles = [
         "Site Reliability Engineer",
         "Platform Engineer, Kubernetes",
@@ -3807,7 +3832,7 @@ def _build_synthetic_application_snapshot(index: int) -> dict[str, Any]:
         "DevOps Engineer",
         "Backend Infrastructure Engineer",
     ]
-    platform = platforms[(index - 1) % len(platforms)]
+    platform = SYNTHETIC_APPLICATION_PLATFORMS[(index - 1) % len(SYNTHETIC_APPLICATION_PLATFORMS)]
     title = role_titles[(index - 1) % len(role_titles)]
     company = f"SyntheticCo {index:03d}"
     base_url = {
