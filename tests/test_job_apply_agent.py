@@ -3770,6 +3770,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Real Platform Shortfalls", html)
         self.assertIn("Collection Tasks", html)
         self.assertIn("Manual Gates", html)
+        self.assertIn("https://job-boards.greenhouse.io/doordash/jobs/1", html)
+        self.assertIn("Autofill ready", html)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             xlsx_output = Path(temp_dir) / "questions.xlsx"

@@ -4068,7 +4068,23 @@ def render_question_export_html(export: dict[str, Any]) -> str:
         "</section>",
         "<section><h2>Position Readiness</h2>",
         _html_table(
-            ["Readiness", "Platform", "Company", "Title", "Role family", "Prompt count", "Blockers", "Manual gates"],
+            [
+                "Readiness",
+                "Platform",
+                "Company",
+                "Title",
+                "Role family",
+                "Apply URL",
+                "Prompt count",
+                "Required prompts",
+                "Covered prompts",
+                "Autofill ready",
+                "Supervised ready",
+                "Unattended ready",
+                "Blockers",
+                "Manual gates",
+                "Closed reason",
+            ],
             [
                 [
                     row.get("readiness"),
@@ -4076,9 +4092,16 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                     row.get("company"),
                     row.get("title"),
                     row.get("role_family"),
+                    row.get("apply_url"),
                     row.get("prompt_count"),
+                    row.get("required_prompt_count"),
+                    row.get("covered_prompt_count"),
+                    _yes_no(row.get("ready_for_autofill")),
+                    _yes_no(row.get("ready_for_supervised_submit")),
+                    _yes_no(row.get("ready_for_unattended_submit")),
                     row.get("learning_blockers"),
                     row.get("manual_gates"),
+                    row.get("closed_reason"),
                 ]
                 for row in export.get("positions", [])
             ],
