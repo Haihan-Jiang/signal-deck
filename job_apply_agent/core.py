@@ -1407,6 +1407,281 @@ def apply_learning_task_answers(
     }
 
 
+def render_learning_task_template_markdown(template: dict[str, Any]) -> str:
+    lines = [
+        "# Learning Task Template",
+        "",
+        f"Generated: {template.get('generated_at')}",
+        f"Tasks: {template.get('task_count', 0)}",
+        "",
+        str(template.get("instructions") or ""),
+        "",
+        "## Tasks",
+        "",
+    ]
+    tasks = template.get("tasks", [])
+    if not tasks:
+        lines.append("- None")
+        return "\n".join(lines) + "\n"
+
+    for task in tasks:
+        approved = "x" if task.get("approved") else " "
+        lines.append(
+            "- [{approved}] {storage}: {question}".format(
+                approved=approved,
+                storage=task.get("recommended_storage") or "unknown",
+                question=task.get("question") or "Unknown question",
+            )
+        )
+        lines.append(f"  group: {task.get('group_key')}")
+        if task.get("platforms"):
+            lines.append(f"  platforms: {', '.join(str(item) for item in task.get('platforms', []))}")
+        if task.get("labels"):
+            label_text = "; ".join(str(item) for item in task.get("labels", [])[:5])
+            lines.append(f"  labels: {label_text}")
+        lines.append(f"  persist_allowed: {str(bool(task.get('persist_allowed'))).lower()}")
+        if task.get("notes"):
+            lines.append(f"  notes: {task.get('notes')}")
+    return "\n".join(lines) + "\n"
+
+
+def build_synthetic_candidate_profile() -> CandidateProfile:
+    return CandidateProfile(
+        name="Morgan Test",
+        email="morgan.test@example.com",
+        phone="555-0100",
+        location="Seattle, WA",
+        target_titles=[
+            "Site Reliability Engineer",
+            "Platform Engineer",
+            "Infrastructure Engineer",
+            "DevOps Engineer",
+            "Backend Engineer",
+        ],
+        target_locations=["United States", "Remote", "Seattle", "Bellevue"],
+        remote_ok=True,
+        keywords=[
+            "python",
+            "kubernetes",
+            "terraform",
+            "aws",
+            "azure",
+            "gcp",
+            "reliability",
+            "incident",
+            "automation",
+            "observability",
+            "linux",
+            "ci/cd",
+        ],
+        blocklist=["principal", "staff", "manager"],
+        min_score=45,
+        resume_facts={
+            "professional_summary": (
+                "Infrastructure engineer with production reliability, automation, "
+                "cloud operations, and incident response experience"
+            ),
+            "strongest_skills": (
+                "Python, Kubernetes, Terraform, AWS, Azure, GCP, Linux, CI/CD, "
+                "observability, incident management, and backend infrastructure"
+            ),
+            "impact_example": (
+                "Built automation that reduced manual operations work and improved "
+                "incident response for production services"
+            ),
+            "education": "B.S. Computer Science",
+            "cloud_experience": (
+                "Hands-on experience operating services on AWS, Azure, and GCP, "
+                "with Kubernetes-based infrastructure"
+            ),
+            "kubernetes_oncall_experience": (
+                "Four years of Kubernetes, on-call, incident response, and "
+                "production observability experience"
+            ),
+        },
+        question_answers={
+            "authorization": "Yes, I am authorized to work in the United States.",
+            "sponsorship": "No, I do not require visa sponsorship.",
+            "compensation": "$100,000+ base salary, depending on level, location, and total package.",
+            "start_date": "Two months after offer acceptance.",
+            "relocation": "Yes, I am open to relocation for the right role.",
+            "years_experience": "4 years",
+            "cloud_provider_general": "I have experience across AWS, Azure, and GCP.",
+            "linkedin_profile": "https://www.linkedin.com/in/fake-synthetic-candidate/",
+            "resume_path": "/tmp/fake-synthetic-resume.pdf",
+        },
+    )
+
+
+def run_synthetic_application_simulation(
+    count: int = 100,
+    include_values: bool = False,
+) -> dict[str, Any]:
+    profile = build_synthetic_candidate_profile()
+    runs: list[dict[str, Any]] = []
+    aggregate_steps: list[dict[str, Any]] = []
+
+    for index in range(1, max(count, 0) + 1):
+        snapshot = _build_synthetic_application_snapshot(index)
+        closed_phrase = closed_application_phrase({"page_text": snapshot.get("page_text", "")})
+        if closed_phrase:
+            runs.append(
+                {
+                    "index": index,
+                    "platform": snapshot.get("platform"),
+                    "company": snapshot.get("company"),
+                    "title": snapshot.get("job_title"),
+                    "url": snapshot.get("url"),
+                    "status": "closed_skip",
+                    "closed_reason": closed_phrase,
+                    "real_platform_submission": False,
+                }
+            )
+            continue
+
+        plan = build_form_fill_plan(
+            snapshot,
+            profile=profile,
+            answer_memory=None,
+            include_values=include_values,
+        )
+        missing_statuses = {
+            "missing_profile_value",
+            "missing_local_material",
+            "missing_answer",
+            "missing_resume_facts",
+        }
+        review_statuses = {"needs_human_review", "sensitive_not_stored"}
+        security_statuses = {"manual_security_step", "final_submit_confirmation"}
+        missing_steps = [
+            step for step in plan.get("steps", []) if step.get("status") in missing_statuses
+        ]
+        review_steps = [
+            step for step in plan.get("steps", []) if step.get("status") in review_statuses
+        ]
+        security_steps = [
+            step for step in plan.get("steps", []) if step.get("status") in security_statuses
+        ]
+        if missing_steps:
+            status = "needs_learning"
+        elif review_steps or security_steps:
+            status = "autofill_ready_with_supervised_gates"
+        else:
+            status = "autofill_ready"
+        aggregate_steps.extend(plan.get("steps", []))
+        runs.append(
+            {
+                "index": index,
+                "platform": snapshot.get("platform"),
+                "company": snapshot.get("company"),
+                "title": snapshot.get("job_title"),
+                "url": snapshot.get("url"),
+                "status": status,
+                "real_platform_submission": False,
+                "step_count": plan.get("step_count", 0),
+                "ready_step_count": plan.get("status_counts", {}).get("ready", 0),
+                "missing_step_count": len(missing_steps),
+                "review_gate_count": len(review_steps),
+                "security_gate_count": len(security_steps),
+                "status_counts": plan.get("status_counts", {}),
+                "blocking_labels": [
+                    step.get("label")
+                    for step in [*missing_steps, *review_steps, *security_steps][:8]
+                ],
+            }
+        )
+
+    status_counts = _count_by(runs, "status")
+    platform_counts = _count_by(runs, "platform")
+    step_status_counts = _count_by(aggregate_steps, "status")
+    step_category_counts = _count_by(aggregate_steps, "category")
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "simulation": "offline_synthetic_only",
+        "real_platform_submission": False,
+        "safety_boundary": (
+            "Fake candidate data is used only against local synthetic forms. "
+            "The harness never submits fake applications to real employers."
+        ),
+        "requested_count": count,
+        "run_count": len(runs),
+        "status_counts": status_counts,
+        "platform_counts": platform_counts,
+        "step_status_counts": step_status_counts,
+        "step_category_counts": step_category_counts,
+        "issue_summary": _synthetic_issue_summary(runs, aggregate_steps),
+        "runs": runs,
+    }
+
+
+def write_synthetic_application_simulation(
+    json_output: str | Path,
+    markdown_output: str | Path,
+    count: int = 100,
+    include_values: bool = False,
+) -> dict[str, Any]:
+    report = run_synthetic_application_simulation(count=count, include_values=include_values)
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2), encoding="utf-8")
+    markdown_path.write_text(render_synthetic_application_markdown(report), encoding="utf-8")
+    return report
+
+
+def render_synthetic_application_markdown(report: dict[str, Any]) -> str:
+    lines = [
+        "# Synthetic Application Simulation",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        f"Runs: {report.get('run_count', 0)}",
+        f"Mode: {report.get('simulation')}",
+        f"Real platform submission: {str(bool(report.get('real_platform_submission'))).lower()}",
+        "",
+        str(report.get("safety_boundary") or ""),
+        "",
+        "## Status Counts",
+        "",
+    ]
+    for status, count in sorted(report.get("status_counts", {}).items()):
+        lines.append(f"- {status}: {count}")
+    lines.extend(["", "## Platform Counts", ""])
+    for platform, count in sorted(report.get("platform_counts", {}).items()):
+        lines.append(f"- {platform}: {count}")
+    lines.extend(["", "## Step Status Counts", ""])
+    for status, count in sorted(report.get("step_status_counts", {}).items()):
+        lines.append(f"- {status}: {count}")
+    lines.extend(["", "## Issues To Handle", ""])
+    for issue in report.get("issue_summary", []):
+        lines.append(
+            "- {status}: {count} occurrence(s); handling: {handling}".format(
+                status=issue.get("status"),
+                count=issue.get("count", 0),
+                handling=issue.get("handling"),
+            )
+        )
+        examples = issue.get("example_labels") or []
+        if examples:
+            lines.append(f"  examples: {'; '.join(str(item) for item in examples[:5])}")
+    lines.extend(["", "## First Runs", ""])
+    for run in report.get("runs", [])[:20]:
+        lines.append(
+            "- {status}: {company} - {title} [{platform}]".format(
+                status=run.get("status"),
+                company=run.get("company"),
+                title=run.get("title"),
+                platform=run.get("platform"),
+            )
+        )
+        if run.get("closed_reason"):
+            lines.append(f"  closed: {run.get('closed_reason')}")
+        blockers = run.get("blocking_labels") or []
+        if blockers:
+            lines.append(f"  gates: {'; '.join(str(item) for item in blockers[:5])}")
+    return "\n".join(lines) + "\n"
+
+
 def render_application_research_markdown(research: dict[str, Any]) -> str:
     lines = [
         "# Application Research Baseline",
@@ -2964,6 +3239,160 @@ def _learning_storage_rank(storage: str) -> int:
         "supervised_confirmation": 4,
     }
     return order.get(storage, 99)
+
+
+def _build_synthetic_application_snapshot(index: int) -> dict[str, Any]:
+    platforms = ["LinkedIn", "Ashby", "Greenhouse", "Lever"]
+    role_titles = [
+        "Site Reliability Engineer",
+        "Platform Engineer, Kubernetes",
+        "Cloud Infrastructure Engineer",
+        "DevOps Engineer",
+        "Backend Infrastructure Engineer",
+    ]
+    platform = platforms[(index - 1) % len(platforms)]
+    title = role_titles[(index - 1) % len(role_titles)]
+    company = f"SyntheticCo {index:03d}"
+    base_url = {
+        "LinkedIn": "https://www.linkedin.com/jobs/view/",
+        "Ashby": "https://jobs.ashbyhq.com/synthetic/",
+        "Greenhouse": "https://job-boards.greenhouse.io/synthetic/jobs/",
+        "Lever": "https://jobs.lever.co/synthetic/",
+    }[platform]
+    closed = index % 17 == 0
+    fields = [
+        {"i": 1, "label": "First Name", "tag": "INPUT", "required": True},
+        {"i": 2, "label": "Last Name", "tag": "INPUT", "required": True},
+        {"i": 3, "label": "Email", "tag": "INPUT", "required": True},
+        {"i": 4, "label": "Phone", "tag": "INPUT", "required": True},
+        {"i": 5, "label": "Current Location", "tag": "INPUT", "required": True},
+        {"i": 6, "label": "Resume/CV", "tag": "INPUT", "type": "file", "required": True},
+        {"i": 7, "label": "LinkedIn Profile", "tag": "INPUT", "required": False},
+        {
+            "i": 8,
+            "label": "Are you legally authorized to work in the United States?",
+            "tag": "SELECT",
+            "required": True,
+        },
+        {
+            "i": 9,
+            "label": "Will you now or in the future require visa sponsorship?",
+            "tag": "SELECT",
+            "required": True,
+        },
+        {"i": 10, "label": "Expected compensation", "tag": "INPUT", "required": False},
+        {"i": 11, "label": "Available start date", "tag": "INPUT", "required": False},
+        {"i": 12, "label": "Are you open to relocation?", "tag": "SELECT", "required": False},
+        {
+            "i": 13,
+            "label": "How many years of Kubernetes production experience do you have?",
+            "tag": "INPUT",
+            "required": True,
+        },
+        {
+            "i": 14,
+            "label": "Describe relevant experience for this role.",
+            "tag": "TEXTAREA",
+            "required": True,
+        },
+        {
+            "i": 15,
+            "label": "Which cloud providers have you used: AWS, Azure, or GCP?",
+            "tag": "TEXTAREA",
+            "required": False,
+        },
+    ]
+    if platform in {"Greenhouse", "Lever"}:
+        fields.extend(
+            [
+                {
+                    "i": 16,
+                    "label": "I acknowledge the privacy policy.",
+                    "tag": "INPUT",
+                    "type": "checkbox",
+                    "required": True,
+                },
+                {
+                    "i": 17,
+                    "label": "Do you consent to SMS or WhatsApp messages?",
+                    "tag": "SELECT",
+                    "required": False,
+                },
+                {"i": 18, "label": "Gender", "tag": "SELECT", "required": False},
+                {"i": 19, "label": "Veteran status", "tag": "SELECT", "required": False},
+            ]
+        )
+    if platform == "Ashby":
+        fields.append(
+            {
+                "i": 20,
+                "label": "How did you hear about this role?",
+                "tag": "INPUT",
+                "required": False,
+            }
+        )
+    if index % 5 == 0:
+        fields.append({"i": 21, "name": "g-recaptcha-response", "tag": "TEXTAREA"})
+    return {
+        "title": f"{company} application",
+        "company": company,
+        "job_title": title,
+        "platform": platform,
+        "url": f"{base_url}{900000 + index}/",
+        "page_text": "No longer accepting applications" if closed else f"Apply for {title}",
+        "fields": fields,
+        "buttons": [{"i": 99, "text": "Submit application", "tag": "BUTTON"}],
+    }
+
+
+def _synthetic_issue_summary(
+    runs: list[dict[str, Any]],
+    steps: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    step_counts = _count_by(steps, "status")
+    handling = {
+        "missing_profile_value": "add candidate profile field before browser automation",
+        "missing_local_material": "record approved local file path before upload automation",
+        "missing_answer": "ask once, save approved non-sensitive answer memory",
+        "missing_resume_facts": "add resume facts before custom generation",
+        "needs_human_review": "preselect only after supervised learning; keep review gate",
+        "sensitive_not_stored": "ask on page each time; do not persist protected-class answer",
+        "manual_security_step": "pause for human CAPTCHA/security check",
+        "final_submit_confirmation": "never click final submit without explicit approval",
+    }
+    for status, count in sorted(step_counts.items()):
+        if status == "ready":
+            continue
+        labels = [
+            str(step.get("label"))
+            for step in steps
+            if step.get("status") == status and step.get("label")
+        ]
+        seen: list[str] = []
+        for label in labels:
+            if label not in seen:
+                seen.append(label)
+        issues.append(
+            {
+                "status": status,
+                "count": count,
+                "handling": handling.get(status, "inspect in supervised flow"),
+                "example_labels": seen[:8],
+            }
+        )
+    closed_count = sum(1 for run in runs if run.get("status") == "closed_skip")
+    if closed_count:
+        issues.insert(
+            0,
+            {
+                "status": "closed_skip",
+                "count": closed_count,
+                "handling": "skip and persist in closed registry before notify/open/apply",
+                "example_labels": ["No longer accepting applications"],
+            },
+        )
+    return issues
 
 
 def _count_by(items: list[dict[str, Any]], key: str) -> dict[str, int]:

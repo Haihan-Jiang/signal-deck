@@ -196,6 +196,23 @@ The readiness report marks each observed position as `autofill_ready`,
 `needs_learning`, or `needs_research`, and condenses repeated blockers into a
 minimal learning task list for answers/materials that should be confirmed once.
 
+Turn that learning queue into a fill-in template:
+
+```bash
+python3 -m job_apply_agent learning-template \
+  --readiness-json job_apply_agent/outbox/automation_readiness_latest.json
+```
+
+After editing the JSON so only approved non-sensitive tasks have
+`approved: true` and an `answer`, apply those approved answers locally:
+
+```bash
+python3 -m job_apply_agent apply-learning \
+  --tasks job_apply_agent/outbox/learning_tasks_latest.json \
+  --profile job_apply_agent/outbox/alan_jiang_profile.json \
+  --memory job_apply_agent/outbox/answer_memory.json
+```
+
 For a captured Ashby or Greenhouse form snapshot, generate an offline fill plan:
 
 ```bash
@@ -209,6 +226,26 @@ By default, the plan records value sources and blocking gates, not the actual
 profile values. Use this before browser execution to verify each field will be
 filled from profile data, answer memory, generated material, or stopped for
 human review/security/final-submit confirmation.
+
+For end-to-end safety testing with fake candidate data, use the synthetic
+offline harness. It creates fake LinkedIn/Ashby/Greenhouse/Lever-style forms,
+checks closed-posting text, builds fill plans, and summarizes blockers without
+touching real employer systems:
+
+```bash
+python3 -m job_apply_agent synthetic-run --count 100
+```
+
+This writes:
+
+```text
+job_apply_agent/outbox/synthetic_100_run_latest.json
+job_apply_agent/outbox/synthetic_100_run_latest.md
+```
+
+The synthetic harness is intentionally not a real submission tool. It exists to
+prove field mapping and summarize the gates that still require supervised
+handling before any permitted real application flow.
 
 ## Learning From Approved Applications
 

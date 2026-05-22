@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from .core import (
+    apply_learning_task_answers,
     build_answer_gap_report,
     build_application_draft,
     build_application_research,
@@ -23,7 +24,9 @@ from .core import (
     write_answer_gap_report,
     write_application_research_report,
     write_form_fill_plan,
+    write_learning_task_template,
     write_position_readiness_report,
+    write_synthetic_application_simulation,
 )
 
 
@@ -41,6 +44,10 @@ DEFAULT_READINESS_JSON = Path(__file__).with_name("outbox") / "automation_readin
 DEFAULT_READINESS_MARKDOWN = Path(__file__).with_name("outbox") / "automation_readiness_latest.md"
 DEFAULT_FILL_PLAN_JSON = Path(__file__).with_name("outbox") / "form_fill_plan_latest.json"
 DEFAULT_FILL_PLAN_MARKDOWN = Path(__file__).with_name("outbox") / "form_fill_plan_latest.md"
+DEFAULT_LEARNING_TASKS_JSON = Path(__file__).with_name("outbox") / "learning_tasks_latest.json"
+DEFAULT_LEARNING_TASKS_MARKDOWN = Path(__file__).with_name("outbox") / "learning_tasks_latest.md"
+DEFAULT_SYNTHETIC_JSON = Path(__file__).with_name("outbox") / "synthetic_100_run_latest.json"
+DEFAULT_SYNTHETIC_MARKDOWN = Path(__file__).with_name("outbox") / "synthetic_100_run_latest.md"
 DEFAULT_PERSONAL_PROFILE = Path(__file__).with_name("outbox") / "alan_jiang_profile.json"
 
 
@@ -202,6 +209,36 @@ def main() -> int:
     fill_plan_parser.add_argument("--json-output", default=str(DEFAULT_FILL_PLAN_JSON))
     fill_plan_parser.add_argument("--markdown-output", default=str(DEFAULT_FILL_PLAN_MARKDOWN))
 
+    learning_template_parser = subparsers.add_parser(
+        "learning-template",
+        help="write a reusable answer/material template from readiness blockers",
+    )
+    learning_template_parser.add_argument("--readiness-json", default=str(DEFAULT_READINESS_JSON))
+    learning_template_parser.add_argument("--json-output", default=str(DEFAULT_LEARNING_TASKS_JSON))
+    learning_template_parser.add_argument("--markdown-output", default=str(DEFAULT_LEARNING_TASKS_MARKDOWN))
+
+    apply_learning_parser = subparsers.add_parser(
+        "apply-learning",
+        help="apply approved learning-template answers to profile and answer memory",
+    )
+    apply_learning_parser.add_argument("--tasks", default=str(DEFAULT_LEARNING_TASKS_JSON))
+    apply_learning_parser.add_argument(
+        "--profile",
+        default=str(DEFAULT_PERSONAL_PROFILE if DEFAULT_PERSONAL_PROFILE.exists() else DEFAULT_PROFILE),
+    )
+    apply_learning_parser.add_argument("--memory", default=str(DEFAULT_MEMORY))
+    apply_learning_parser.add_argument("--source", default="learning_task_template")
+    apply_learning_parser.add_argument("--dry-run", action="store_true")
+
+    synthetic_parser = subparsers.add_parser(
+        "synthetic-run",
+        help="run offline fake-candidate application simulations without real submissions",
+    )
+    synthetic_parser.add_argument("--count", type=int, default=100)
+    synthetic_parser.add_argument("--include-values", action="store_true")
+    synthetic_parser.add_argument("--json-output", default=str(DEFAULT_SYNTHETIC_JSON))
+    synthetic_parser.add_argument("--markdown-output", default=str(DEFAULT_SYNTHETIC_MARKDOWN))
+
     args = parser.parse_args()
 
     if args.command == "learn":
@@ -352,6 +389,49 @@ def main() -> int:
             f"{plan['blocking_step_count']} blocking step(s)"
         )
         for status, count in plan.get("status_counts", {}).items():
+            print(f"{status}: {count}")
+        return 0
+
+    if args.command == "learning-template":
+        readiness_path = Path(args.readiness_json)
+        if not readiness_path.exists():
+            raise FileNotFoundError(f"readiness report not found: {args.readiness_json}")
+        readiness = json.loads(readiness_path.read_text(encoding="utf-8"))
+        template = write_learning_task_template(
+            readiness,
+            args.json_output,
+            args.markdown_output,
+        )
+        print(f"Wrote learning task JSON to {args.json_output}")
+        print(f"Wrote learning task Markdown to {args.markdown_output}")
+        print(f"Tasks: {template.get('task_count', 0)}")
+        return 0
+
+    if args.command == "apply-learning":
+        result = apply_learning_task_answers(
+            args.tasks,
+            args.profile,
+            args.memory,
+            source=args.source,
+            dry_run=args.dry_run,
+        )
+        print(f"Dry run: {str(bool(result.get('dry_run'))).lower()}")
+        print(f"Profile updates: {len(result.get('profile_updates', []))}")
+        print(f"Answer memory updates: {len(result.get('answer_memory_updates', []))}")
+        print(f"Skipped: {len(result.get('skipped', []))}")
+        return 0
+
+    if args.command == "synthetic-run":
+        report = write_synthetic_application_simulation(
+            args.json_output,
+            args.markdown_output,
+            count=args.count,
+            include_values=args.include_values,
+        )
+        print(f"Wrote synthetic simulation JSON to {args.json_output}")
+        print(f"Wrote synthetic simulation Markdown to {args.markdown_output}")
+        print(f"Runs: {report.get('run_count', 0)}")
+        for status, count in report.get("status_counts", {}).items():
             print(f"{status}: {count}")
         return 0
 

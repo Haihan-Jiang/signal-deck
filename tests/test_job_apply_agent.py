@@ -7,11 +7,13 @@ from pathlib import Path
 
 from job_apply_agent.core import (
     CandidateProfile,
+    apply_learning_task_answers,
     build_answer_gap_report,
     build_application_draft,
     build_application_research,
     build_browser_review_record,
     build_form_fill_plan,
+    build_learning_task_template,
     build_position_readiness_report,
     build_telegram_job_alert,
     classify_application_prompt,
@@ -35,14 +37,18 @@ from job_apply_agent.core import (
     render_answer_gap_markdown,
     render_application_research_markdown,
     render_form_fill_plan_markdown,
+    render_learning_task_template_markdown,
     render_position_readiness_markdown,
+    run_synthetic_application_simulation,
     run_pipeline,
     score_job,
     shorten_apply_url,
     write_answer_gap_report,
     write_application_research_report,
     write_form_fill_plan,
+    write_learning_task_template,
     write_position_readiness_report,
+    write_synthetic_application_simulation,
 )
 
 
@@ -1013,6 +1019,115 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(json_output.exists())
             self.assertTrue(markdown_output.exists())
             self.assertIn("Form Fill Plan", markdown_output.read_text())
+
+    def test_learning_task_template_applies_approved_answers(self) -> None:
+        readiness = {
+            "minimal_learning_tasks": [
+                {
+                    "group_key": "profile:profile_links",
+                    "question": "What LinkedIn profile URL should automation use?",
+                    "recommended_storage": "profile",
+                    "labels": ["LinkedIn Profile"],
+                    "platforms": ["Greenhouse"],
+                },
+                {
+                    "group_key": "local_material:resume_file",
+                    "question": "Which approved resume file should automation upload?",
+                    "recommended_storage": "local_material",
+                    "labels": ["Resume"],
+                    "platforms": ["Ashby"],
+                },
+                {
+                    "group_key": "answer_memory:standard_question",
+                    "question": "Do you consent to SMS messages?",
+                    "recommended_storage": "answer_memory",
+                    "labels": ["Do you consent to SMS messages?"],
+                    "platforms": ["Greenhouse"],
+                },
+                {
+                    "group_key": "do_not_store:gender",
+                    "question": "Gender",
+                    "recommended_storage": "do_not_store",
+                    "labels": ["Gender"],
+                    "platforms": ["Greenhouse"],
+                },
+            ]
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            template_path = Path(temp_dir) / "learning.json"
+            markdown_path = Path(temp_dir) / "learning.md"
+            profile_path = Path(temp_dir) / "profile.json"
+            memory_path = Path(temp_dir) / "memory.json"
+            template = write_learning_task_template(readiness, template_path, markdown_path)
+            for task in template["tasks"]:
+                task["approved"] = True
+                if task["recommended_storage"] == "profile":
+                    task["answer"] = "https://www.linkedin.com/in/example/"
+                elif task["recommended_storage"] == "local_material":
+                    task["answer"] = "/tmp/example-resume.pdf"
+                elif task["recommended_storage"] == "answer_memory":
+                    task["answer"] = "No, I do not consent to SMS messages."
+                else:
+                    task["answer"] = "Prefer not to answer"
+            template_path.write_text(json.dumps(template), encoding="utf-8")
+            profile_path.write_text(
+                json.dumps(
+                    {
+                        "candidate": {"name": "Test User"},
+                        "preferences": {},
+                        "resume_facts": {},
+                        "question_answers": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            dry_run = apply_learning_task_answers(
+                template_path,
+                profile_path,
+                memory_path,
+                dry_run=True,
+            )
+            self.assertEqual(dry_run["profile_updates"], ["linkedin_profile", "resume_path"])
+            self.assertFalse(memory_path.exists())
+
+            result = apply_learning_task_answers(template_path, profile_path, memory_path)
+
+            profile = json.loads(profile_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                profile["question_answers"]["linkedin_profile"],
+                "https://www.linkedin.com/in/example/",
+            )
+            self.assertEqual(profile["question_answers"]["resume_path"], "/tmp/example-resume.pdf")
+            memory = load_answer_memory(memory_path)
+            self.assertEqual(len(memory["answers"]), 1)
+            self.assertEqual(len(result["skipped"]), 1)
+            markdown = render_learning_task_template_markdown(build_learning_task_template(readiness))
+            self.assertIn("Learning Task Template", markdown)
+
+    def test_synthetic_application_simulation_never_submits_real_applications(self) -> None:
+        report = run_synthetic_application_simulation(count=20)
+
+        self.assertEqual(report["run_count"], 20)
+        self.assertFalse(report["real_platform_submission"])
+        self.assertEqual(report["status_counts"]["closed_skip"], 1)
+        self.assertIn("final_submit_confirmation", report["step_status_counts"])
+        self.assertIn("manual_security_step", report["step_status_counts"])
+        self.assertTrue(
+            all(run["real_platform_submission"] is False for run in report["runs"])
+        )
+
+    def test_write_synthetic_application_simulation_outputs_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            json_output = Path(temp_dir) / "synthetic.json"
+            markdown_output = Path(temp_dir) / "synthetic.md"
+
+            report = write_synthetic_application_simulation(json_output, markdown_output, count=5)
+
+            self.assertEqual(report["run_count"], 5)
+            self.assertTrue(json_output.exists())
+            self.assertTrue(markdown_output.exists())
+            self.assertIn("Synthetic Application Simulation", markdown_output.read_text())
 
 
 if __name__ == "__main__":
