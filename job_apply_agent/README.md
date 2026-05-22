@@ -265,6 +265,29 @@ fill/upload/generated-text actions only. Closed postings produce zero browser
 actions, and CAPTCHA, sensitive questions, manual review, and final submit stay
 as stop actions.
 
+To turn a manifest plus a captured/synthetic form snapshot into a local DOM
+harness:
+
+```bash
+python3 -m job_apply_agent dom-harness \
+  --manifest job_apply_agent/outbox/ramp_browser_actions_latest.json \
+  --snapshot job_apply_agent/outbox/ramp_application_form_snapshot.json
+```
+
+This writes:
+
+```text
+job_apply_agent/outbox/browser_dom_harness_latest.html
+job_apply_agent/outbox/browser_dom_runner_latest.js
+job_apply_agent/outbox/browser_dom_execution_plan_latest.json
+job_apply_agent/outbox/browser_dom_execution_plan_latest.md
+```
+
+The DOM harness is safety-gated for local targets only (`file://`,
+`localhost`, or loopback). The runner script fills local HTML controls and
+records selector misses, but it does not click submit and records
+`actualSubmitCount: 0`.
+
 To collect the remaining user-confirmation questions and browser stop points
 into one pre-submit checklist:
 

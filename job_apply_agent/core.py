@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import html
 import os
 import re
 import shlex
@@ -36,6 +37,7 @@ CLOSED_APPLICATION_PHRASES = [
 ]
 DEFAULT_LIVE_CHECK_LIMIT = 25
 SYNTHETIC_APPLICATION_PLATFORMS = ["LinkedIn", "Ashby", "Greenhouse", "Lever"]
+LOCAL_BROWSER_EXECUTION_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
 
 
 @dataclass(frozen=True)
@@ -1626,11 +1628,239 @@ def write_pre_submit_review(
     return review
 
 
+def is_safe_browser_execution_target(url: str) -> bool:
+    parsed = urllib.parse.urlparse(str(url or ""))
+    if parsed.scheme == "file":
+        return True
+    if parsed.scheme in {"http", "https"}:
+        return parsed.hostname in LOCAL_BROWSER_EXECUTION_HOSTS
+    return False
+
+
+def build_browser_dom_execution_plan(
+    manifest: dict[str, Any],
+    target_url: str,
+) -> dict[str, Any]:
+    execution_allowed = is_safe_browser_execution_target(target_url)
+    source_url = str(manifest.get("url") or "")
+    if not execution_allowed:
+        safety_status = "blocked_nonlocal_target"
+        actions: list[dict[str, Any]] = []
+        stop_actions = [
+            {
+                "status": "safety_block",
+                "label": target_url,
+                "handling": "only execute browser actions on file, localhost, or loopback targets",
+                "safe_to_execute": False,
+            }
+        ]
+    elif manifest.get("status") == "closed_skip":
+        safety_status = "closed_skip"
+        actions = []
+        stop_actions = manifest.get("stop_actions", [])
+    else:
+        safety_status = "allowed_local_target"
+        actions = [
+            action
+            for action in manifest.get("browser_actions", [])
+            if isinstance(action, dict) and action.get("safe_to_execute") is not False
+        ]
+        stop_actions = manifest.get("stop_actions", [])
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "browser_dom_execution_plan",
+        "target_url": target_url,
+        "source_url": source_url,
+        "title": manifest.get("title"),
+        "platform": manifest.get("platform"),
+        "execution_allowed": execution_allowed,
+        "safety_status": safety_status,
+        "real_platform_submission": False,
+        "final_submit_allowed": False,
+        "would_submit": False,
+        "actual_submit_count": 0,
+        "browser_action_count": len(actions),
+        "stop_action_count": len(stop_actions),
+        "browser_actions": actions,
+        "stop_actions": stop_actions,
+        "policy": {
+            "local_targets_only": True,
+            "remote_employer_pages_blocked": True,
+            "final_submit_allowed": False,
+            "fake_data_real_submission_allowed": False,
+        },
+    }
+
+
+def render_synthetic_application_html(
+    snapshot: dict[str, Any],
+    runner_script: str = "",
+) -> str:
+    title = html.escape(str(snapshot.get("title") or "Synthetic application"))
+    page_text = html.escape(str(snapshot.get("page_text") or "Synthetic local application form"))
+    field_html = []
+    for field in snapshot.get("fields", []):
+        if not isinstance(field, dict):
+            continue
+        field_html.append(_render_synthetic_field_html(field))
+    button_html = []
+    for button in snapshot.get("buttons", []):
+        if not isinstance(button, dict):
+            continue
+        raw_label = _field_prompt_label(button) or "Submit application"
+        label = html.escape(raw_label)
+        index = html.escape(str(button.get("i") or ""))
+        final_attr = ' data-final-submit="true"' if "submit" in _normalize(raw_label) else ""
+        button_html.append(
+            f'<button type="button" data-field-index="{index}" data-item-type="button" data-label="{label}" aria-label="{label}"{final_attr}>{label}</button>'
+        )
+    script_html = f"\n<script>\n{runner_script}\n</script>\n" if runner_script else ""
+    return "\n".join(
+        [
+            "<!doctype html>",
+            '<html lang="en">',
+            "<head>",
+            '<meta charset="utf-8">',
+            '<meta name="viewport" content="width=device-width, initial-scale=1">',
+            f"<title>{title}</title>",
+            "<style>",
+            "body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;max-width:760px;margin:32px auto;padding:0 16px;line-height:1.4}",
+            "label{display:block;margin:14px 0 4px;font-weight:600}",
+            "input,select,textarea{width:100%;box-sizing:border-box;padding:8px;border:1px solid #999;border-radius:4px}",
+            "button{margin-top:20px;padding:10px 14px;border:1px solid #333;background:#f7f7f7;border-radius:4px}",
+            "pre{white-space:pre-wrap;background:#f5f5f5;padding:12px;border-radius:4px}",
+            "</style>",
+            "</head>",
+            "<body>",
+            f"<h1>{title}</h1>",
+            f'<p data-page-text="true">{page_text}</p>',
+            '<form data-synthetic-application="true">',
+            *field_html,
+            *button_html,
+            "</form>",
+            '<h2>Runner Result</h2>',
+            '<pre id="runner-result"></pre>',
+            script_html,
+            "</body>",
+            "</html>",
+        ]
+    )
+
+
+def build_browser_dom_runner_script(manifest: dict[str, Any]) -> str:
+    manifest_json = json.dumps(manifest, ensure_ascii=True)
+    return "\n".join(
+        [
+            "(() => {",
+            f"  const manifest = {manifest_json};",
+            "  const normalize = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();",
+            "  const fields = () => Array.from(document.querySelectorAll('[data-field-index], input, select, textarea, button'));",
+            "  const filterByItemType = (matches, action) => {",
+            "    const itemType = action.item_type || '';",
+            "    if (!itemType) return matches;",
+            "    const filtered = matches.filter((el) => (el.dataset.itemType || (el.tagName === 'BUTTON' ? 'button' : 'field')) === itemType);",
+            "    return filtered.length ? filtered : matches;",
+            "  };",
+            "  const matchByCandidate = (candidate) => {",
+            "    if (!candidate) return [];",
+            "    if (candidate.strategy === 'css') return Array.from(document.querySelectorAll(candidate.selector));",
+            "    if (candidate.strategy === 'field_index') return fields().filter((el) => String(el.dataset.fieldIndex || '') === String(candidate.selector));",
+            "    if (candidate.strategy === 'label_text') return fields().filter((el) => normalize(el.dataset.label || el.getAttribute('aria-label') || '') === normalize(candidate.selector));",
+            "    return [];",
+            "  };",
+            "  const resolve = (action) => {",
+            "    for (const candidate of action.selector_candidates || []) {",
+            "      const matches = filterByItemType(matchByCandidate(candidate), action);",
+            "      if (matches.length === 1) return { element: matches[0], candidate };",
+            "    }",
+            "    return null;",
+            "  };",
+            "  const result = {",
+            "    source: 'browser_dom_runner_script',",
+            "    realPlatformSubmission: false,",
+            "    finalSubmitAllowed: false,",
+            "    wouldSubmit: false,",
+            "    actualSubmitCount: 0,",
+            "    executed: [],",
+            "    selectorMisses: [],",
+            "    stopActions: manifest.stop_actions || []",
+            "  };",
+            "  if (manifest.status === 'closed_skip') {",
+            "    result.outcome = 'closed_skip';",
+            "  } else {",
+            "    for (const action of manifest.browser_actions || []) {",
+            "      const resolved = resolve(action);",
+            "      if (!resolved) {",
+            "        result.selectorMisses.push({ label: action.label, fieldIndex: action.field_index, browserAction: action.browser_action });",
+            "        continue;",
+            "      }",
+            "      const value = action.value || `[${action.value_source || action.browser_action || 'value'}]`;",
+            "      if (action.browser_action === 'upload_file') {",
+            "        resolved.element.dataset.uploadedFileSource = action.value_source || '';",
+            "      } else if ('value' in resolved.element) {",
+            "        resolved.element.value = value;",
+            "      }",
+            "      resolved.element.dispatchEvent(new Event('input', { bubbles: true }));",
+            "      resolved.element.dispatchEvent(new Event('change', { bubbles: true }));",
+            "      result.executed.push({ label: action.label, selector: resolved.candidate.selector, strategy: resolved.candidate.strategy, browserAction: action.browser_action });",
+            "    }",
+            "    result.outcome = result.selectorMisses.length ? 'selector_resolution_failed' : (result.stopActions.length ? 'executed_to_policy_stop' : 'completed_autofill_no_submit');",
+            "  }",
+            "  window.__JOB_APPLY_RUNNER_RESULT__ = result;",
+            "  const target = document.getElementById('runner-result');",
+            "  if (target) target.textContent = JSON.stringify(result, null, 2);",
+            "})();",
+        ]
+    )
+
+
+def write_browser_dom_harness(
+    manifest_path: str | Path,
+    snapshot_path: str | Path,
+    html_output: str | Path,
+    script_output: str | Path,
+    json_output: str | Path,
+    markdown_output: str | Path,
+) -> dict[str, Any]:
+    manifest = _read_json_file(Path(manifest_path))
+    snapshot = _read_json_file(Path(snapshot_path))
+    if not isinstance(manifest, dict):
+        raise ValueError("manifest must be a JSON object")
+    if not isinstance(snapshot, dict):
+        raise ValueError("snapshot must be a JSON object")
+    script = build_browser_dom_runner_script(manifest)
+    html_path = Path(html_output)
+    script_path = Path(script_output)
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    for path in [html_path, script_path, json_path, markdown_path]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    html_path.write_text(render_synthetic_application_html(snapshot, runner_script=script), encoding="utf-8")
+    script_path.write_text(script, encoding="utf-8")
+    plan = build_browser_dom_execution_plan(manifest, html_path.resolve().as_uri())
+    plan["manifest_file"] = Path(manifest_path).name
+    plan["snapshot_file"] = Path(snapshot_path).name
+    plan["html_file"] = str(html_path)
+    plan["script_file"] = str(script_path)
+    json_path.write_text(json.dumps(plan, ensure_ascii=True, indent=2), encoding="utf-8")
+    markdown_path.write_text(render_browser_dom_execution_plan_markdown(plan), encoding="utf-8")
+    return plan
+
+
 def execute_browser_action_manifest_locally(
     manifest: dict[str, Any],
     snapshot: dict[str, Any],
 ) -> dict[str, Any]:
-    fields = [field for field in snapshot.get("fields", []) if isinstance(field, dict)]
+    fields = [
+        {**field, "_item_type": "field"}
+        for field in snapshot.get("fields", [])
+        if isinstance(field, dict)
+    ]
+    fields.extend(
+        {**button, "_item_type": "button"}
+        for button in snapshot.get("buttons", [])
+        if isinstance(button, dict)
+    )
     executed_actions: list[dict[str, Any]] = []
     selector_misses: list[dict[str, Any]] = []
     if manifest.get("status") == "closed_skip":
@@ -3016,6 +3246,56 @@ def render_pre_submit_review_markdown(review: dict[str, Any]) -> str:
 
     lines.extend(["", "## Policy", ""])
     for key, value in sorted((review.get("policy") or {}).items()):
+        lines.append(f"- {key}: {str(bool(value)).lower()}")
+    return "\n".join(lines) + "\n"
+
+
+def render_browser_dom_execution_plan_markdown(plan: dict[str, Any]) -> str:
+    lines = [
+        "# Browser DOM Execution Plan",
+        "",
+        f"Generated: {plan.get('generated_at')}",
+        f"Target URL: {plan.get('target_url')}",
+        f"Source URL: {plan.get('source_url')}",
+        f"Title: {plan.get('title')}",
+        f"Platform: {plan.get('platform')}",
+        f"Execution allowed: {str(bool(plan.get('execution_allowed'))).lower()}",
+        f"Safety status: {plan.get('safety_status')}",
+        f"Browser actions: {plan.get('browser_action_count', 0)}",
+        f"Stop actions: {plan.get('stop_action_count', 0)}",
+        f"Actual submit count: {plan.get('actual_submit_count', 0)}",
+        f"Would submit: {str(bool(plan.get('would_submit'))).lower()}",
+        "",
+        "## Browser Actions",
+        "",
+    ]
+    actions = plan.get("browser_actions", [])
+    if actions:
+        for action in actions[:80]:
+            lines.append(
+                "- {browser_action}: `{label}` ({source})".format(
+                    browser_action=action.get("browser_action"),
+                    label=action.get("label"),
+                    source=action.get("value_source") or "no value source",
+                )
+            )
+    else:
+        lines.append("- None")
+    lines.extend(["", "## Stop Actions", ""])
+    stop_actions = plan.get("stop_actions", [])
+    if stop_actions:
+        for action in stop_actions[:80]:
+            lines.append(
+                "- {status}: `{label}` ({handling})".format(
+                    status=action.get("status"),
+                    label=action.get("label"),
+                    handling=action.get("handling"),
+                )
+            )
+    else:
+        lines.append("- None")
+    lines.extend(["", "## Policy", ""])
+    for key, value in sorted((plan.get("policy") or {}).items()):
         lines.append(f"- {key}: {str(bool(value)).lower()}")
     return "\n".join(lines) + "\n"
 
@@ -4702,6 +4982,7 @@ def _resolve_browser_action_target(
             for field in fields
             if _field_matches_selector_candidate(field, candidate)
         ]
+        matches = _filter_targets_by_item_type(matches, action)
         if len(matches) == 1:
             return {
                 **matches[0],
@@ -4709,6 +4990,22 @@ def _resolve_browser_action_target(
                 "_matched_selector": candidate.get("selector"),
             }
     return None
+
+
+def _filter_targets_by_item_type(
+    targets: list[dict[str, Any]],
+    action: dict[str, Any],
+) -> list[dict[str, Any]]:
+    item_type = str(action.get("item_type") or "")
+    if not item_type:
+        return targets
+    filtered = [
+        target
+        for target in targets
+        if str(target.get("_item_type") or ("button" if str(target.get("tag") or "").upper() == "BUTTON" else "field"))
+        == item_type
+    ]
+    return filtered or targets
 
 
 def _field_matches_selector_candidate(
@@ -4737,6 +5034,42 @@ def _field_matches_selector_candidate(
     attr = str(match.group("attr"))
     value = match.group("value").replace('\\"', '"').replace("\\\\", "\\")
     return str(field.get(attr) or "").strip() == value
+
+
+def _render_synthetic_field_html(field: dict[str, Any]) -> str:
+    label = _field_prompt_label(field)
+    escaped_label = html.escape(label)
+    field_index = html.escape(str(field.get("i") or ""))
+    tag = str(field.get("tag") or "INPUT").upper()
+    field_type = str(field.get("type") or "text").lower()
+    element_id = str(field.get("id") or f"field-{field.get('i') or uuid.uuid4().hex}").strip()
+    escaped_id = html.escape(element_id, quote=True)
+    name = str(field.get("name") or "").strip()
+    name_attr = f' name="{html.escape(name, quote=True)}"' if name else ""
+    required_attr = " required" if field.get("required") else ""
+    data_attrs = (
+        f' id="{escaped_id}"'
+        f' data-field-index="{field_index}"'
+        ' data-item-type="field"'
+        f' data-label="{escaped_label}"'
+        f' aria-label="{escaped_label}"'
+        f"{name_attr}{required_attr}"
+    )
+    if tag == "TEXTAREA":
+        control = f"<textarea{data_attrs}></textarea>"
+    elif tag == "SELECT":
+        control = (
+            f"<select{data_attrs}>"
+            '<option value=""></option>'
+            '<option value="Yes">Yes</option>'
+            '<option value="No">No</option>'
+            '<option value="Prefer not to say">Prefer not to say</option>'
+            "</select>"
+        )
+    else:
+        input_type = html.escape(field_type or "text", quote=True)
+        control = f'<input type="{input_type}"{data_attrs}>'
+    return f'<label for="{escaped_id}">{escaped_label}</label>\n{control}'
 
 
 def _confirmation_item_from_stop_action(

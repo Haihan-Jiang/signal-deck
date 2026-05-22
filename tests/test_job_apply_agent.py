@@ -14,6 +14,8 @@ from job_apply_agent.core import (
     build_application_playbook,
     build_application_research,
     build_browser_action_manifest,
+    build_browser_dom_execution_plan,
+    build_browser_dom_runner_script,
     build_browser_review_record,
     build_form_fill_plan,
     build_learning_task_template,
@@ -28,6 +30,7 @@ from job_apply_agent.core import (
     extract_linkedin_job_id,
     find_learned_answer,
     job_registry_key,
+    is_safe_browser_execution_target,
     is_job_closed,
     learn_answers,
     load_answer_memory,
@@ -45,12 +48,14 @@ from job_apply_agent.core import (
     render_application_playbook_markdown,
     render_application_research_markdown,
     render_browser_action_manifest_markdown,
+    render_browser_dom_execution_plan_markdown,
     render_form_fill_plan_markdown,
     render_learning_task_template_markdown,
     render_pre_submit_review_markdown,
     render_position_readiness_markdown,
     render_synthetic_apply_execution_markdown,
     render_synthetic_browser_action_execution_markdown,
+    render_synthetic_application_html,
     run_synthetic_application_simulation,
     run_synthetic_apply_execution,
     run_synthetic_browser_action_execution,
@@ -62,6 +67,7 @@ from job_apply_agent.core import (
     write_application_playbook,
     write_application_research_report,
     write_browser_action_manifest,
+    write_browser_dom_harness,
     write_form_fill_plan,
     write_learning_task_template,
     write_pre_submit_review,
@@ -1283,6 +1289,157 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(json_output.exists())
             self.assertTrue(markdown_output.exists())
             self.assertIn("Browser Action Manifest", markdown_output.read_text())
+
+    def test_browser_dom_execution_plan_blocks_remote_targets(self) -> None:
+        manifest = {
+            "title": "Application",
+            "url": "https://www.linkedin.com/jobs/view/123/",
+            "platform": "LinkedIn",
+            "status": "autofill_ready",
+            "browser_actions": [
+                {
+                    "browser_action": "fill",
+                    "label": "Email",
+                    "safe_to_execute": True,
+                }
+            ],
+            "stop_actions": [],
+        }
+
+        plan = build_browser_dom_execution_plan(
+            manifest,
+            "https://www.linkedin.com/jobs/view/123/",
+        )
+
+        self.assertFalse(is_safe_browser_execution_target("https://www.linkedin.com/jobs/view/123/"))
+        self.assertTrue(is_safe_browser_execution_target("file:///tmp/application.html"))
+        self.assertTrue(is_safe_browser_execution_target("http://localhost:8000/application.html"))
+        self.assertFalse(plan["execution_allowed"])
+        self.assertEqual(plan["safety_status"], "blocked_nonlocal_target")
+        self.assertEqual(plan["browser_action_count"], 0)
+        self.assertEqual(plan["stop_actions"][0]["status"], "safety_block")
+        self.assertFalse(plan["would_submit"])
+        markdown = render_browser_dom_execution_plan_markdown(plan)
+        self.assertIn("Browser DOM Execution Plan", markdown)
+        self.assertIn("blocked_nonlocal_target", markdown)
+
+    def test_write_browser_dom_harness_outputs_local_html_and_runner(self) -> None:
+        snapshot = {
+            "title": "Application",
+            "url": "https://job-boards.greenhouse.io/example/jobs/1",
+            "page_text": "Apply locally",
+            "fields": [
+                {"i": 1, "tag": "INPUT", "type": "email", "id": "email", "label": "Email"},
+                {"i": 2, "tag": "INPUT", "type": "file", "name": "resume", "label": "Resume"},
+            ],
+            "buttons": [{"i": 99, "tag": "BUTTON", "text": "Submit application"}],
+        }
+        plan = {
+            "title": snapshot["title"],
+            "url": snapshot["url"],
+            "platform": "Greenhouse",
+            "steps": [
+                {
+                    "field_index": 1,
+                    "item_type": "field",
+                    "tag": "INPUT",
+                    "type": "email",
+                    "id": "email",
+                    "action": "fill",
+                    "status": "ready",
+                    "label": "Email",
+                    "category": "profile_identity",
+                    "value_source": "profile.email",
+                },
+                {
+                    "field_index": 2,
+                    "item_type": "field",
+                    "tag": "INPUT",
+                    "type": "file",
+                    "name": "resume",
+                    "action": "upload",
+                    "status": "ready",
+                    "label": "Resume",
+                    "category": "resume_upload",
+                    "value_source": "profile.question_answers.resume_path",
+                },
+                {
+                    "field_index": 99,
+                    "item_type": "button",
+                    "tag": "BUTTON",
+                    "action": "submit_gate",
+                    "status": "final_submit_confirmation",
+                    "label": "Submit application",
+                    "category": "final_submit",
+                },
+            ],
+        }
+        manifest = build_browser_action_manifest(plan)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manifest_path = root / "manifest.json"
+            snapshot_path = root / "snapshot.json"
+            html_output = root / "harness.html"
+            script_output = root / "runner.js"
+            json_output = root / "dom_plan.json"
+            markdown_output = root / "dom_plan.md"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
+
+            dom_plan = write_browser_dom_harness(
+                manifest_path,
+                snapshot_path,
+                html_output,
+                script_output,
+                json_output,
+                markdown_output,
+            )
+
+            self.assertTrue(dom_plan["execution_allowed"])
+            self.assertEqual(dom_plan["safety_status"], "allowed_local_target")
+            self.assertEqual(dom_plan["browser_action_count"], 2)
+            self.assertFalse(dom_plan["would_submit"])
+            html_text = html_output.read_text(encoding="utf-8")
+            script_text = script_output.read_text(encoding="utf-8")
+            self.assertIn('data-field-index="1"', html_text)
+            self.assertIn('data-item-type="field"', html_text)
+            self.assertIn('data-item-type="button"', html_text)
+            self.assertIn('data-label="Submit application"', html_text)
+            self.assertIn("window.__JOB_APPLY_RUNNER_RESULT__", html_text)
+            self.assertIn("actualSubmitCount: 0", script_text)
+            self.assertNotIn(".submit(", script_text)
+            self.assertIn("Browser DOM Execution Plan", markdown_output.read_text(encoding="utf-8"))
+
+    def test_synthetic_application_html_and_runner_script_are_safe(self) -> None:
+        snapshot = {
+            "title": "Local test",
+            "fields": [
+                {"i": 1, "tag": "INPUT", "type": "email", "id": "email", "label": "Email"},
+            ],
+            "buttons": [{"i": 99, "tag": "BUTTON", "text": "Submit application"}],
+        }
+        manifest = {
+            "status": "autofill_ready",
+            "browser_actions": [
+                {
+                    "browser_action": "fill",
+                    "field_index": 1,
+                    "label": "Email",
+                    "selector_candidates": [{"strategy": "css", "selector": "#email"}],
+                    "value_source": "profile.email",
+                    "safe_to_execute": True,
+                }
+            ],
+            "stop_actions": [{"status": "final_submit_confirmation", "label": "Submit application"}],
+        }
+
+        script = build_browser_dom_runner_script(manifest)
+        html_text = render_synthetic_application_html(snapshot, runner_script=script)
+
+        self.assertIn("<form", html_text)
+        self.assertIn("#email", html_text)
+        self.assertIn("actualSubmitCount: 0", script)
+        self.assertNotIn(".submit(", script)
 
     def test_pre_submit_review_aggregates_manifests_and_confirmation_items(self) -> None:
         manifest = {

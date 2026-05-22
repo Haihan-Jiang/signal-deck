@@ -26,6 +26,7 @@ from .core import (
     write_application_playbook,
     write_application_research_report,
     write_browser_action_manifest,
+    write_browser_dom_harness,
     write_form_fill_plan,
     write_learning_task_template,
     write_pre_submit_review,
@@ -54,6 +55,10 @@ DEFAULT_APPLY_AUDIT_JSON = Path(__file__).with_name("outbox") / "apply_run_audit
 DEFAULT_APPLY_AUDIT_MARKDOWN = Path(__file__).with_name("outbox") / "apply_run_audit_latest.md"
 DEFAULT_BROWSER_ACTIONS_JSON = Path(__file__).with_name("outbox") / "browser_action_manifest_latest.json"
 DEFAULT_BROWSER_ACTIONS_MARKDOWN = Path(__file__).with_name("outbox") / "browser_action_manifest_latest.md"
+DEFAULT_DOM_HARNESS_HTML = Path(__file__).with_name("outbox") / "browser_dom_harness_latest.html"
+DEFAULT_DOM_HARNESS_SCRIPT = Path(__file__).with_name("outbox") / "browser_dom_runner_latest.js"
+DEFAULT_DOM_HARNESS_JSON = Path(__file__).with_name("outbox") / "browser_dom_execution_plan_latest.json"
+DEFAULT_DOM_HARNESS_MARKDOWN = Path(__file__).with_name("outbox") / "browser_dom_execution_plan_latest.md"
 DEFAULT_PRE_SUBMIT_REVIEW_JSON = Path(__file__).with_name("outbox") / "pre_submit_review_latest.json"
 DEFAULT_PRE_SUBMIT_REVIEW_MARKDOWN = Path(__file__).with_name("outbox") / "pre_submit_review_latest.md"
 DEFAULT_LEARNING_TASKS_JSON = Path(__file__).with_name("outbox") / "learning_tasks_latest.json"
@@ -249,6 +254,17 @@ def main() -> int:
     browser_actions_parser.add_argument("--include-values", action="store_true")
     browser_actions_parser.add_argument("--json-output", default=str(DEFAULT_BROWSER_ACTIONS_JSON))
     browser_actions_parser.add_argument("--markdown-output", default=str(DEFAULT_BROWSER_ACTIONS_MARKDOWN))
+
+    dom_harness_parser = subparsers.add_parser(
+        "dom-harness",
+        help="write a local HTML/JS harness for a browser action manifest and captured snapshot",
+    )
+    dom_harness_parser.add_argument("--manifest", default=str(DEFAULT_BROWSER_ACTIONS_JSON))
+    dom_harness_parser.add_argument("--snapshot", required=True)
+    dom_harness_parser.add_argument("--html-output", default=str(DEFAULT_DOM_HARNESS_HTML))
+    dom_harness_parser.add_argument("--script-output", default=str(DEFAULT_DOM_HARNESS_SCRIPT))
+    dom_harness_parser.add_argument("--json-output", default=str(DEFAULT_DOM_HARNESS_JSON))
+    dom_harness_parser.add_argument("--markdown-output", default=str(DEFAULT_DOM_HARNESS_MARKDOWN))
 
     pre_submit_parser = subparsers.add_parser(
         "pre-submit-review",
@@ -534,6 +550,25 @@ def main() -> int:
         print(f"Browser actions: {manifest.get('action_count', 0)}")
         print(f"Stop actions: {manifest.get('stop_action_count', 0)}")
         print(f"Would submit: {str(bool(manifest.get('would_submit'))).lower()}")
+        return 0
+
+    if args.command == "dom-harness":
+        plan = write_browser_dom_harness(
+            args.manifest,
+            args.snapshot,
+            args.html_output,
+            args.script_output,
+            args.json_output,
+            args.markdown_output,
+        )
+        print(f"Wrote browser DOM harness HTML to {args.html_output}")
+        print(f"Wrote browser DOM runner script to {args.script_output}")
+        print(f"Wrote browser DOM execution JSON to {args.json_output}")
+        print(f"Wrote browser DOM execution Markdown to {args.markdown_output}")
+        print(f"Execution allowed: {str(bool(plan.get('execution_allowed'))).lower()}")
+        print(f"Safety status: {plan.get('safety_status')}")
+        print(f"Browser actions: {plan.get('browser_action_count', 0)}")
+        print(f"Would submit: {str(bool(plan.get('would_submit'))).lower()}")
         return 0
 
     if args.command == "pre-submit-review":
