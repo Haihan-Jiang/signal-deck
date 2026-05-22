@@ -27,6 +27,7 @@ from .core import (
     write_application_research_report,
     write_browser_action_manifest,
     write_browser_dom_harness,
+    write_closed_posting_preflight,
     write_form_fill_plan,
     write_learning_task_template,
     write_pre_submit_review,
@@ -55,6 +56,8 @@ DEFAULT_APPLY_AUDIT_JSON = Path(__file__).with_name("outbox") / "apply_run_audit
 DEFAULT_APPLY_AUDIT_MARKDOWN = Path(__file__).with_name("outbox") / "apply_run_audit_latest.md"
 DEFAULT_BROWSER_ACTIONS_JSON = Path(__file__).with_name("outbox") / "browser_action_manifest_latest.json"
 DEFAULT_BROWSER_ACTIONS_MARKDOWN = Path(__file__).with_name("outbox") / "browser_action_manifest_latest.md"
+DEFAULT_CLOSED_PREFLIGHT_JSON = Path(__file__).with_name("outbox") / "closed_posting_preflight_latest.json"
+DEFAULT_CLOSED_PREFLIGHT_MARKDOWN = Path(__file__).with_name("outbox") / "closed_posting_preflight_latest.md"
 DEFAULT_DOM_HARNESS_HTML = Path(__file__).with_name("outbox") / "browser_dom_harness_latest.html"
 DEFAULT_DOM_HARNESS_SCRIPT = Path(__file__).with_name("outbox") / "browser_dom_runner_latest.js"
 DEFAULT_DOM_HARNESS_JSON = Path(__file__).with_name("outbox") / "browser_dom_execution_plan_latest.json"
@@ -166,6 +169,19 @@ def main() -> int:
     close_parser.add_argument("--reason", default="No longer accepting applications")
     close_parser.add_argument("--source", default="manual")
     close_parser.add_argument("--closed-jobs", default=str(DEFAULT_CLOSED_JOBS))
+
+    closed_preflight_parser = subparsers.add_parser(
+        "closed-preflight",
+        help="batch-check candidate apply pages and write an open/closed/uncertain report",
+    )
+    closed_preflight_parser.add_argument("--submissions", default=str(DEFAULT_OUTBOX))
+    closed_preflight_parser.add_argument("--jobs", default=None)
+    closed_preflight_parser.add_argument("--limit", type=int, default=-1)
+    closed_preflight_parser.add_argument("--closed-jobs", default=str(DEFAULT_CLOSED_JOBS))
+    closed_preflight_parser.add_argument("--live-check-limit", type=int, default=25)
+    closed_preflight_parser.add_argument("--live-check-timeout", type=float, default=15.0)
+    closed_preflight_parser.add_argument("--json-output", default=str(DEFAULT_CLOSED_PREFLIGHT_JSON))
+    closed_preflight_parser.add_argument("--markdown-output", default=str(DEFAULT_CLOSED_PREFLIGHT_MARKDOWN))
 
     research_parser = subparsers.add_parser(
         "research",
@@ -390,6 +406,30 @@ def main() -> int:
             f"Recorded closed job {record.get('key')} in {args.closed_jobs}: "
             f"{record.get('company') or ''} {record.get('title') or ''}".strip()
         )
+        return 0
+
+    if args.command == "closed-preflight":
+        if args.jobs:
+            candidates = load_jobs(args.jobs)
+            if args.limit is not None and args.limit >= 0:
+                candidates = candidates[: args.limit]
+        else:
+            candidates = load_submissions_jsonl(args.submissions, limit=args.limit)
+        report = write_closed_posting_preflight(
+            candidates,
+            args.closed_jobs,
+            args.json_output,
+            args.markdown_output,
+            max_checks=args.live_check_limit,
+            timeout=args.live_check_timeout,
+        )
+        print(f"Wrote closed-posting preflight JSON to {args.json_output}")
+        print(f"Wrote closed-posting preflight Markdown to {args.markdown_output}")
+        print(f"Candidates: {report.get('candidate_count', 0)}")
+        print(f"Live checked: {report.get('live_checked_count', 0)}")
+        print(f"Closed: {report.get('closed_count', 0)}")
+        print(f"Open eligible: {report.get('open_eligible_count', 0)}")
+        print(f"Uncertain: {report.get('uncertain_count', 0)}")
         return 0
 
     if args.command == "research":

@@ -125,6 +125,26 @@ pages and automatically record closed postings when the live page says
 `No longer accepting applications`. Closed jobs are saved to
 `job_apply_agent/outbox/closed_jobs.json` and skipped in future runs.
 
+For a standalone preflight report before sending alerts or opening tabs:
+
+```bash
+python3 -m job_apply_agent closed-preflight \
+  --submissions job_apply_agent/outbox/daily_agent_submissions.jsonl \
+  --live-check-limit 25
+```
+
+This writes:
+
+```text
+job_apply_agent/outbox/closed_posting_preflight_latest.json
+job_apply_agent/outbox/closed_posting_preflight_latest.md
+```
+
+The preflight splits candidates into `open_live_checked`,
+`closed_registry` / `closed_live_text`, and uncertain states such as
+`check_error` or `not_checked_limit`. Only `open_live_checked` rows are treated
+as eligible for browser opening in a stricter supervised run.
+
 ## Application Question Research
 
 Summarize the fields and questions already observed across LinkedIn, Ashby,

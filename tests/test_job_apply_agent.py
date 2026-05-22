@@ -14,6 +14,7 @@ from job_apply_agent.core import (
     build_application_playbook,
     build_application_research,
     build_browser_action_manifest,
+    build_closed_posting_preflight,
     build_browser_dom_execution_plan,
     build_browser_dom_runner_script,
     build_browser_review_record,
@@ -48,6 +49,7 @@ from job_apply_agent.core import (
     render_application_playbook_markdown,
     render_application_research_markdown,
     render_browser_action_manifest_markdown,
+    render_closed_posting_preflight_markdown,
     render_browser_dom_execution_plan_markdown,
     render_form_fill_plan_markdown,
     render_learning_task_template_markdown,
@@ -67,6 +69,7 @@ from job_apply_agent.core import (
     write_application_playbook,
     write_application_research_report,
     write_browser_action_manifest,
+    write_closed_posting_preflight,
     write_browser_dom_harness,
     write_form_fill_plan,
     write_learning_task_template,
@@ -583,6 +586,101 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(result["checks"][0]["error"], "timed out")
             self.assertFalse(is_job_closed(submissions[0], result["closed_jobs"]))
 
+    def test_closed_application_phrase_handles_common_ats_variants(self) -> None:
+        self.assertEqual(
+            closed_application_phrase(
+                {"page_text": "Applications for this job are no longer being accepted."}
+            ),
+            "applications for this job are no longer being accepted",
+        )
+        self.assertEqual(
+            closed_application_phrase({"page_text": "This job posting has expired."}),
+            "this job posting has expired",
+        )
+        self.assertEqual(
+            closed_application_phrase({"page_text": "This position is no longer available."}),
+            "this position is no longer available",
+        )
+
+    def test_closed_posting_preflight_splits_open_closed_and_uncertain(self) -> None:
+        candidates = [
+            {
+                "platform": "LinkedIn",
+                "job_id": "10",
+                "company": "RegistryClosed",
+                "title": "SRE",
+                "apply_url": "https://www.linkedin.com/jobs/view/10/?trk=search",
+            },
+            {
+                "platform": "LinkedIn",
+                "job_id": "11",
+                "company": "LiveClosed",
+                "title": "SRE",
+                "apply_url": "https://www.linkedin.com/jobs/view/11/",
+            },
+            {
+                "platform": "Greenhouse",
+                "job_id": "12",
+                "company": "OpenCo",
+                "title": "Infrastructure Engineer",
+                "apply_url": "https://job-boards.greenhouse.io/open/jobs/12?src=LinkedIn",
+            },
+            {
+                "platform": "Ashby",
+                "job_id": "13",
+                "company": "ErrorCo",
+                "title": "Production Engineer",
+                "apply_url": "https://jobs.ashbyhq.com/error/13?src=LinkedIn",
+            },
+        ]
+
+        def fake_fetcher(url: str, timeout: float) -> str:
+            if url.endswith("/11/"):
+                return "<html>This position is no longer available.</html>"
+            if "/open/jobs/12" in url:
+                return "<html>Apply now</html>"
+            raise TimeoutError("timed out")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            closed_path = Path(temp_dir) / "closed_jobs.json"
+            record_closed_job(
+                closed_path,
+                candidates[0],
+                reason="No longer accepting applications",
+                source="test",
+            )
+            json_output = Path(temp_dir) / "closed_preflight.json"
+            markdown_output = Path(temp_dir) / "closed_preflight.md"
+
+            report = write_closed_posting_preflight(
+                candidates,
+                closed_path,
+                json_output,
+                markdown_output,
+                fetcher=fake_fetcher,
+                max_checks=3,
+            )
+
+            self.assertEqual(report["candidate_count"], 4)
+            self.assertEqual(report["live_checked_count"], 3)
+            self.assertEqual(report["closed_count"], 2)
+            self.assertEqual(report["newly_closed_count"], 1)
+            self.assertEqual(report["open_eligible_count"], 1)
+            self.assertEqual(report["uncertain_count"], 1)
+            self.assertEqual(report["status_counts"]["closed_registry"], 1)
+            self.assertEqual(report["status_counts"]["closed_live_text"], 1)
+            self.assertEqual(report["status_counts"]["open_live_checked"], 1)
+            self.assertEqual(report["status_counts"]["check_error"], 1)
+            self.assertTrue(is_job_closed(candidates[1], load_closed_jobs(closed_path)))
+            self.assertEqual(report["open_candidates"][0]["company"], "OpenCo")
+            self.assertTrue(json_output.exists())
+            markdown = markdown_output.read_text(encoding="utf-8")
+            self.assertIn("Closed Posting Preflight", markdown)
+            self.assertIn("OpenCo", markdown)
+            self.assertIn("LiveClosed", markdown)
+            self.assertIn("timed out", markdown)
+            self.assertIn("closed_live_text", render_closed_posting_preflight_markdown(report))
+
     def test_browser_review_record_has_next_action(self) -> None:
         record = build_browser_review_record(
             {"company": "Example", "title": "SRE"},
@@ -786,6 +884,70 @@ class JobApplyAgentTests(unittest.TestCase):
         markdown = render_answer_gap_markdown(report)
         self.assertIn("Application Answer Gap Report", markdown)
         self.assertIn("needs_profile_material", markdown)
+
+    def test_answer_gap_report_covers_skill_questions_from_resume_facts(self) -> None:
+        profile = CandidateProfile(
+            name="Alan Jiang",
+            email="alan@example.com",
+            phone="555-0100",
+            location="Bellevue, WA",
+            target_titles=["Site Reliability Engineer"],
+            target_locations=["United States"],
+            remote_ok=True,
+            keywords=["sre"],
+            blocklist=[],
+            min_score=1,
+            resume_facts={
+                "professional_summary": "SRE and automation engineer",
+                "kubernetes_oncall_experience": (
+                    "Operated Kubernetes-equivalent production services and handled "
+                    "on-call incident response for critical infrastructure."
+                ),
+                "cloud_experience": "Resume shows Azure and AWS infrastructure experience.",
+            },
+            question_answers={},
+        )
+        research = {
+            "generated_at": "2026-05-22T00:00:00+00:00",
+            "positions_observed_total": 1,
+            "items": [
+                {
+                    "label": "Do you have experience with Kubernetes operations and on-call practices?",
+                    "normalized_label": "experience kubernetes operations on call practices",
+                    "category": "skills_experience",
+                    "automation_action": "auto_answer_from_memory",
+                    "sensitivity": "standard_preference",
+                    "required": True,
+                    "platform": "LinkedIn",
+                    "source_file": "submissions.jsonl",
+                },
+                {
+                    "label": "Do you have experience with Google Cloud Platform?",
+                    "normalized_label": "experience google cloud platform",
+                    "category": "skills_experience",
+                    "automation_action": "auto_answer_from_memory",
+                    "sensitivity": "standard_preference",
+                    "required": True,
+                    "platform": "LinkedIn",
+                    "source_file": "submissions.jsonl",
+                },
+            ],
+        }
+
+        report = build_answer_gap_report(research, profile=profile, answer_memory=None)
+        statuses = {
+            item["label"]: item["coverage_status"]
+            for item in report["prompt_statuses"]
+        }
+
+        self.assertEqual(
+            statuses["Do you have experience with Kubernetes operations and on-call practices?"],
+            "covered_auto_answer",
+        )
+        self.assertEqual(
+            statuses["Do you have experience with Google Cloud Platform?"],
+            "needs_answer_memory",
+        )
 
     def test_write_answer_gap_report_outputs_json_and_markdown(self) -> None:
         research = {

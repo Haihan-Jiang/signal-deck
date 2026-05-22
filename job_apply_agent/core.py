@@ -29,10 +29,15 @@ CLOSED_APPLICATION_PHRASES = [
     "no longer accepting applications",
     "no longer accepting applicants",
     "not accepting applications",
+    "applications for this job are no longer being accepted",
     "applications are closed",
     "application window is closed",
+    "this job posting has expired",
     "job is no longer available",
+    "this job is no longer available",
+    "this position is no longer available",
     "position has been filled",
+    "this position has been filled",
     "posting has expired",
 ]
 DEFAULT_LIVE_CHECK_LIMIT = 25
@@ -3395,6 +3400,80 @@ def render_synthetic_browser_action_execution_markdown(report: dict[str, Any]) -
     return "\n".join(lines) + "\n"
 
 
+def render_closed_posting_preflight_markdown(report: dict[str, Any]) -> str:
+    lines = [
+        "# Closed Posting Preflight",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        f"Candidates: {report.get('candidate_count', 0)}",
+        f"Live checked: {report.get('live_checked_count', 0)}",
+        f"Closed: {report.get('closed_count', 0)}",
+        f"Newly closed: {report.get('newly_closed_count', 0)}",
+        f"Open eligible: {report.get('open_eligible_count', 0)}",
+        f"Uncertain: {report.get('uncertain_count', 0)}",
+        f"Errors: {report.get('error_count', 0)}",
+        "",
+        "## Status Counts",
+        "",
+    ]
+    for status, count in sorted((report.get("status_counts") or {}).items()):
+        lines.append(f"- {status}: {count}")
+
+    lines.extend(["", "## Open Eligible", ""])
+    open_candidates = report.get("open_candidates") or []
+    if open_candidates:
+        for item in open_candidates[:50]:
+            lines.append(
+                "- {company} - {title} [{platform}] {url}".format(
+                    company=item.get("company") or "Unknown company",
+                    title=item.get("title") or "Unknown title",
+                    platform=item.get("platform") or "Unknown",
+                    url=item.get("url") or "",
+                ).rstrip()
+            )
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Closed Or Skipped", ""])
+    closed_candidates = report.get("closed_candidates") or []
+    if closed_candidates:
+        for item in closed_candidates[:80]:
+            lines.append(
+                "- {status}: {company} - {title} [{platform}] reason={reason}".format(
+                    status=item.get("status"),
+                    company=item.get("company") or "Unknown company",
+                    title=item.get("title") or "Unknown title",
+                    platform=item.get("platform") or "Unknown",
+                    reason=item.get("reason") or "closed",
+                )
+            )
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Uncertain", ""])
+    uncertain_candidates = report.get("uncertain_candidates") or []
+    if uncertain_candidates:
+        for item in uncertain_candidates[:80]:
+            error = f" error={item.get('error')}" if item.get("error") else ""
+            lines.append(
+                "- {status}: {company} - {title} [{platform}] {url}{error}".format(
+                    status=item.get("status"),
+                    company=item.get("company") or "Unknown company",
+                    title=item.get("title") or "Unknown title",
+                    platform=item.get("platform") or "Unknown",
+                    url=item.get("url") or "",
+                    error=error,
+                ).rstrip()
+            )
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Policy", ""])
+    for key, value in sorted((report.get("policy") or {}).items()):
+        lines.append(f"- {key}: {str(bool(value)).lower()}")
+    return "\n".join(lines) + "\n"
+
+
 def refresh_closed_jobs_from_live_pages(
     submissions: list[dict[str, Any]],
     closed_jobs_path: str | Path,
@@ -3445,6 +3524,182 @@ def refresh_closed_jobs_from_live_pages(
             closed_jobs = load_closed_jobs(closed_jobs_path)
         checks.append(check)
     return {"closed_jobs": closed_jobs, "checks": checks}
+
+
+def build_closed_posting_preflight(
+    candidates: list[dict[str, Any]],
+    closed_jobs_path: str | Path,
+    max_checks: int | None = DEFAULT_LIVE_CHECK_LIMIT,
+    timeout: float = 15.0,
+    fetcher: Any | None = None,
+    source: str = "closed_posting_preflight",
+) -> dict[str, Any]:
+    closed_jobs = load_closed_jobs(closed_jobs_path)
+    fetch_page = fetcher or fetch_live_page_text
+    checks: list[dict[str, Any]] = []
+    live_checked_count = 0
+    newly_closed_count = 0
+
+    for index, candidate in enumerate(candidates, start=1):
+        apply_url = str(
+            candidate.get("apply_url")
+            or candidate.get("short_apply_url")
+            or candidate.get("url")
+            or ""
+        ).strip()
+        short_url = shorten_apply_url(apply_url, candidate)
+        check = {
+            "index": index,
+            "key": job_registry_key(candidate),
+            "company": candidate.get("company"),
+            "title": candidate.get("title"),
+            "platform": candidate.get("platform") or infer_platform_from_url(short_url),
+            "job_id": candidate.get("job_id") or extract_linkedin_job_id(short_url),
+            "url": short_url,
+            "status": "pending",
+            "closed": False,
+            "open_eligible": False,
+        }
+
+        registry_reason = _closed_registry_reason(candidate, closed_jobs)
+        if registry_reason:
+            check.update(
+                {
+                    "status": "closed_registry",
+                    "closed": True,
+                    "reason": registry_reason.removeprefix("closed:").replace("_", " "),
+                }
+            )
+            checks.append(check)
+            continue
+
+        embedded_phrase = closed_application_phrase(candidate)
+        if embedded_phrase:
+            check.update(
+                {
+                    "status": "closed_embedded_text",
+                    "closed": True,
+                    "reason": embedded_phrase,
+                }
+            )
+            record_closed_job(
+                closed_jobs_path,
+                {**candidate, "apply_url": short_url or apply_url},
+                reason=embedded_phrase,
+                source=f"{source}:embedded_text",
+            )
+            closed_jobs = load_closed_jobs(closed_jobs_path)
+            newly_closed_count += 1
+            checks.append(check)
+            continue
+
+        if not short_url:
+            check["status"] = "missing_apply_url"
+            checks.append(check)
+            continue
+
+        if not should_live_check_url(short_url):
+            check["status"] = "not_live_checkable"
+            checks.append(check)
+            continue
+
+        if max_checks is not None and max_checks >= 0 and live_checked_count >= max_checks:
+            check["status"] = "not_checked_limit"
+            checks.append(check)
+            continue
+
+        live_checked_count += 1
+        try:
+            page_text = fetch_page(short_url, timeout)
+        except Exception as exc:  # noqa: BLE001 - preflight reports the uncertainty.
+            check.update({"status": "check_error", "error": str(exc)})
+            checks.append(check)
+            continue
+
+        live_phrase = closed_application_phrase({"page_text": page_text})
+        if live_phrase:
+            check.update(
+                {
+                    "status": "closed_live_text",
+                    "closed": True,
+                    "reason": live_phrase,
+                }
+            )
+            record_closed_job(
+                closed_jobs_path,
+                {**candidate, "apply_url": short_url},
+                reason=live_phrase,
+                source=f"{source}:live_text",
+            )
+            closed_jobs = load_closed_jobs(closed_jobs_path)
+            newly_closed_count += 1
+            checks.append(check)
+            continue
+
+        check.update({"status": "open_live_checked", "open_eligible": True})
+        checks.append(check)
+
+    closed_checks = [check for check in checks if check.get("closed")]
+    open_checks = [check for check in checks if check.get("open_eligible")]
+    error_checks = [check for check in checks if check.get("status") == "check_error"]
+    uncertain_checks = [
+        check
+        for check in checks
+        if not check.get("closed") and not check.get("open_eligible")
+    ]
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": source,
+        "candidate_count": len(candidates),
+        "checked_count": len(checks),
+        "live_checked_count": live_checked_count,
+        "closed_count": len(closed_checks),
+        "newly_closed_count": newly_closed_count,
+        "registry_closed_count": sum(
+            1 for check in checks if check.get("status") == "closed_registry"
+        ),
+        "open_eligible_count": len(open_checks),
+        "uncertain_count": len(uncertain_checks),
+        "error_count": len(error_checks),
+        "status_counts": _count_by(checks, "status"),
+        "max_checks": max_checks,
+        "checks": checks,
+        "closed_candidates": closed_checks,
+        "open_candidates": open_checks,
+        "uncertain_candidates": uncertain_checks,
+        "policy": {
+            "stop_on_closed_posting": True,
+            "persist_closed_postings": True,
+            "open_only_live_verified_candidates": True,
+        },
+    }
+
+
+def write_closed_posting_preflight(
+    candidates: list[dict[str, Any]],
+    closed_jobs_path: str | Path,
+    json_output: str | Path,
+    markdown_output: str | Path,
+    max_checks: int | None = DEFAULT_LIVE_CHECK_LIMIT,
+    timeout: float = 15.0,
+    fetcher: Any | None = None,
+    source: str = "closed_posting_preflight",
+) -> dict[str, Any]:
+    report = build_closed_posting_preflight(
+        candidates,
+        closed_jobs_path,
+        max_checks=max_checks,
+        timeout=timeout,
+        fetcher=fetcher,
+        source=source,
+    )
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2), encoding="utf-8")
+    markdown_path.write_text(render_closed_posting_preflight_markdown(report), encoding="utf-8")
+    return report
 
 
 def fetch_live_page_text(url: str, timeout: float = 15.0, max_bytes: int = 300_000) -> str:
@@ -3664,7 +3919,9 @@ def append_browser_review_records(
 
 
 def job_registry_key(job: dict[str, Any]) -> str:
-    apply_url = str(job.get("apply_url") or job.get("short_apply_url") or "").strip()
+    apply_url = str(
+        job.get("apply_url") or job.get("short_apply_url") or job.get("url") or ""
+    ).strip()
     platform = str(job.get("platform") or infer_platform_from_url(apply_url) or "").strip().lower()
     job_id = str(job.get("job_id") or "").strip()
     if not job_id:
@@ -4162,6 +4419,19 @@ def _answer_gap_status(
                 "answer_source": "profile.question_answers",
                 "next_action": "autofill from profile answer",
             }
+        if category == "skills_experience" and profile:
+            resume_fact_answer, missing_facts = answer_question(
+                profile,
+                {"title": "this role", "company": "the company"},
+                label,
+            )
+            if not missing_facts and not _has_sensitive_or_unclear_question({label: resume_fact_answer}):
+                return {
+                    "coverage_status": "covered_auto_answer",
+                    "coverage_reason": "profile_resume_fact_answer",
+                    "answer_source": "profile.resume_facts",
+                    "next_action": "autofill from verified resume facts",
+                }
         return {
             "coverage_status": "needs_answer_memory",
             "coverage_reason": "standard_question_without_approved_answer",
