@@ -393,6 +393,18 @@ def closed_application_match(job: dict[str, Any]) -> ClosedApplicationMatch | No
     return None
 
 
+def _closed_fetch_error_phrase(exc: Exception) -> str:
+    status_code = getattr(exc, "code", None)
+    if status_code in {404, 410}:
+        reason = str(getattr(exc, "reason", "") or "").strip()
+        return f"HTTP {status_code} {reason}".strip()
+    match = re.search(r"\bHTTP Error (404|410)\b(?::\s*([^:]+))?", str(exc), flags=re.IGNORECASE)
+    if match:
+        reason = (match.group(2) or "").strip()
+        return f"HTTP {match.group(1)} {reason}".strip()
+    return ""
+
+
 def _closed_application_match_text(text: str, source_field: str) -> ClosedApplicationMatch | None:
     normalized_text = _normalize(text)
     if not normalized_text:
@@ -4011,6 +4023,26 @@ def observe_candidate_pages(
         try:
             page_html = fetch_page(short_url, timeout)
         except Exception as exc:  # noqa: BLE001 - observation reports uncertainty.
+            closed_error_phrase = _closed_fetch_error_phrase(exc)
+            if closed_error_phrase:
+                record_closed_job(
+                    closed_jobs_path,
+                    {**candidate, "apply_url": short_url},
+                    reason=closed_error_phrase,
+                    source=f"{source}:fetch_error",
+                )
+                closed_jobs = load_closed_jobs(closed_jobs_path)
+                newly_closed_count += 1
+                check.update(
+                    {
+                        "status": "closed_fetch_error",
+                        "closed": True,
+                        "reason": closed_error_phrase,
+                        "error": str(exc),
+                    }
+                )
+                checks.append(check)
+                continue
             check.update({"status": "check_error", "error": str(exc)})
             checks.append(check)
             continue
@@ -5253,6 +5285,20 @@ def refresh_closed_jobs_from_live_pages(
         try:
             page_text = fetch_page(url, timeout)
         except Exception as exc:  # noqa: BLE001 - live checks should not block notification.
+            closed_error_phrase = _closed_fetch_error_phrase(exc)
+            if closed_error_phrase:
+                check["closed"] = True
+                check["reason"] = closed_error_phrase
+                check["error"] = str(exc)
+                record_closed_job(
+                    closed_jobs_path,
+                    {**submission, "apply_url": url},
+                    reason=closed_error_phrase,
+                    source=f"{source}:fetch_error",
+                )
+                closed_jobs = load_closed_jobs(closed_jobs_path)
+                checks.append(check)
+                continue
             check["error"] = str(exc)
             checks.append(check)
             continue
@@ -5360,6 +5406,26 @@ def build_closed_posting_preflight(
         try:
             page_text = fetch_page(short_url, timeout)
         except Exception as exc:  # noqa: BLE001 - preflight reports the uncertainty.
+            closed_error_phrase = _closed_fetch_error_phrase(exc)
+            if closed_error_phrase:
+                check.update(
+                    {
+                        "status": "closed_fetch_error",
+                        "closed": True,
+                        "reason": closed_error_phrase,
+                        "error": str(exc),
+                    }
+                )
+                record_closed_job(
+                    closed_jobs_path,
+                    {**candidate, "apply_url": short_url},
+                    reason=closed_error_phrase,
+                    source=f"{source}:fetch_error",
+                )
+                closed_jobs = load_closed_jobs(closed_jobs_path)
+                newly_closed_count += 1
+                checks.append(check)
+                continue
             check.update({"status": "check_error", "error": str(exc)})
             checks.append(check)
             continue
@@ -7935,6 +8001,12 @@ def _candidate_from_discovered_link(
     platform = infer_platform_from_url(apply_url) or str(task.get("platform") or "Unknown")
     company = _company_from_apply_url(apply_url)
     title = _title_from_search_result_text(str(link.get("text") or ""), company)
+    inferred_role = _infer_role_family(title) if title else ""
+    role_family = str(task.get("role_family") or inferred_role)
+    if title and role_family:
+        role_check = {"platform": platform, "title": title, "role_family": inferred_role}
+        if not _candidate_matches_role_family(role_check, role_family):
+            return None
     candidate = {
         "status": "DISCOVERED_CANDIDATE",
         "platform": platform,
@@ -7942,7 +8014,7 @@ def _candidate_from_discovered_link(
         "title": title,
         "job_id": extract_linkedin_job_id(apply_url),
         "apply_url": apply_url,
-        "role_family": task.get("role_family"),
+        "role_family": role_family,
         "discovery_query": task.get("query"),
         "discovery_search_url": search_url,
         "source": "collection_plan_search_discovery",

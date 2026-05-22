@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+import urllib.error
 import zipfile
 from pathlib import Path
 
@@ -619,6 +620,31 @@ class JobApplyAgentTests(unittest.TestCase):
             )
             self.assertEqual(result["checks"][0]["error"], "timed out")
             self.assertFalse(is_job_closed(submissions[0], result["closed_jobs"]))
+
+    def test_live_check_404_records_closed_job(self) -> None:
+        submissions = [
+            {
+                "platform": "Lever",
+                "company": "Example",
+                "title": "SRE",
+                "apply_url": "https://jobs.lever.co/example/closed",
+            }
+        ]
+
+        def not_found_fetcher(url: str, timeout: float) -> str:
+            raise urllib.error.HTTPError(url, 404, "Not Found", hdrs=None, fp=None)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            closed_path = Path(temp_dir) / "closed_jobs.json"
+            result = refresh_closed_jobs_from_live_pages(
+                submissions,
+                closed_path,
+                fetcher=not_found_fetcher,
+            )
+
+            self.assertTrue(result["checks"][0]["closed"])
+            self.assertIn("HTTP 404", result["checks"][0]["reason"])
+            self.assertTrue(is_job_closed(submissions[0], result["closed_jobs"]))
 
     def test_closed_application_phrase_handles_common_ats_variants(self) -> None:
         self.assertEqual(
@@ -2576,6 +2602,9 @@ class JobApplyAgentTests(unittest.TestCase):
                   <a href="/url?q=https%3A%2F%2Fjobs.ashbyhq.com%2Fexample%2Fabc%3Futm%3Dx">
                     Duplicate
                   </a>
+                  <a href="https://jobs.ashbyhq.com/example/not-sre">
+                    Software Engineer, AI Platform at Example
+                  </a>
                   <a href="https://example.com/not-a-job">Ignore</a>
                 </html>
                 """
@@ -3084,6 +3113,36 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(duplicate["status_counts"]["duplicate_observation"], 1)
             self.assertEqual(refreshed["observed_count"], 1)
             self.assertEqual(len(load_candidate_rows(observed_output)), 2)
+
+    def test_observe_candidate_pages_records_404_as_closed(self) -> None:
+        candidates = [
+            {
+                "company": "Example",
+                "title": "Site Reliability Engineer",
+                "platform": "Lever",
+                "apply_url": "https://jobs.lever.co/example/closed",
+            }
+        ]
+
+        def not_found_fetcher(url: str, timeout: float) -> str:
+            raise urllib.error.HTTPError(url, 404, "Not Found", hdrs=None, fp=None)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            observed_output = Path(temp_dir) / "observed_candidates.jsonl"
+            closed_path = Path(temp_dir) / "closed_jobs.json"
+
+            report = observe_candidate_pages(
+                candidates,
+                observed_output,
+                closed_path,
+                fetcher=not_found_fetcher,
+                max_checks=1,
+            )
+
+            self.assertEqual(report["observed_count"], 0)
+            self.assertEqual(report["closed_count"], 1)
+            self.assertEqual(report["status_counts"]["closed_fetch_error"], 1)
+            self.assertTrue(is_job_closed(candidates[0], load_closed_jobs(closed_path)))
 
     def test_write_candidate_observation_report_outputs_files(self) -> None:
         candidates = [
