@@ -2920,6 +2920,21 @@ class JobApplyAgentTests(unittest.TestCase):
                         "text": "Full Stack Engineer",
                         "descriptionPlain": "Cloud platform delivery for customers.",
                     },
+                    {
+                        "hostedUrl": "https://jobs.lever.co/theodo/product-owner",
+                        "text": "Product Owner - Platform",
+                        "descriptionPlain": "Own cloud platform roadmap.",
+                    },
+                    {
+                        "hostedUrl": "https://jobs.lever.co/theodo/director",
+                        "text": "Director Engineering, Platform Services",
+                        "descriptionPlain": "Lead cloud platform engineering teams.",
+                    },
+                    {
+                        "hostedUrl": "https://jobs.lever.co/theodo/sdet",
+                        "text": "Senior SDET, Secrets Management Platform",
+                        "descriptionPlain": "Test platform infrastructure features.",
+                    },
                 ]
             )
 
@@ -3252,6 +3267,15 @@ class JobApplyAgentTests(unittest.TestCase):
                     "role_family": "Cloud DevOps",
                     "apply_url": "https://jobs.lever.co/example/devops",
                 },
+                {
+                    "status": "OBSERVED_CANDIDATE",
+                    "platform": "Lever",
+                    "company": "Example",
+                    "title": "Product Owner - Platform",
+                    "description": "Own cloud platform roadmap.",
+                    "role_family": "Platform Infrastructure",
+                    "apply_url": "https://jobs.lever.co/example/product-owner",
+                },
             ]
             observed_path.write_text(
                 "\n".join(json.dumps(row) for row in rows) + "\n",
@@ -3260,9 +3284,9 @@ class JobApplyAgentTests(unittest.TestCase):
 
             research = build_application_research(temp_dir, position_target=100)
 
-            self.assertEqual(research["positions_observed_total"], 2)
+            self.assertEqual(research["positions_observed_total"], 3)
             self.assertEqual(research["role_family_counts"].get("Cloud DevOps"), 1)
-            self.assertEqual(research["role_family_counts"].get("Other"), 1)
+            self.assertEqual(research["role_family_counts"].get("Other"), 2)
 
     def test_extract_live_job_page_metadata_finds_prompts(self) -> None:
         page = """
