@@ -962,6 +962,85 @@ class JobApplyAgentTests(unittest.TestCase):
             "needs_answer_memory",
         )
 
+    def test_answer_gap_report_uses_cloud_provider_standard_answer(self) -> None:
+        profile = CandidateProfile(
+            name="Alan Jiang",
+            email="alan@example.com",
+            phone="555-0100",
+            location="Bellevue, WA",
+            target_titles=["Site Reliability Engineer"],
+            target_locations=["United States"],
+            remote_ok=True,
+            keywords=["sre"],
+            blocklist=[],
+            min_score=1,
+            resume_facts={"professional_summary": "SRE and automation engineer"},
+            question_answers={
+                "cloud_provider_general": (
+                    "I am open to roles using GCP, AWS, or Azure. My resume "
+                    "specifically shows Azure experience and AWS in skills; I "
+                    "should only claim specific GCP years if verified."
+                )
+            },
+        )
+        research = {
+            "generated_at": "2026-05-22T00:00:00+00:00",
+            "positions_observed_total": 1,
+            "items": [
+                {
+                    "label": "Do you have experience with Google Cloud Platform?",
+                    "normalized_label": "experience google cloud platform",
+                    "category": "skills_experience",
+                    "automation_action": "auto_answer_from_memory",
+                    "sensitivity": "standard_preference",
+                    "required": True,
+                    "platform": "LinkedIn",
+                    "source_file": "submissions.jsonl",
+                },
+            ],
+        }
+
+        report = build_answer_gap_report(research, profile=profile, answer_memory=None)
+
+        self.assertEqual(report["blocking_prompt_count"], 0)
+        self.assertEqual(
+            report["prompt_statuses"][0]["coverage_status"],
+            "covered_auto_answer",
+        )
+        self.assertEqual(
+            report["prompt_statuses"][0]["answer_source"],
+            "profile.question_answers",
+        )
+
+    def test_application_research_skips_linkedin_ai_advice_prompts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            observed = Path(temp_dir) / "observed_candidates.jsonl"
+            rows = [
+                {
+                    "status": "OBSERVED_CANDIDATE",
+                    "platform": "LinkedIn",
+                    "company": "Cisco",
+                    "title": "Platform Engineer",
+                    "apply_url": "https://www.linkedin.com/jobs/view/1/",
+                    "questions": [
+                        "Am I a good fit for this job?",
+                        "Tailor my resume",
+                        "Why Cisco?",
+                    ],
+                }
+            ]
+            observed.write_text(
+                "\n".join(json.dumps(row) for row in rows) + "\n",
+                encoding="utf-8",
+            )
+
+            research = build_application_research(temp_dir, position_target=100)
+            labels = {item["label"] for item in research["items"]}
+
+            self.assertNotIn("Am I a good fit for this job?", labels)
+            self.assertNotIn("Tailor my resume", labels)
+            self.assertIn("Why Cisco?", labels)
+
     def test_write_answer_gap_report_outputs_json_and_markdown(self) -> None:
         research = {
             "generated_at": "2026-05-22T00:00:00+00:00",
@@ -2455,7 +2534,7 @@ class JobApplyAgentTests(unittest.TestCase):
 
         metadata = extract_live_job_page_metadata(page, include_form_fields=False)
 
-        self.assertEqual(metadata["questions"], ["Am I a good fit for this job?"])
+        self.assertEqual(metadata["questions"], [])
 
     def test_observe_candidate_pages_records_closed_and_imports_open_questions(self) -> None:
         candidates = [

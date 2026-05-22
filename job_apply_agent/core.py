@@ -5002,6 +5002,8 @@ def _collect_job_question_research(
     position = _register_research_position(path, job, positions, index=index)
     for question in _string_list(job.get("questions")):
         classification = classify_application_prompt(question)
+        if _skip_low_signal_prompt(question, classification):
+            continue
         items.append(
             _research_item(
                 path,
@@ -5032,8 +5034,10 @@ def _collect_submission_question_research(
         normalized = _normalize_question(question)
         if not normalized or normalized in seen:
             continue
-        seen.add(normalized)
         classification = classify_application_prompt(question)
+        if _skip_low_signal_prompt(question, classification):
+            continue
+        seen.add(normalized)
         items.append(
             _research_item(
                 path,
@@ -6581,10 +6585,20 @@ def _skip_low_signal_prompt(
     classification: ApplicationPromptClassification,
 ) -> bool:
     normalized = _normalize(label)
+    if _is_low_signal_application_prompt(normalized):
+        return True
     return (
         normalized in {"", "select", "select...", "start typing", "search", "application"}
         and classification.category in {"unlabeled_control", "unknown"}
     )
+
+
+def _is_low_signal_application_prompt(normalized: str) -> bool:
+    return normalized in {
+        "ai powered advice",
+        "am i a good fit for this job",
+        "tailor my resume",
+    }
 
 
 def _infer_platform_from_path(path: Path) -> str:
@@ -6665,7 +6679,14 @@ def _direct_answer(profile: CandidateProfile, normalized_question: str) -> str |
         "compensation": ["salary", "compensation", "pay"],
         "start_date": ["start", "available", "availability"],
         "relocation": ["relocat"],
-        "cloud_provider_general": ["gcp aws azure", "cloud provider", "cloud providers"],
+        "cloud_provider_general": [
+            "gcp",
+            "google cloud",
+            "aws",
+            "azure",
+            "cloud provider",
+            "cloud providers",
+        ],
     }
     for answer_key, hints in answer_map.items():
         answer = profile.question_answers.get(answer_key)
@@ -6783,7 +6804,7 @@ def _looks_like_application_prompt(text: str) -> bool:
         "sign in",
         "sign in with email",
     }
-    if normalized in low_signal:
+    if normalized in low_signal or _is_low_signal_application_prompt(normalized):
         return False
     meta_keys = {
         "bingbot",
