@@ -8165,6 +8165,11 @@ def _candidate_discovery_search_urls(task: dict[str, Any]) -> list[str]:
     query = str(task.get("query") or "")
     query_variants = _string_list(task.get("query_variants")) or ([query] if query else [])
     urls: list[str] = []
+    if _normalize(platform) == "linkedin":
+        for variant in query_variants:
+            for url in _linkedin_guest_search_urls(variant):
+                if url not in urls:
+                    urls.append(url)
     site = _platform_primary_search_domain(platform)
     for variant in query_variants:
         if not site or not variant:
@@ -8179,6 +8184,24 @@ def _candidate_discovery_search_urls(task: dict[str, Any]) -> list[str]:
     for url in _string_list(task.get("search_urls")):
         if url not in urls:
             urls.append(url)
+    return urls
+
+
+def _linkedin_guest_search_urls(query: str) -> list[str]:
+    if not str(query or "").strip():
+        return []
+    base = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
+    urls: list[str] = []
+    for start in [0, 10, 20, 30, 40]:
+        params = urllib.parse.urlencode(
+            {
+                "keywords": str(query).strip(),
+                "location": "United States",
+                "geoId": "103644278",
+                "start": str(start),
+            }
+        )
+        urls.append(f"{base}?{params}")
     return urls
 
 

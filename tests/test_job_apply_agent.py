@@ -2642,6 +2642,43 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Candidate Discovery Report", markdown)
         self.assertIn("https://jobs.lever.co/acme/123", markdown)
 
+    def test_discover_candidates_uses_linkedin_guest_search_pages(self) -> None:
+        plan = {
+            "tasks": [
+                {
+                    "platform": "LinkedIn",
+                    "role_family": "Site Reliability",
+                    "query": "site reliability engineer",
+                    "query_variants": ["site reliability engineer"],
+                }
+            ]
+        }
+        fetched_urls: list[str] = []
+
+        def fake_fetcher(url: str, timeout: float) -> str:
+            fetched_urls.append(url)
+            self.assertIn("jobs-guest/jobs/api/seeMoreJobPostings/search", url)
+            return """
+            <li>
+              <a class="base-card__full-link" href="https://www.linkedin.com/jobs/view/site-reliability-engineer-at-example-4410000001?position=1">
+                <span class="sr-only">Site Reliability Engineer</span>
+              </a>
+            </li>
+            """
+
+        report = discover_candidates_from_collection_plan(
+            plan,
+            max_tasks=1,
+            per_task_limit=5,
+            search_pages_per_task=1,
+            fetcher=fake_fetcher,
+        )
+
+        self.assertEqual(len(fetched_urls), 1)
+        self.assertEqual(report["candidate_count"], 1)
+        self.assertEqual(report["candidates"][0]["apply_url"], "https://www.linkedin.com/jobs/view/4410000001/")
+        self.assertEqual(report["candidates"][0]["role_family"], "Site Reliability")
+
     def test_discover_candidates_expands_seed_ats_boards(self) -> None:
         plan = {
             "generated_at": "2026-05-22T00:00:00+00:00",
