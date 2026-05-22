@@ -2549,12 +2549,32 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(task["suggested_batch_size"], 25)
         self.assertIn("cloud devops", task["query"])
         self.assertIn("devops engineer", task["query_variants"])
+        self.assertIn("cloud platform engineer", task["query_variants"])
+        self.assertIn("infrastructure engineer aws kubernetes terraform", task["query_variants"])
         self.assertGreater(len(task["search_urls"]), 2)
         self.assertTrue(any("jobs.ashbyhq.com" in url for url in task["search_urls"]))
         markdown = render_collection_plan_markdown(plan)
         self.assertIn("Collection Plan", markdown)
         self.assertIn("variants:", markdown)
         self.assertIn("import-candidates", markdown)
+
+        sre_plan = build_collection_plan_from_coverage_gate(
+            {
+                "next_collection_targets": [
+                    {
+                        "platform": "Lever",
+                        "role_family": "Site Reliability",
+                        "positions_observed": 0,
+                        "positions_remaining": 100,
+                    }
+                ],
+                "synthetic": {"platform_role_target_achieved": True},
+            },
+            max_targets=1,
+            batch_size=25,
+        )
+        self.assertIn("database reliability engineer", sre_plan["tasks"][0]["query_variants"])
+        self.assertIn("devops sre engineer", sre_plan["tasks"][0]["query_variants"])
 
     def test_write_collection_plan_outputs_reports(self) -> None:
         gate = {
