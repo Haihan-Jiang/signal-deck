@@ -265,6 +265,23 @@ The synthetic harness is intentionally not a real submission tool. It exists to
 prove field mapping and summarize the gates that still require supervised
 handling before any permitted real application flow.
 
+To go one step closer to execution, run the synthetic forms through the offline
+apply state machine:
+
+```bash
+python3 -m job_apply_agent synthetic-exec --count 100
+```
+
+This writes:
+
+```text
+job_apply_agent/outbox/synthetic_apply_execution_latest.json
+job_apply_agent/outbox/synthetic_apply_execution_latest.md
+```
+
+It simulates each ready fill/upload/answer step, records the first policy stop,
+skips closed postings, and still records `actual_submit_count: 0`.
+
 Generate a platform playbook from the real observed artifacts plus the synthetic
 run:
 

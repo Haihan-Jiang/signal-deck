@@ -1299,7 +1299,6 @@ def build_apply_run_audit(
     }
     closed_reason = closed_application_reason(job_like, closed_jobs=closed_jobs)
     steps = [step for step in plan.get("steps", []) if isinstance(step, dict)]
-    automation_steps = [_apply_automation_step(step) for step in steps if step.get("status") == "ready"]
     stop_steps = [
         _apply_stop_step(step)
         for step in steps
@@ -1322,15 +1321,34 @@ def build_apply_run_audit(
     if closed_reason:
         status = "closed_skip"
         next_action = "skip this posting and keep it in the closed registry"
+        automation_steps: list[dict[str, Any]] = []
+        stop_steps = [
+            {
+                "field_index": None,
+                "item_type": "page",
+                "action": "skip",
+                "label": "No longer accepting applications",
+                "category": "closed_posting",
+                "status": "closed_skip",
+                "reason": closed_reason,
+                "next_action": "record closed posting and skip automation",
+                "handling": "do not fill any fields on closed postings",
+            }
+        ]
+        missing_steps = []
+        manual_gate_steps = []
     elif missing_steps:
         status = "blocked_missing_inputs"
         next_action = "collect missing profile/material/answer inputs before browser automation"
+        automation_steps = [_apply_automation_step(step) for step in steps if step.get("status") == "ready"]
     elif manual_gate_steps:
         status = "autofill_ready_with_supervised_gates"
         next_action = "autofill ready fields, then stop for supervised gates"
+        automation_steps = [_apply_automation_step(step) for step in steps if step.get("status") == "ready"]
     else:
         status = "autofill_ready"
         next_action = "autofill ready fields and stop before final submit unless explicitly approved"
+        automation_steps = [_apply_automation_step(step) for step in steps if step.get("status") == "ready"]
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source": "apply_run_audit",
@@ -1381,6 +1399,121 @@ def write_apply_run_audit(
     json_path.write_text(json.dumps(audit, ensure_ascii=True, indent=2), encoding="utf-8")
     markdown_path.write_text(render_apply_run_audit_markdown(audit), encoding="utf-8")
     return audit
+
+
+def execute_form_plan_offline(
+    plan: dict[str, Any],
+    page_text: str = "",
+    closed_jobs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    audit = build_apply_run_audit(plan, page_text=page_text, closed_jobs=closed_jobs)
+    executed_steps: list[dict[str, Any]] = []
+    for step in audit.get("automation_steps", []):
+        executed_steps.append(
+            {
+                "field_index": step.get("field_index"),
+                "label": step.get("label"),
+                "action": step.get("action"),
+                "category": step.get("category"),
+                "value_source": step.get("value_source"),
+                "result": f"simulated_{step.get('action') or 'fill'}",
+            }
+        )
+
+    stop_steps = audit.get("stop_steps", [])
+    if audit.get("status") == "closed_skip":
+        outcome = "closed_skip"
+        policy_stop = "closed_posting"
+    elif audit.get("missing_step_count", 0):
+        outcome = "blocked_missing_inputs"
+        policy_stop = "missing_input"
+    elif stop_steps:
+        outcome = "executed_to_policy_stop"
+        policy_stop = str(stop_steps[0].get("status") or "manual_gate")
+    else:
+        outcome = "completed_autofill_no_submit"
+        policy_stop = "final_submit_not_requested"
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "offline_apply_executor",
+        "title": audit.get("title"),
+        "url": audit.get("url"),
+        "platform": audit.get("platform"),
+        "outcome": outcome,
+        "policy_stop": policy_stop,
+        "real_platform_submission": False,
+        "would_submit": False,
+        "actual_submit_count": 0,
+        "autofill_allowed": audit.get("autofill_allowed"),
+        "executed_step_count": len(executed_steps),
+        "stop_step_count": len(stop_steps),
+        "executed_steps": executed_steps,
+        "stop_steps": stop_steps,
+        "audit": {
+            "status": audit.get("status"),
+            "closed_reason": audit.get("closed_reason"),
+            "missing_step_count": audit.get("missing_step_count"),
+            "manual_gate_count": audit.get("manual_gate_count"),
+            "final_submit_allowed": audit.get("final_submit_allowed"),
+        },
+    }
+
+
+def run_synthetic_apply_execution(
+    count: int = 100,
+    include_values: bool = False,
+) -> dict[str, Any]:
+    profile = build_synthetic_candidate_profile()
+    executions: list[dict[str, Any]] = []
+    for index in range(1, max(count, 0) + 1):
+        snapshot = _build_synthetic_application_snapshot(index)
+        plan = build_form_fill_plan(
+            snapshot,
+            profile=profile,
+            answer_memory=None,
+            include_values=include_values,
+        )
+        execution = execute_form_plan_offline(plan, page_text=str(snapshot.get("page_text") or ""))
+        execution.update(
+            {
+                "index": index,
+                "company": snapshot.get("company"),
+                "job_title": snapshot.get("job_title"),
+            }
+        )
+        executions.append(execution)
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "execution": "offline_synthetic_apply_executor",
+        "requested_count": count,
+        "run_count": len(executions),
+        "real_platform_submission": False,
+        "actual_submit_count": sum(int(item.get("actual_submit_count", 0)) for item in executions),
+        "outcome_counts": _count_by(executions, "outcome"),
+        "policy_stop_counts": _count_by(executions, "policy_stop"),
+        "platform_counts": _count_by(executions, "platform"),
+        "executed_step_count": sum(int(item.get("executed_step_count", 0)) for item in executions),
+        "stop_step_count": sum(int(item.get("stop_step_count", 0)) for item in executions),
+        "runs": executions,
+    }
+
+
+def write_synthetic_apply_execution(
+    json_output: str | Path,
+    markdown_output: str | Path,
+    count: int = 100,
+    include_values: bool = False,
+) -> dict[str, Any]:
+    report = run_synthetic_apply_execution(count=count, include_values=include_values)
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2), encoding="utf-8")
+    markdown_path.write_text(render_synthetic_apply_execution_markdown(report), encoding="utf-8")
+    return report
 
 
 def build_learning_task_template(readiness_report: dict[str, Any]) -> dict[str, Any]:
@@ -2321,6 +2454,48 @@ def render_apply_run_audit_markdown(audit: dict[str, Any]) -> str:
     lines.extend(["", "## Policy", ""])
     for key, value in sorted((audit.get("policy") or {}).items()):
         lines.append(f"- {key}: {str(bool(value)).lower()}")
+    return "\n".join(lines) + "\n"
+
+
+def render_synthetic_apply_execution_markdown(report: dict[str, Any]) -> str:
+    lines = [
+        "# Synthetic Apply Execution",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        f"Runs: {report.get('run_count', 0)}",
+        f"Execution: {report.get('execution')}",
+        f"Real platform submission: {str(bool(report.get('real_platform_submission'))).lower()}",
+        f"Actual submit count: {report.get('actual_submit_count', 0)}",
+        f"Executed steps: {report.get('executed_step_count', 0)}",
+        f"Stop steps: {report.get('stop_step_count', 0)}",
+        "",
+        "## Outcome Counts",
+        "",
+    ]
+    for outcome, count in sorted(report.get("outcome_counts", {}).items()):
+        lines.append(f"- {outcome}: {count}")
+    lines.extend(["", "## Policy Stop Counts", ""])
+    for stop, count in sorted(report.get("policy_stop_counts", {}).items()):
+        lines.append(f"- {stop}: {count}")
+    lines.extend(["", "## Platform Counts", ""])
+    for platform, count in sorted(report.get("platform_counts", {}).items()):
+        lines.append(f"- {platform}: {count}")
+    lines.extend(["", "## First Runs", ""])
+    for run in report.get("runs", [])[:20]:
+        lines.append(
+            "- {outcome}: {company} - {title} [{platform}; executed={executed}; stop={stop}]".format(
+                outcome=run.get("outcome"),
+                company=run.get("company"),
+                title=run.get("job_title") or run.get("title"),
+                platform=run.get("platform"),
+                executed=run.get("executed_step_count", 0),
+                stop=run.get("policy_stop"),
+            )
+        )
+        stop_steps = run.get("stop_steps") or []
+        if stop_steps:
+            labels = "; ".join(str(step.get("label")) for step in stop_steps[:4])
+            lines.append(f"  gates: {labels}")
     return "\n".join(lines) + "\n"
 
 

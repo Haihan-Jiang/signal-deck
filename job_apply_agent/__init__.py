@@ -47,8 +47,11 @@ from .core import (
     render_form_fill_plan_markdown,
     render_learning_task_template_markdown,
     render_position_readiness_markdown,
+    render_synthetic_apply_execution_markdown,
     render_synthetic_application_markdown,
+    run_synthetic_apply_execution,
     run_synthetic_application_simulation,
+    execute_form_plan_offline,
     run_pipeline,
     save_answer_memory,
     save_closed_jobs,
@@ -63,6 +66,7 @@ from .core import (
     write_form_fill_plan,
     write_learning_task_template,
     write_position_readiness_report,
+    write_synthetic_apply_execution,
     write_synthetic_application_simulation,
 )
 
@@ -113,8 +117,11 @@ __all__ = [
     "render_form_fill_plan_markdown",
     "render_learning_task_template_markdown",
     "render_position_readiness_markdown",
+    "render_synthetic_apply_execution_markdown",
     "render_synthetic_application_markdown",
+    "run_synthetic_apply_execution",
     "run_synthetic_application_simulation",
+    "execute_form_plan_offline",
     "run_pipeline",
     "save_answer_memory",
     "save_closed_jobs",
@@ -129,5 +136,6 @@ __all__ = [
     "write_form_fill_plan",
     "write_learning_task_template",
     "write_position_readiness_report",
+    "write_synthetic_apply_execution",
     "write_synthetic_application_simulation",
 ]

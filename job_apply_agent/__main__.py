@@ -28,6 +28,7 @@ from .core import (
     write_form_fill_plan,
     write_learning_task_template,
     write_position_readiness_report,
+    write_synthetic_apply_execution,
     write_synthetic_application_simulation,
 )
 
@@ -52,6 +53,8 @@ DEFAULT_LEARNING_TASKS_JSON = Path(__file__).with_name("outbox") / "learning_tas
 DEFAULT_LEARNING_TASKS_MARKDOWN = Path(__file__).with_name("outbox") / "learning_tasks_latest.md"
 DEFAULT_SYNTHETIC_JSON = Path(__file__).with_name("outbox") / "synthetic_100_run_latest.json"
 DEFAULT_SYNTHETIC_MARKDOWN = Path(__file__).with_name("outbox") / "synthetic_100_run_latest.md"
+DEFAULT_SYNTHETIC_EXEC_JSON = Path(__file__).with_name("outbox") / "synthetic_apply_execution_latest.json"
+DEFAULT_SYNTHETIC_EXEC_MARKDOWN = Path(__file__).with_name("outbox") / "synthetic_apply_execution_latest.md"
 DEFAULT_PLAYBOOK_JSON = Path(__file__).with_name("outbox") / "application_playbook_latest.json"
 DEFAULT_PLAYBOOK_MARKDOWN = Path(__file__).with_name("outbox") / "application_playbook_latest.md"
 DEFAULT_PERSONAL_PROFILE = Path(__file__).with_name("outbox") / "alan_jiang_profile.json"
@@ -255,6 +258,15 @@ def main() -> int:
     synthetic_parser.add_argument("--include-values", action="store_true")
     synthetic_parser.add_argument("--json-output", default=str(DEFAULT_SYNTHETIC_JSON))
     synthetic_parser.add_argument("--markdown-output", default=str(DEFAULT_SYNTHETIC_MARKDOWN))
+
+    synthetic_exec_parser = subparsers.add_parser(
+        "synthetic-exec",
+        help="execute synthetic applications through the offline apply state machine",
+    )
+    synthetic_exec_parser.add_argument("--count", type=int, default=100)
+    synthetic_exec_parser.add_argument("--include-values", action="store_true")
+    synthetic_exec_parser.add_argument("--json-output", default=str(DEFAULT_SYNTHETIC_EXEC_JSON))
+    synthetic_exec_parser.add_argument("--markdown-output", default=str(DEFAULT_SYNTHETIC_EXEC_MARKDOWN))
 
     playbook_parser = subparsers.add_parser(
         "playbook",
@@ -480,6 +492,21 @@ def main() -> int:
         print(f"Runs: {report.get('run_count', 0)}")
         for status, count in report.get("status_counts", {}).items():
             print(f"{status}: {count}")
+        return 0
+
+    if args.command == "synthetic-exec":
+        report = write_synthetic_apply_execution(
+            args.json_output,
+            args.markdown_output,
+            count=args.count,
+            include_values=args.include_values,
+        )
+        print(f"Wrote synthetic apply execution JSON to {args.json_output}")
+        print(f"Wrote synthetic apply execution Markdown to {args.markdown_output}")
+        print(f"Runs: {report.get('run_count', 0)}")
+        print(f"Actual submit count: {report.get('actual_submit_count', 0)}")
+        for outcome, count in report.get("outcome_counts", {}).items():
+            print(f"{outcome}: {count}")
         return 0
 
     if args.command == "playbook":

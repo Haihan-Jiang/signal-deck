@@ -43,7 +43,10 @@ from job_apply_agent.core import (
     render_form_fill_plan_markdown,
     render_learning_task_template_markdown,
     render_position_readiness_markdown,
+    render_synthetic_apply_execution_markdown,
     run_synthetic_application_simulation,
+    run_synthetic_apply_execution,
+    execute_form_plan_offline,
     run_pipeline,
     score_job,
     shorten_apply_url,
@@ -54,6 +57,7 @@ from job_apply_agent.core import (
     write_form_fill_plan,
     write_learning_task_template,
     write_position_readiness_report,
+    write_synthetic_apply_execution,
     write_synthetic_application_simulation,
 )
 
@@ -1093,6 +1097,7 @@ class JobApplyAgentTests(unittest.TestCase):
 
         self.assertEqual(audit["status"], "closed_skip")
         self.assertFalse(audit["autofill_allowed"])
+        self.assertEqual(audit["automation_step_count"], 0)
         self.assertEqual(audit["closed_reason"], "closed:no_longer_accepting_applications")
 
     def test_write_apply_run_audit_outputs_json_and_markdown(self) -> None:
@@ -1123,6 +1128,93 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(json_output.exists())
             self.assertTrue(markdown_output.exists())
             self.assertIn("Apply Run Audit", markdown_output.read_text())
+
+    def test_offline_apply_executor_runs_ready_steps_then_stops(self) -> None:
+        plan = {
+            "title": "Application",
+            "url": "https://jobs.ashbyhq.com/example/1",
+            "platform": "Ashby",
+            "steps": [
+                {
+                    "field_index": 1,
+                    "item_type": "field",
+                    "action": "fill",
+                    "status": "ready",
+                    "label": "Email",
+                    "category": "profile_identity",
+                    "value_source": "profile.email",
+                },
+                {
+                    "field_index": 2,
+                    "item_type": "button",
+                    "action": "submit_gate",
+                    "status": "final_submit_confirmation",
+                    "label": "Submit application",
+                    "category": "final_submit",
+                },
+            ],
+        }
+
+        execution = execute_form_plan_offline(plan)
+
+        self.assertEqual(execution["outcome"], "executed_to_policy_stop")
+        self.assertEqual(execution["policy_stop"], "final_submit_confirmation")
+        self.assertEqual(execution["executed_step_count"], 1)
+        self.assertEqual(execution["actual_submit_count"], 0)
+        self.assertFalse(execution["would_submit"])
+
+    def test_offline_apply_executor_does_not_fill_closed_postings(self) -> None:
+        plan = {
+            "title": "Closed role",
+            "url": "https://www.linkedin.com/jobs/view/123/",
+            "platform": "LinkedIn",
+            "steps": [
+                {
+                    "field_index": 1,
+                    "item_type": "field",
+                    "action": "fill",
+                    "status": "ready",
+                    "label": "Email",
+                    "category": "profile_identity",
+                    "value_source": "profile.email",
+                }
+            ],
+        }
+
+        execution = execute_form_plan_offline(
+            plan,
+            page_text="No longer accepting applications",
+        )
+
+        self.assertEqual(execution["outcome"], "closed_skip")
+        self.assertEqual(execution["policy_stop"], "closed_posting")
+        self.assertEqual(execution["executed_step_count"], 0)
+        self.assertEqual(execution["stop_steps"][0]["status"], "closed_skip")
+
+    def test_synthetic_apply_execution_runs_hundred_without_real_submit(self) -> None:
+        report = run_synthetic_apply_execution(count=20)
+
+        self.assertEqual(report["run_count"], 20)
+        self.assertFalse(report["real_platform_submission"])
+        self.assertEqual(report["actual_submit_count"], 0)
+        self.assertEqual(report["outcome_counts"]["closed_skip"], 1)
+        self.assertGreater(report["outcome_counts"]["executed_to_policy_stop"], 0)
+        self.assertGreater(report["executed_step_count"], 0)
+        markdown = render_synthetic_apply_execution_markdown(report)
+        self.assertIn("Synthetic Apply Execution", markdown)
+        self.assertIn("Actual submit count: 0", markdown)
+
+    def test_write_synthetic_apply_execution_outputs_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            json_output = Path(temp_dir) / "execution.json"
+            markdown_output = Path(temp_dir) / "execution.md"
+
+            report = write_synthetic_apply_execution(json_output, markdown_output, count=8)
+
+            self.assertEqual(report["run_count"], 8)
+            self.assertTrue(json_output.exists())
+            self.assertTrue(markdown_output.exists())
+            self.assertIn("Synthetic Apply Execution", markdown_output.read_text())
 
     def test_learning_task_template_applies_approved_answers(self) -> None:
         readiness = {
