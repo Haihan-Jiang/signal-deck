@@ -22,6 +22,7 @@ from .core import (
     refresh_closed_jobs_from_live_pages,
     run_pipeline,
     write_answer_gap_report,
+    write_application_playbook,
     write_application_research_report,
     write_form_fill_plan,
     write_learning_task_template,
@@ -48,6 +49,8 @@ DEFAULT_LEARNING_TASKS_JSON = Path(__file__).with_name("outbox") / "learning_tas
 DEFAULT_LEARNING_TASKS_MARKDOWN = Path(__file__).with_name("outbox") / "learning_tasks_latest.md"
 DEFAULT_SYNTHETIC_JSON = Path(__file__).with_name("outbox") / "synthetic_100_run_latest.json"
 DEFAULT_SYNTHETIC_MARKDOWN = Path(__file__).with_name("outbox") / "synthetic_100_run_latest.md"
+DEFAULT_PLAYBOOK_JSON = Path(__file__).with_name("outbox") / "application_playbook_latest.json"
+DEFAULT_PLAYBOOK_MARKDOWN = Path(__file__).with_name("outbox") / "application_playbook_latest.md"
 DEFAULT_PERSONAL_PROFILE = Path(__file__).with_name("outbox") / "alan_jiang_profile.json"
 
 
@@ -238,6 +241,17 @@ def main() -> int:
     synthetic_parser.add_argument("--include-values", action="store_true")
     synthetic_parser.add_argument("--json-output", default=str(DEFAULT_SYNTHETIC_JSON))
     synthetic_parser.add_argument("--markdown-output", default=str(DEFAULT_SYNTHETIC_MARKDOWN))
+
+    playbook_parser = subparsers.add_parser(
+        "playbook",
+        help="summarize platform-specific automation rules, blockers, and learning tasks",
+    )
+    playbook_parser.add_argument("--research-json", default=str(DEFAULT_RESEARCH_JSON))
+    playbook_parser.add_argument("--gaps-json", default=str(DEFAULT_GAPS_JSON))
+    playbook_parser.add_argument("--readiness-json", default=str(DEFAULT_READINESS_JSON))
+    playbook_parser.add_argument("--synthetic-json", default=str(DEFAULT_SYNTHETIC_JSON))
+    playbook_parser.add_argument("--json-output", default=str(DEFAULT_PLAYBOOK_JSON))
+    playbook_parser.add_argument("--markdown-output", default=str(DEFAULT_PLAYBOOK_MARKDOWN))
 
     args = parser.parse_args()
 
@@ -435,6 +449,27 @@ def main() -> int:
             print(f"{status}: {count}")
         return 0
 
+    if args.command == "playbook":
+        research_path = Path(args.research_json)
+        if not research_path.exists():
+            raise FileNotFoundError(f"research report not found: {args.research_json}")
+        research = json.loads(research_path.read_text(encoding="utf-8"))
+        gaps = _load_optional_json(args.gaps_json)
+        readiness = _load_optional_json(args.readiness_json)
+        synthetic = _load_optional_json(args.synthetic_json)
+        playbook = write_application_playbook(
+            research,
+            gaps,
+            readiness,
+            synthetic,
+            args.json_output,
+            args.markdown_output,
+        )
+        print(f"Wrote application playbook JSON to {args.json_output}")
+        print(f"Wrote application playbook Markdown to {args.markdown_output}")
+        print(f"Platforms: {playbook.get('platform_count', 0)}")
+        return 0
+
     if args.command == "notify":
         submissions = load_submissions_jsonl(args.submissions, limit=None)
         closed_jobs = load_closed_jobs(args.closed_jobs)
@@ -565,6 +600,16 @@ def main() -> int:
             f"score={submission['score']} id={submission['submission_id']}"
         )
     return 0
+
+
+def _load_optional_json(path_value: str | None) -> dict | None:
+    if not path_value:
+        return None
+    path = Path(path_value)
+    if not path.exists():
+        return None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return payload if isinstance(payload, dict) else None
 
 
 if __name__ == "__main__":

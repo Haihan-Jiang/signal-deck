@@ -1682,6 +1682,226 @@ def render_synthetic_application_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def build_application_playbook(
+    research: dict[str, Any],
+    gaps: dict[str, Any] | None = None,
+    readiness: dict[str, Any] | None = None,
+    synthetic: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    gaps = gaps or {}
+    readiness = readiness or {}
+    synthetic = synthetic or {}
+    platform_names = set(str(name) for name in research.get("platforms", {}).keys())
+    platform_names.update(str(name) for name in synthetic.get("platform_counts", {}).keys())
+    platform_names.update(
+        str(position.get("platform") or "Unknown")
+        for position in readiness.get("positions", [])
+        if isinstance(position, dict)
+    )
+
+    gap_by_prompt = {
+        str(item.get("normalized_label") or ""): item
+        for item in gaps.get("prompt_statuses", [])
+        if isinstance(item, dict)
+    }
+    learning_tasks = [
+        task
+        for task in readiness.get("minimal_learning_tasks", [])
+        if isinstance(task, dict)
+    ]
+    platforms: dict[str, Any] = {}
+    for platform in sorted(platform_names):
+        platform_items = [
+            item
+            for item in research.get("items", [])
+            if isinstance(item, dict) and str(item.get("platform") or "Unknown") == platform
+        ]
+        platform_synthetic_runs = [
+            run
+            for run in synthetic.get("runs", [])
+            if isinstance(run, dict) and str(run.get("platform") or "Unknown") == platform
+        ]
+        platform_positions = [
+            position
+            for position in readiness.get("positions", [])
+            if isinstance(position, dict) and str(position.get("platform") or "Unknown") == platform
+        ]
+        common_prompts = []
+        for item in platform_items:
+            prompt_status = gap_by_prompt.get(str(item.get("normalized_label") or ""), {})
+            common_prompts.append(
+                {
+                    "label": item.get("label"),
+                    "category": item.get("category"),
+                    "automation_action": item.get("automation_action"),
+                    "coverage_status": prompt_status.get("coverage_status"),
+                    "handling": _playbook_handling_for_status(
+                        str(prompt_status.get("coverage_status") or "")
+                    ),
+                }
+            )
+        common_prompts = _dedupe_prompt_rows(common_prompts)
+        blocker_prompts = [
+            prompt
+            for prompt in common_prompts
+            if str(prompt.get("coverage_status") or "")
+            in {
+                "needs_answer_memory",
+                "needs_profile_field",
+                "needs_profile_material",
+                "needs_resume_facts",
+                "needs_user_confirmation",
+                "manual_security_step",
+                "final_submit_confirmation",
+                "sensitive_not_stored",
+            }
+        ]
+        platform_learning = [
+            {
+                "question": task.get("question"),
+                "recommended_storage": task.get("recommended_storage"),
+                "group_key": task.get("group_key"),
+            }
+            for task in learning_tasks
+            if platform in [str(item) for item in task.get("platforms", [])]
+        ]
+        platforms[platform] = {
+            "positions_observed": research.get("platforms", {})
+            .get(platform, {})
+            .get("positions_observed", 0),
+            "synthetic_runs": synthetic.get("platform_counts", {}).get(platform, 0),
+            "synthetic_status_counts": _count_by(platform_synthetic_runs, "status"),
+            "synthetic_gate_labels": _unique_strings(
+                label
+                for run in platform_synthetic_runs
+                for label in run.get("blocking_labels", [])
+                if label
+            )[:12],
+            "prompt_items": len(platform_items),
+            "category_counts": _count_by(platform_items, "category"),
+            "automation_action_counts": _count_by(platform_items, "automation_action"),
+            "coverage_status_counts": _count_by(
+                [
+                    gap_by_prompt.get(str(item.get("normalized_label") or ""), {})
+                    for item in platform_items
+                    if gap_by_prompt.get(str(item.get("normalized_label") or ""))
+                ],
+                "coverage_status",
+            ),
+            "readiness_counts": _count_by(platform_positions, "readiness"),
+            "common_prompts": common_prompts[:30],
+            "blocker_prompts": blocker_prompts[:30],
+            "learning_tasks": platform_learning,
+        }
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "purpose": "platform_application_automation_playbook",
+        "positions_observed_total": research.get("positions_observed_total", 0),
+        "synthetic_run_count": synthetic.get("run_count", 0),
+        "platform_count": len(platforms),
+        "global_rules": _application_playbook_global_rules(synthetic),
+        "platforms": platforms,
+    }
+
+
+def write_application_playbook(
+    research: dict[str, Any],
+    gaps: dict[str, Any] | None,
+    readiness: dict[str, Any] | None,
+    synthetic: dict[str, Any] | None,
+    json_output: str | Path,
+    markdown_output: str | Path,
+) -> dict[str, Any]:
+    playbook = build_application_playbook(
+        research,
+        gaps=gaps,
+        readiness=readiness,
+        synthetic=synthetic,
+    )
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(playbook, ensure_ascii=True, indent=2), encoding="utf-8")
+    markdown_path.write_text(render_application_playbook_markdown(playbook), encoding="utf-8")
+    return playbook
+
+
+def render_application_playbook_markdown(playbook: dict[str, Any]) -> str:
+    lines = [
+        "# Application Automation Playbook",
+        "",
+        f"Generated: {playbook.get('generated_at')}",
+        f"Observed real/dry-run positions: {playbook.get('positions_observed_total', 0)}",
+        f"Synthetic runs: {playbook.get('synthetic_run_count', 0)}",
+        f"Platforms: {playbook.get('platform_count', 0)}",
+        "",
+        "## Global Rules",
+        "",
+    ]
+    for rule in playbook.get("global_rules", []):
+        lines.append(f"- {rule}")
+
+    for platform, payload in sorted(playbook.get("platforms", {}).items()):
+        lines.extend(["", f"## {platform}", ""])
+        lines.append(f"- observed positions: {payload.get('positions_observed', 0)}")
+        lines.append(f"- synthetic runs: {payload.get('synthetic_runs', 0)}")
+        lines.append(f"- prompt items: {payload.get('prompt_items', 0)}")
+        if payload.get("readiness_counts"):
+            readiness_text = ", ".join(
+                f"{key}={value}" for key, value in payload.get("readiness_counts", {}).items()
+            )
+            lines.append(f"- readiness: {readiness_text}")
+        if payload.get("automation_action_counts"):
+            action_text = ", ".join(
+                f"{key}={value}"
+                for key, value in payload.get("automation_action_counts", {}).items()
+            )
+            lines.append(f"- actions: {action_text}")
+        if payload.get("synthetic_status_counts"):
+            synthetic_text = ", ".join(
+                f"{key}={value}"
+                for key, value in payload.get("synthetic_status_counts", {}).items()
+            )
+            lines.append(f"- synthetic statuses: {synthetic_text}")
+
+        lines.extend(["", "Common blockers/gates:"])
+        blockers = payload.get("blocker_prompts", [])
+        if blockers:
+            for prompt in blockers[:12]:
+                lines.append(
+                    "- {status}: {label} ({category}; {handling})".format(
+                        status=prompt.get("coverage_status"),
+                        label=prompt.get("label"),
+                        category=prompt.get("category"),
+                        handling=prompt.get("handling"),
+                    )
+                )
+        else:
+            lines.append("- None observed")
+        synthetic_gates = payload.get("synthetic_gate_labels") or []
+        if synthetic_gates:
+            lines.append("")
+            lines.append("Synthetic gates:")
+            for label in synthetic_gates[:12]:
+                lines.append(f"- {label}")
+
+        lines.extend(["", "Learning tasks:"])
+        tasks = payload.get("learning_tasks", [])
+        if tasks:
+            for task in tasks[:10]:
+                lines.append(
+                    "- {storage}: {question}".format(
+                        storage=task.get("recommended_storage"),
+                        question=task.get("question"),
+                    )
+                )
+        else:
+            lines.append("- None")
+    return "\n".join(lines) + "\n"
+
+
 def render_application_research_markdown(research: dict[str, Any]) -> str:
     lines = [
         "# Application Research Baseline",
@@ -3393,6 +3613,63 @@ def _synthetic_issue_summary(
             },
         )
     return issues
+
+
+def _application_playbook_global_rules(synthetic: dict[str, Any]) -> list[str]:
+    rules = [
+        "Skip and persist postings when page text says No longer accepting applications.",
+        "Use fake candidate data only in local synthetic/sandbox forms, never in real employer submissions.",
+        "Autofill profile, resume path, profile links, and approved standard answers from local stores.",
+        "Generate role-specific free text from resume facts, then keep it in human review before submit.",
+        "Pause for CAPTCHA, bot checks, login blockers, or unclear security prompts.",
+        "Do not store protected-class self-identification answers such as gender, veteran status, race, disability, or ethnicity.",
+        "Never click final submit without explicit approval for that application.",
+    ]
+    if synthetic.get("status_counts"):
+        counts = ", ".join(
+            f"{key}={value}" for key, value in sorted(synthetic.get("status_counts", {}).items())
+        )
+        rules.append(f"Latest synthetic status counts: {counts}.")
+    return rules
+
+
+def _playbook_handling_for_status(status: str) -> str:
+    handling = {
+        "covered_auto_answer": "autofill from approved answer memory/profile",
+        "covered_generation": "generate from resume facts before human review",
+        "covered_profile": "autofill from profile/local material",
+        "covered_requires_review": "preselect but keep supervised review",
+        "needs_answer_memory": "ask once and save approved non-sensitive answer",
+        "needs_profile_field": "add local profile field",
+        "needs_profile_material": "record approved local document path",
+        "needs_resume_facts": "add resume facts before generation",
+        "needs_user_confirmation": "ask during supervised flow",
+        "manual_security_step": "pause for human security/CAPTCHA step",
+        "final_submit_confirmation": "wait for explicit final submit approval",
+        "sensitive_not_stored": "ask each time and do not persist answer",
+    }
+    return handling.get(status, "inspect in supervised flow")
+
+
+def _dedupe_prompt_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple[str, str]] = set()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        key = (str(row.get("label") or ""), str(row.get("coverage_status") or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(row)
+    return result
+
+
+def _unique_strings(values: Any) -> list[str]:
+    seen: list[str] = []
+    for value in values:
+        text = str(value).strip()
+        if text and text not in seen:
+            seen.append(text)
+    return seen
 
 
 def _count_by(items: list[dict[str, Any]], key: str) -> dict[str, int]:

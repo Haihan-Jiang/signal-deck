@@ -10,6 +10,7 @@ from job_apply_agent.core import (
     apply_learning_task_answers,
     build_answer_gap_report,
     build_application_draft,
+    build_application_playbook,
     build_application_research,
     build_browser_review_record,
     build_form_fill_plan,
@@ -35,6 +36,7 @@ from job_apply_agent.core import (
     record_closed_job,
     refresh_closed_jobs_from_live_pages,
     render_answer_gap_markdown,
+    render_application_playbook_markdown,
     render_application_research_markdown,
     render_form_fill_plan_markdown,
     render_learning_task_template_markdown,
@@ -44,6 +46,7 @@ from job_apply_agent.core import (
     score_job,
     shorten_apply_url,
     write_answer_gap_report,
+    write_application_playbook,
     write_application_research_report,
     write_form_fill_plan,
     write_learning_task_template,
@@ -1128,6 +1131,116 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(json_output.exists())
             self.assertTrue(markdown_output.exists())
             self.assertIn("Synthetic Application Simulation", markdown_output.read_text())
+
+    def test_application_playbook_summarizes_platform_blockers(self) -> None:
+        research = {
+            "positions_observed_total": 2,
+            "platforms": {
+                "LinkedIn": {"positions_observed": 1},
+                "Greenhouse": {"positions_observed": 1},
+            },
+            "items": [
+                {
+                    "platform": "LinkedIn",
+                    "label": "Submit application",
+                    "normalized_label": "submit application",
+                    "category": "final_submit",
+                    "automation_action": "human_review_required",
+                },
+                {
+                    "platform": "Greenhouse",
+                    "label": "Gender",
+                    "normalized_label": "gender",
+                    "category": "eeoc_sensitive",
+                    "automation_action": "do_not_store_sensitive",
+                },
+            ],
+        }
+        gaps = {
+            "prompt_statuses": [
+                {
+                    "normalized_label": "submit application",
+                    "coverage_status": "final_submit_confirmation",
+                },
+                {
+                    "normalized_label": "gender",
+                    "coverage_status": "sensitive_not_stored",
+                },
+            ]
+        }
+        readiness = {
+            "positions": [
+                {"platform": "LinkedIn", "readiness": "autofill_ready"},
+                {"platform": "Greenhouse", "readiness": "supervised_ready"},
+            ],
+            "minimal_learning_tasks": [
+                {
+                    "platforms": ["Greenhouse"],
+                    "question": "Do you consent to SMS messages?",
+                    "recommended_storage": "answer_memory",
+                    "group_key": "answer_memory:sms",
+                }
+            ],
+        }
+        synthetic = {
+            "run_count": 100,
+            "platform_counts": {"LinkedIn": 25, "Greenhouse": 25},
+            "status_counts": {"autofill_ready_with_supervised_gates": 95, "closed_skip": 5},
+            "runs": [
+                {
+                    "platform": "LinkedIn",
+                    "status": "autofill_ready_with_supervised_gates",
+                    "blocking_labels": ["Submit application"],
+                },
+                {
+                    "platform": "Greenhouse",
+                    "status": "autofill_ready_with_supervised_gates",
+                    "blocking_labels": ["Gender", "Submit application"],
+                },
+            ],
+        }
+
+        playbook = build_application_playbook(research, gaps, readiness, synthetic)
+
+        self.assertEqual(playbook["platform_count"], 2)
+        self.assertEqual(playbook["platforms"]["LinkedIn"]["synthetic_runs"], 25)
+        self.assertEqual(
+            playbook["platforms"]["LinkedIn"]["blocker_prompts"][0]["coverage_status"],
+            "final_submit_confirmation",
+        )
+        self.assertEqual(
+            playbook["platforms"]["Greenhouse"]["learning_tasks"][0]["recommended_storage"],
+            "answer_memory",
+        )
+        self.assertIn("Gender", playbook["platforms"]["Greenhouse"]["synthetic_gate_labels"])
+        markdown = render_application_playbook_markdown(playbook)
+        self.assertIn("Application Automation Playbook", markdown)
+        self.assertIn("Never click final submit", markdown)
+        self.assertIn("Synthetic gates", markdown)
+
+    def test_write_application_playbook_outputs_reports(self) -> None:
+        research = {
+            "positions_observed_total": 1,
+            "platforms": {"Ashby": {"positions_observed": 1}},
+            "items": [],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            json_output = Path(temp_dir) / "playbook.json"
+            markdown_output = Path(temp_dir) / "playbook.md"
+
+            playbook = write_application_playbook(
+                research,
+                gaps=None,
+                readiness=None,
+                synthetic=None,
+                json_output=json_output,
+                markdown_output=markdown_output,
+            )
+
+            self.assertEqual(playbook["platform_count"], 1)
+            self.assertTrue(json_output.exists())
+            self.assertTrue(markdown_output.exists())
+            self.assertIn("Application Automation Playbook", markdown_output.read_text())
 
 
 if __name__ == "__main__":

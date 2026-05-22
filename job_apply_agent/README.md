@@ -247,6 +247,24 @@ The synthetic harness is intentionally not a real submission tool. It exists to
 prove field mapping and summarize the gates that still require supervised
 handling before any permitted real application flow.
 
+Generate a platform playbook from the real observed artifacts plus the synthetic
+run:
+
+```bash
+python3 -m job_apply_agent playbook
+```
+
+This writes:
+
+```text
+job_apply_agent/outbox/application_playbook_latest.json
+job_apply_agent/outbox/application_playbook_latest.md
+```
+
+The playbook is the operational checklist for each platform: common prompts,
+field categories, answer sources, learning tasks, closed-posting handling,
+CAPTCHA/security stops, protected-class handling, and final-submit boundaries.
+
 ## Learning From Approved Applications
 
 When you manually submit an application, save the exact questions and answers as JSON:
