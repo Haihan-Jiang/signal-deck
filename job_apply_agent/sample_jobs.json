@@ -1,0 +1,66 @@
+{
+  "jobs": [
+    {
+      "platform": "MockJobs",
+      "job_id": "mock-001",
+      "company": "Northstar AI",
+      "title": "AI Engineer, Workflow Automation",
+      "location": "Remote - United States",
+      "workplace_type": "Remote",
+      "skills": [
+        "Python",
+        "LLM",
+        "agents",
+        "backend",
+        "data pipelines"
+      ],
+      "description": "Build backend services and agent workflows for enterprise automation. Strong Python, API integration, and data pipeline experience preferred.",
+      "apply_url": "mock://jobs/mock-001/apply",
+      "questions": [
+        "Why are you interested in this role?",
+        "Describe relevant experience for this role.",
+        "Are you authorized to work in the United States?",
+        "What is your expected compensation range?"
+      ]
+    },
+    {
+      "platform": "MockJobs",
+      "job_id": "mock-002",
+      "company": "Harbor Tools",
+      "title": "Backend Software Engineer",
+      "location": "San Francisco, CA",
+      "workplace_type": "Hybrid",
+      "skills": [
+        "Python",
+        "APIs",
+        "automation",
+        "observability"
+      ],
+      "description": "Own backend APIs and internal automation tools. The team values shipping practical software and improving operational workflows.",
+      "apply_url": "mock://jobs/mock-002/apply",
+      "questions": [
+        "What project best shows your backend experience?",
+        "When are you available to start?",
+        "Would you relocate for this role?"
+      ]
+    },
+    {
+      "platform": "MockJobs",
+      "job_id": "mock-003",
+      "company": "Legacy Defense Systems",
+      "title": "Principal Systems Engineer",
+      "location": "Onsite - Arlington, VA",
+      "workplace_type": "Onsite",
+      "skills": [
+        "C++",
+        "security clearance",
+        "embedded systems"
+      ],
+      "description": "Principal engineer role requiring active security clearance and 10+ years of embedded systems experience.",
+      "apply_url": "mock://jobs/mock-003/apply",
+      "questions": [
+        "Do you have an active security clearance?"
+      ]
+    }
+  ]
+}

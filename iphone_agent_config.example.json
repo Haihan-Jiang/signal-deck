@@ -1,0 +1,98 @@
+{
+  "version": 1,
+  "name": "Zero-Cost iPhone Autopilot",
+  "timezone": "America/Los_Angeles",
+  "host": "0.0.0.0",
+  "port": 8797,
+  "token": "replace-with-a-random-local-token",
+  "token_required": true,
+  "no_cost": true,
+  "policy": {
+    "allow_paid_services": false,
+    "allow_llm_api_calls": false,
+    "external_submit_requires_explicit_confirmation": true
+  },
+  "scheduler": {
+    "enabled": true,
+    "tick_seconds": 60
+  },
+  "state_path": "{home}/.signal-deck/logs/iphone_agent_state.json",
+  "run_log_path": "{home}/.signal-deck/logs/iphone_agent_runs.jsonl",
+  "tasks": [
+    {
+      "id": "job_drafts_daily",
+      "title": "Daily job drafts and Telegram alert",
+      "enabled": true,
+      "unattended": true,
+      "schedule": {
+        "kind": "daily",
+        "time": "17:00"
+      },
+      "ios_boundary": "Fully unattended for scoring, draft generation, closed-posting checks, local outbox writes, and Telegram notification. It does not submit real applications; employer forms, CAPTCHAs, logins, and legal attestations still require human consent.",
+      "action": {
+        "kind": "argv",
+        "cwd": "{repo}",
+        "timeout_seconds": 300,
+        "argv": [
+          "{python}",
+          "-m",
+          "job_apply_agent",
+          "run",
+          "--profile",
+          "job_apply_agent/outbox/alan_jiang_profile.json",
+          "--jobs",
+          "job_apply_agent/outbox/linkedin_visible_jobs.json",
+          "--memory",
+          "job_apply_agent/outbox/answer_memory.json",
+          "--limit",
+          "5",
+          "--notify-telegram",
+          "--live-check"
+        ]
+      }
+    },
+    {
+      "id": "signal_snapshot",
+      "title": "Signal Deck dry-run snapshot",
+      "enabled": true,
+      "unattended": true,
+      "schedule": {
+        "kind": "manual"
+      },
+      "ios_boundary": "Manual iPhone trigger by default because this task depends on external sports/market network calls. It remains dry-run research output only and does not place live event-contract orders. Use the existing dry-run daemon or change this schedule to interval if you want it in the Mac scheduler.",
+      "action": {
+        "kind": "argv",
+        "cwd": "{repo}",
+        "timeout_seconds": 120,
+        "env_files": [
+          "{home}/.signal-deck/runtime/telegram.env"
+        ],
+        "argv": [
+          "{python}",
+          "dryrun_recorder.py",
+          "--limit",
+          "20"
+        ]
+      }
+    },
+    {
+      "id": "status_snapshot",
+      "title": "Phone status summary",
+      "enabled": true,
+      "unattended": true,
+      "schedule": {
+        "kind": "interval",
+        "minutes": 30
+      },
+      "ios_boundary": "Fully unattended read-only status heartbeat from local logs and outbox files.",
+      "action": {
+        "kind": "status_snapshot",
+        "paths": [
+          "{home}/.signal-deck/logs/dryrun_latest.txt",
+          "{repo}/job_apply_agent/outbox/dry_run_submissions.jsonl",
+          "{repo}/job_apply_agent/outbox/browser_review_queue.jsonl"
+        ]
+      }
+    }
+  ]
+}
