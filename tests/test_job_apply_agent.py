@@ -13,6 +13,7 @@ from job_apply_agent.core import (
     build_application_draft,
     build_application_playbook,
     build_application_research,
+    build_collection_plan_from_coverage_gate,
     build_browser_action_manifest,
     build_closed_posting_preflight,
     build_browser_dom_execution_plan,
@@ -31,6 +32,7 @@ from job_apply_agent.core import (
     execute_form_plan_offline,
     extract_linkedin_job_id,
     find_learned_answer,
+    import_candidate_observations,
     job_registry_key,
     is_safe_browser_execution_target,
     is_job_closed,
@@ -49,6 +51,7 @@ from job_apply_agent.core import (
     render_apply_run_audit_markdown,
     render_application_playbook_markdown,
     render_application_research_markdown,
+    render_collection_plan_markdown,
     render_browser_action_manifest_markdown,
     render_closed_posting_preflight_markdown,
     render_browser_dom_execution_plan_markdown,
@@ -72,6 +75,7 @@ from job_apply_agent.core import (
     write_application_research_report,
     write_browser_action_manifest,
     write_closed_posting_preflight,
+    write_collection_plan,
     write_browser_dom_harness,
     write_form_fill_plan,
     write_learning_task_template,
@@ -2286,6 +2290,96 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(json_output.exists())
             self.assertTrue(markdown_output.exists())
             self.assertIn("Research Coverage Gate", markdown_output.read_text())
+
+    def test_collection_plan_turns_coverage_shortfalls_into_search_tasks(self) -> None:
+        gate = {
+            "position_target": 100,
+            "ready_for_full_automation": False,
+            "real_platform_role_target_achieved": False,
+            "synthetic": {"platform_role_target_achieved": True},
+            "next_collection_targets": [
+                {
+                    "platform": "Ashby",
+                    "role_family": "Cloud DevOps",
+                    "positions_observed": 0,
+                    "positions_remaining": 100,
+                },
+                {
+                    "platform": "LinkedIn",
+                    "role_family": "Site Reliability",
+                    "positions_observed": 7,
+                    "positions_remaining": 93,
+                },
+            ],
+        }
+
+        plan = build_collection_plan_from_coverage_gate(gate, max_targets=1, batch_size=25)
+
+        self.assertEqual(plan["task_count"], 1)
+        task = plan["tasks"][0]
+        self.assertEqual(task["platform"], "Ashby")
+        self.assertEqual(task["suggested_batch_size"], 25)
+        self.assertIn("cloud devops", task["query"])
+        self.assertTrue(any("jobs.ashbyhq.com" in url for url in task["search_urls"]))
+        markdown = render_collection_plan_markdown(plan)
+        self.assertIn("Collection Plan", markdown)
+        self.assertIn("import-candidates", markdown)
+
+    def test_write_collection_plan_outputs_reports(self) -> None:
+        gate = {
+            "next_collection_targets": [
+                {
+                    "platform": "Lever",
+                    "role_family": "Software Backend",
+                    "positions_observed": 0,
+                    "positions_remaining": 100,
+                }
+            ],
+            "synthetic": {"platform_role_target_achieved": True},
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            json_output = Path(temp_dir) / "collection.json"
+            markdown_output = Path(temp_dir) / "collection.md"
+
+            plan = write_collection_plan(gate, json_output, markdown_output)
+
+            self.assertEqual(plan["task_count"], 1)
+            self.assertTrue(json_output.exists())
+            self.assertTrue(markdown_output.exists())
+
+    def test_import_candidate_observations_adds_research_positions(self) -> None:
+        candidates = [
+            {
+                "company": "Example",
+                "title": "Backend Software Engineer",
+                "apply_url": "https://jobs.lever.co/example/abc?utm_source=x",
+                "location": "Remote",
+            },
+            {
+                "company": "Example",
+                "title": "Backend Software Engineer",
+                "apply_url": "https://jobs.lever.co/example/abc?utm_source=x",
+                "location": "Remote",
+            },
+            {
+                "company": "NoUrl",
+                "title": "Site Reliability Engineer",
+            },
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_path = Path(temp_dir) / "candidates.json"
+            output_path = Path(temp_dir) / "observed_candidates.jsonl"
+            input_path.write_text(json.dumps({"candidates": candidates}), encoding="utf-8")
+
+            result = import_candidate_observations(input_path, output_path, source="test")
+            research = build_application_research(temp_dir, position_target=100)
+
+            self.assertEqual(result["candidate_count"], 3)
+            self.assertEqual(result["imported_count"], 1)
+            self.assertEqual(result["skipped_count"], 2)
+            self.assertEqual(research["positions_observed_total"], 1)
+            self.assertEqual(research["platforms"]["Lever"]["positions_observed"], 1)
+            self.assertIn("Lever::Software Backend", research["coverage_groups"])
 
 
 if __name__ == "__main__":

@@ -911,7 +911,7 @@ def build_application_research(
         for index, row in enumerate(load_submissions_jsonl(path, limit=None)):
             if "answers" in row or "questions" in row:
                 _collect_submission_question_research(path, row, items, positions, index=index)
-            elif row.get("status") == "OPENED_FOR_REVIEW":
+            elif row.get("status") in {"OPENED_FOR_REVIEW", "OBSERVED_CANDIDATE"}:
                 _register_research_position(path, row, positions, index=index)
 
     summary = _summarize_application_research(items, positions, position_target)
@@ -2982,6 +2982,153 @@ def render_research_coverage_gate_markdown(gate: dict[str, Any]) -> str:
         for platform in extras:
             lines.append(f"- {platform}")
     return "\n".join(lines) + "\n"
+
+
+def build_collection_plan_from_coverage_gate(
+    gate: dict[str, Any],
+    max_targets: int = 20,
+    batch_size: int = 25,
+) -> dict[str, Any]:
+    targets = [
+        target
+        for target in gate.get("next_collection_targets", [])
+        if isinstance(target, dict) and int(target.get("positions_remaining") or 0) > 0
+    ][: max(max_targets, 0)]
+    tasks: list[dict[str, Any]] = []
+    for target in targets:
+        platform = str(target.get("platform") or "Unknown")
+        role_family = str(target.get("role_family") or "Other")
+        query = _collection_query_for_role(role_family)
+        tasks.append(
+            {
+                "platform": platform,
+                "role_family": role_family,
+                "positions_observed": int(target.get("positions_observed") or 0),
+                "positions_remaining": int(target.get("positions_remaining") or 0),
+                "suggested_batch_size": min(batch_size, int(target.get("positions_remaining") or 0)),
+                "query": query,
+                "search_urls": _collection_search_urls(platform, query),
+                "output_expectation": {
+                    "format": "jsonl",
+                    "required_fields": ["platform", "company", "title", "apply_url"],
+                    "optional_fields": ["job_id", "location", "description", "questions", "page_excerpt"],
+                },
+            }
+        )
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "research_coverage_gate",
+        "position_target": gate.get("position_target", 100),
+        "ready_for_full_automation": bool(gate.get("ready_for_full_automation")),
+        "real_platform_role_target_achieved": bool(
+            gate.get("real_platform_role_target_achieved")
+        ),
+        "synthetic_platform_role_target_achieved": bool(
+            (gate.get("synthetic") or {}).get("platform_role_target_achieved")
+        ),
+        "task_count": len(tasks),
+        "tasks": tasks,
+        "import_command": (
+            "python3 -m job_apply_agent import-candidates --input <candidates.jsonl> "
+            "--output job_apply_agent/outbox/observed_candidates.jsonl"
+        ),
+    }
+
+
+def write_collection_plan(
+    gate: dict[str, Any],
+    json_output: str | Path,
+    markdown_output: str | Path,
+    max_targets: int = 20,
+    batch_size: int = 25,
+) -> dict[str, Any]:
+    plan = build_collection_plan_from_coverage_gate(
+        gate,
+        max_targets=max_targets,
+        batch_size=batch_size,
+    )
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(plan, ensure_ascii=True, indent=2), encoding="utf-8")
+    markdown_path.write_text(render_collection_plan_markdown(plan), encoding="utf-8")
+    return plan
+
+
+def render_collection_plan_markdown(plan: dict[str, Any]) -> str:
+    lines = [
+        "# Collection Plan",
+        "",
+        f"Generated: {plan.get('generated_at')}",
+        f"Tasks: {plan.get('task_count', 0)}",
+        f"Ready for full automation: {str(bool(plan.get('ready_for_full_automation'))).lower()}",
+        f"Real platform-role target achieved: {str(bool(plan.get('real_platform_role_target_achieved'))).lower()}",
+        f"Synthetic platform-role target achieved: {str(bool(plan.get('synthetic_platform_role_target_achieved'))).lower()}",
+        "",
+        "## Tasks",
+        "",
+    ]
+    tasks = plan.get("tasks") or []
+    if tasks:
+        for index, task in enumerate(tasks, start=1):
+            lines.append(
+                "{index}. {platform} / {role}: collect {batch} now, {remaining} remaining".format(
+                    index=index,
+                    platform=task.get("platform"),
+                    role=task.get("role_family"),
+                    batch=task.get("suggested_batch_size", 0),
+                    remaining=task.get("positions_remaining", 0),
+                )
+            )
+            lines.append(f"   query: {task.get('query')}")
+            for url in task.get("search_urls", [])[:4]:
+                lines.append(f"   search: {url}")
+    else:
+        lines.append("- None")
+    lines.extend(["", "## Import", "", f"`{plan.get('import_command')}`"])
+    return "\n".join(lines) + "\n"
+
+
+def import_candidate_observations(
+    input_path: str | Path,
+    output_path: str | Path,
+    source: str = "manual_collection",
+) -> dict[str, Any]:
+    candidates = _load_candidate_rows(Path(input_path))
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    existing_keys: set[str] = set()
+    if output.exists():
+        for row in load_submissions_jsonl(output, limit=None):
+            existing_keys.add(job_registry_key(row))
+    imported: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for candidate in candidates:
+        normalized = _normalize_candidate_observation(candidate, source=source)
+        key = normalized["registry_key"]
+        if not normalized.get("apply_url"):
+            skipped.append({"reason": "missing_apply_url", "candidate": candidate})
+            continue
+        if key in existing_keys:
+            skipped.append({"reason": "duplicate", "key": key})
+            continue
+        imported.append(normalized)
+        existing_keys.add(key)
+    with output.open("a", encoding="utf-8") as handle:
+        for row in imported:
+            handle.write(json.dumps(row, ensure_ascii=True, sort_keys=True) + "\n")
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": source,
+        "input": str(input_path),
+        "output": str(output_path),
+        "candidate_count": len(candidates),
+        "imported_count": len(imported),
+        "skipped_count": len(skipped),
+        "imported": imported,
+        "skipped": skipped,
+    }
 
 
 def write_application_playbook(
@@ -5900,6 +6047,99 @@ def _default_target_role_families() -> list[str]:
         if role_family not in role_families:
             role_families.append(role_family)
     return role_families
+
+
+def _collection_query_for_role(role_family: str) -> str:
+    queries = {
+        "Site Reliability": "site reliability engineer OR sre production reliability",
+        "Platform Infrastructure": "platform engineer infrastructure kubernetes cloud",
+        "Cloud DevOps": "cloud devops engineer aws azure gcp infrastructure",
+        "Software Backend": "backend software engineer infrastructure distributed systems",
+    }
+    return queries.get(role_family, f"{role_family} software engineer")
+
+
+def _collection_search_urls(platform: str, query: str) -> list[str]:
+    encoded_query = urllib.parse.quote_plus(query)
+    platform_text = str(platform or "").lower()
+    if platform_text == "linkedin":
+        return [
+            "https://www.linkedin.com/jobs/search/?keywords="
+            f"{encoded_query}&location=United%20States",
+            "https://www.google.com/search?q="
+            f"site%3Alinkedin.com%2Fjobs%2Fview+{encoded_query}",
+        ]
+    if platform_text == "ashby":
+        return [
+            "https://www.google.com/search?q="
+            f"site%3Ajobs.ashbyhq.com+{encoded_query}",
+            "https://www.google.com/search?q="
+            f"site%3Aashbyhq.com+%22{encoded_query}%22",
+        ]
+    if platform_text == "greenhouse":
+        return [
+            "https://www.google.com/search?q="
+            f"site%3Ajob-boards.greenhouse.io+{encoded_query}",
+            "https://www.google.com/search?q="
+            f"site%3Agreenhouse.io+%22{encoded_query}%22",
+        ]
+    if platform_text == "lever":
+        return [
+            "https://www.google.com/search?q="
+            f"site%3Ajobs.lever.co+{encoded_query}",
+            "https://www.google.com/search?q="
+            f"site%3Alever.co+%22{encoded_query}%22",
+        ]
+    return [f"https://www.google.com/search?q={urllib.parse.quote_plus(platform + ' ' + query)}"]
+
+
+def _load_candidate_rows(path: Path) -> list[dict[str, Any]]:
+    if path.suffix.lower() == ".jsonl":
+        return load_submissions_jsonl(path, limit=None)
+    payload = _read_json_file(path)
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if isinstance(payload, dict):
+        for key in ["candidates", "jobs", "results", "items"]:
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+        return [payload]
+    return []
+
+
+def _normalize_candidate_observation(candidate: dict[str, Any], source: str) -> dict[str, Any]:
+    apply_url = str(
+        candidate.get("apply_url")
+        or candidate.get("short_apply_url")
+        or candidate.get("url")
+        or candidate.get("job_url")
+        or ""
+    ).strip()
+    short_url = shorten_apply_url(apply_url, candidate)
+    title = str(candidate.get("title") or candidate.get("job_title") or "").strip()
+    platform = (
+        str(candidate.get("platform") or infer_platform_from_url(short_url) or "").strip()
+        or "Unknown"
+    )
+    description = str(candidate.get("description") or candidate.get("summary") or "").strip()
+    normalized = {
+        "status": "OBSERVED_CANDIDATE",
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+        "source": source,
+        "platform": platform,
+        "company": candidate.get("company") or candidate.get("company_name"),
+        "title": title or None,
+        "location": candidate.get("location"),
+        "job_id": candidate.get("job_id") or extract_linkedin_job_id(short_url),
+        "apply_url": short_url or apply_url,
+        "role_family": _infer_role_family(" ".join([title, description])),
+    }
+    for key in ["questions", "page_excerpt", "description"]:
+        if candidate.get(key) is not None:
+            normalized[key] = candidate.get(key)
+    normalized["registry_key"] = job_registry_key(normalized)
+    return normalized
 
 
 def _application_collection_gaps(

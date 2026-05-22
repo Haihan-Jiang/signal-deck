@@ -239,6 +239,34 @@ remaining real collection targets for each platform and role family, while also
 showing whether synthetic platform/role execution reached its target with zero
 real submissions.
 
+Turn those gaps into a concrete collection queue:
+
+```bash
+python3 -m job_apply_agent collection-plan \
+  --coverage-gate-json job_apply_agent/outbox/research_coverage_gate_latest.json \
+  --max-targets 20 \
+  --batch-size 25
+```
+
+This writes:
+
+```text
+job_apply_agent/outbox/collection_plan_latest.json
+job_apply_agent/outbox/collection_plan_latest.md
+```
+
+After collecting candidate jobs externally or through supervised browser work,
+append them as normalized observations:
+
+```bash
+python3 -m job_apply_agent import-candidates \
+  --input collected_jobs.jsonl \
+  --output job_apply_agent/outbox/observed_candidates.jsonl
+```
+
+Imported rows use `status=OBSERVED_CANDIDATE`, are de-duplicated by registry
+key, and are counted by the next `research` run.
+
 Turn that learning queue into a fill-in template:
 
 ```bash

@@ -10,6 +10,7 @@ from .core import (
     build_application_draft,
     build_application_research,
     build_position_readiness_report,
+    import_candidate_observations,
     learn_answers,
     load_answer_memory,
     load_closed_jobs,
@@ -28,6 +29,7 @@ from .core import (
     write_browser_action_manifest,
     write_browser_dom_harness,
     write_closed_posting_preflight,
+    write_collection_plan,
     write_form_fill_plan,
     write_learning_task_template,
     write_pre_submit_review,
@@ -77,6 +79,9 @@ DEFAULT_PLAYBOOK_JSON = Path(__file__).with_name("outbox") / "application_playbo
 DEFAULT_PLAYBOOK_MARKDOWN = Path(__file__).with_name("outbox") / "application_playbook_latest.md"
 DEFAULT_COVERAGE_GATE_JSON = Path(__file__).with_name("outbox") / "research_coverage_gate_latest.json"
 DEFAULT_COVERAGE_GATE_MARKDOWN = Path(__file__).with_name("outbox") / "research_coverage_gate_latest.md"
+DEFAULT_COLLECTION_PLAN_JSON = Path(__file__).with_name("outbox") / "collection_plan_latest.json"
+DEFAULT_COLLECTION_PLAN_MARKDOWN = Path(__file__).with_name("outbox") / "collection_plan_latest.md"
+DEFAULT_OBSERVED_CANDIDATES = Path(__file__).with_name("outbox") / "observed_candidates.jsonl"
 DEFAULT_PERSONAL_PROFILE = Path(__file__).with_name("outbox") / "alan_jiang_profile.json"
 
 
@@ -400,6 +405,24 @@ def main() -> int:
     coverage_gate_parser.add_argument("--position-target", type=int, default=100)
     coverage_gate_parser.add_argument("--json-output", default=str(DEFAULT_COVERAGE_GATE_JSON))
     coverage_gate_parser.add_argument("--markdown-output", default=str(DEFAULT_COVERAGE_GATE_MARKDOWN))
+
+    collection_plan_parser = subparsers.add_parser(
+        "collection-plan",
+        help="turn coverage shortfalls into platform/role collection tasks",
+    )
+    collection_plan_parser.add_argument("--coverage-gate-json", default=str(DEFAULT_COVERAGE_GATE_JSON))
+    collection_plan_parser.add_argument("--max-targets", type=int, default=20)
+    collection_plan_parser.add_argument("--batch-size", type=int, default=25)
+    collection_plan_parser.add_argument("--json-output", default=str(DEFAULT_COLLECTION_PLAN_JSON))
+    collection_plan_parser.add_argument("--markdown-output", default=str(DEFAULT_COLLECTION_PLAN_MARKDOWN))
+
+    import_candidates_parser = subparsers.add_parser(
+        "import-candidates",
+        help="append externally collected candidate jobs as normalized observed positions",
+    )
+    import_candidates_parser.add_argument("--input", required=True)
+    import_candidates_parser.add_argument("--output", default=str(DEFAULT_OBSERVED_CANDIDATES))
+    import_candidates_parser.add_argument("--source", default="manual_collection")
 
     args = parser.parse_args()
 
@@ -805,6 +828,35 @@ def main() -> int:
             f"{str(bool((gate.get('synthetic') or {}).get('platform_role_target_achieved'))).lower()}"
         )
         print(f"Next collection targets: {len(gate.get('next_collection_targets', []))}")
+        return 0
+
+    if args.command == "collection-plan":
+        gate_path = Path(args.coverage_gate_json)
+        if not gate_path.exists():
+            raise FileNotFoundError(f"coverage gate not found: {args.coverage_gate_json}")
+        gate = json.loads(gate_path.read_text(encoding="utf-8"))
+        plan = write_collection_plan(
+            gate,
+            args.json_output,
+            args.markdown_output,
+            max_targets=args.max_targets,
+            batch_size=args.batch_size,
+        )
+        print(f"Wrote collection plan JSON to {args.json_output}")
+        print(f"Wrote collection plan Markdown to {args.markdown_output}")
+        print(f"Tasks: {plan.get('task_count', 0)}")
+        return 0
+
+    if args.command == "import-candidates":
+        result = import_candidate_observations(
+            args.input,
+            args.output,
+            source=args.source,
+        )
+        print(f"Imported candidates to {args.output}")
+        print(f"Input candidates: {result.get('candidate_count', 0)}")
+        print(f"Imported: {result.get('imported_count', 0)}")
+        print(f"Skipped: {result.get('skipped_count', 0)}")
         return 0
 
     if args.command == "notify":
