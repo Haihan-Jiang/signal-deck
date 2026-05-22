@@ -1,0 +1,19 @@
+1
+00:00:00,000 --> 00:00:04,000
+No-cost local AI-style video sample. No paid API or stock footage.
+
+2
+00:00:04,000 --> 00:00:08,000
+Useful for product explainers, demos, and workflow walkthroughs.
+
+3
+00:00:08,000 --> 00:00:12,000
+Useful for trading reviews, KPI summaries, and data recaps.
+
+4
+00:00:12,000 --> 00:00:16,000
+Useful for social shorts, launch teasers, and caption-first clips.
+
+5
+00:00:16,000 --> 00:00:20,000
+Future clips can be replaced by free local model renders if hardware fits.
