@@ -1,0 +1,64 @@
+{
+  "test_rows": 216,
+  "accuracy": 1.0,
+  "per_label_accuracy": {
+    "ai_visual_montage": 1.0,
+    "data_fact_short": 1.0,
+    "howto_tutorial": 1.0,
+    "product_demo": 1.0,
+    "promo_ad": 1.0,
+    "storytime_lifestyle": 1.0
+  },
+  "confusion": {
+    "ai_visual_montage": {
+      "ai_visual_montage": 36,
+      "data_fact_short": 0,
+      "howto_tutorial": 0,
+      "product_demo": 0,
+      "promo_ad": 0,
+      "storytime_lifestyle": 0
+    },
+    "data_fact_short": {
+      "ai_visual_montage": 0,
+      "data_fact_short": 36,
+      "howto_tutorial": 0,
+      "product_demo": 0,
+      "promo_ad": 0,
+      "storytime_lifestyle": 0
+    },
+    "howto_tutorial": {
+      "ai_visual_montage": 0,
+      "data_fact_short": 0,
+      "howto_tutorial": 36,
+      "product_demo": 0,
+      "promo_ad": 0,
+      "storytime_lifestyle": 0
+    },
+    "product_demo": {
+      "ai_visual_montage": 0,
+      "data_fact_short": 0,
+      "howto_tutorial": 0,
+      "product_demo": 36,
+      "promo_ad": 0,
+      "storytime_lifestyle": 0
+    },
+    "promo_ad": {
+      "ai_visual_montage": 0,
+      "data_fact_short": 0,
+      "howto_tutorial": 0,
+      "product_demo": 0,
+      "promo_ad": 36,
+      "storytime_lifestyle": 0
+    },
+    "storytime_lifestyle": {
+      "ai_visual_montage": 0,
+      "data_fact_short": 0,
+      "howto_tutorial": 0,
+      "product_demo": 0,
+      "promo_ad": 0,
+      "storytime_lifestyle": 36
+    }
+  },
+  "sample_mistakes": [],
+  "probe_predictions_path": "/Users/haihan/Documents/New project/generated_models/synthetic_task_model/probe_predictions.json"
+}

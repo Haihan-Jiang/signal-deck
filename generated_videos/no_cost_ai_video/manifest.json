@@ -1,0 +1,14 @@
+{
+  "output": "no_cost_ai_video_sample.mp4",
+  "width": 1280,
+  "height": 720,
+  "fps": 24,
+  "duration_seconds": 20,
+  "cost_policy": "no paid API, no remote model call, no stock footage",
+  "tools": [
+    "python3",
+    "opencv",
+    "numpy"
+  ],
+  "downloaded_assets": []
+}

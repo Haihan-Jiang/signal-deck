@@ -1,0 +1,152 @@
+[
+  {
+    "task": "做一个15秒短视频，展示一盏智能台灯的三个功能，最后有购买按钮。",
+    "label": "product_demo",
+    "confidence": 1.0,
+    "recommended_structure": [
+      "0-2s: hook with product-in-use closeup",
+      "2-7s: three feature beats with labels",
+      "7-12s: benefit proof or before/after",
+      "12-15s: clean hero shot and CTA"
+    ],
+    "top3": [
+      {
+        "label": "product_demo",
+        "confidence": 1.0
+      },
+      {
+        "label": "data_fact_short",
+        "confidence": 1.407125223322761e-36
+      },
+      {
+        "label": "ai_visual_montage",
+        "confidence": 2.3111112004967734e-37
+      }
+    ]
+  },
+  {
+    "task": "Create a quick tutorial showing how to pack a carry-on with three simple steps.",
+    "label": "howto_tutorial",
+    "confidence": 1.0,
+    "recommended_structure": [
+      "0-2s: show the finished result",
+      "2-11s: three numbered steps",
+      "11-14s: common mistake to avoid",
+      "14-15s: final result recap"
+    ],
+    "top3": [
+      {
+        "label": "howto_tutorial",
+        "confidence": 1.0
+      },
+      {
+        "label": "promo_ad",
+        "confidence": 3.0338001146277264e-68
+      },
+      {
+        "label": "storytime_lifestyle",
+        "confidence": 8.59865006027947e-74
+      }
+    ]
+  },
+  {
+    "task": "拍一个雨天早晨的生活感短片，字幕要温柔，不要像广告。",
+    "label": "storytime_lifestyle",
+    "confidence": 0.9999999999999858,
+    "recommended_structure": [
+      "0-3s: relatable opening caption",
+      "3-9s: sensory detail sequence",
+      "9-13s: small emotional turn",
+      "13-15s: quiet ending image"
+    ],
+    "top3": [
+      {
+        "label": "storytime_lifestyle",
+        "confidence": 0.9999999999999858
+      },
+      {
+        "label": "promo_ad",
+        "confidence": 1.2674623633605123e-14
+      },
+      {
+        "label": "product_demo",
+        "confidence": 1.4611465079913141e-15
+      }
+    ]
+  },
+  {
+    "task": "Make a phone-friendly chart video about coffee spending with one surprising number.",
+    "label": "data_fact_short",
+    "confidence": 1.0,
+    "recommended_structure": [
+      "0-2s: one surprising number",
+      "2-9s: three visual facts",
+      "9-13s: comparison or mini chart",
+      "13-15s: concise takeaway"
+    ],
+    "top3": [
+      {
+        "label": "data_fact_short",
+        "confidence": 1.0
+      },
+      {
+        "label": "promo_ad",
+        "confidence": 3.7925761611295517e-126
+      },
+      {
+        "label": "howto_tutorial",
+        "confidence": 3.5823903308028697e-128
+      }
+    ]
+  },
+  {
+    "task": "AI生成一个杯子变成森林的小短片，文字越少越好，可以循环。",
+    "label": "ai_visual_montage",
+    "confidence": 1.0,
+    "recommended_structure": [
+      "0-2s: impossible visual premise",
+      "2-10s: three morphing transitions",
+      "10-13s: biggest reveal",
+      "13-15s: seamless loop frame"
+    ],
+    "top3": [
+      {
+        "label": "ai_visual_montage",
+        "confidence": 1.0
+      },
+      {
+        "label": "storytime_lifestyle",
+        "confidence": 6.733324706413568e-48
+      },
+      {
+        "label": "promo_ad",
+        "confidence": 5.1131016087379574e-48
+      }
+    ]
+  },
+  {
+    "task": "Give me a 15-second promo ad for a summer drink special with a clear CTA.",
+    "label": "promo_ad",
+    "confidence": 1.0,
+    "recommended_structure": [
+      "0-2s: offer or pain point",
+      "2-8s: proof and benefit cards",
+      "8-12s: urgency or social proof",
+      "12-15s: direct CTA"
+    ],
+    "top3": [
+      {
+        "label": "promo_ad",
+        "confidence": 1.0
+      },
+      {
+        "label": "data_fact_short",
+        "confidence": 8.940909318428012e-78
+      },
+      {
+        "label": "product_demo",
+        "confidence": 1.7959857625590925e-81
+      }
+    ]
+  }
+]
