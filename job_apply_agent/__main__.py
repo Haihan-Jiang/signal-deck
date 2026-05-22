@@ -466,6 +466,11 @@ def main() -> int:
     observe_candidates_parser.add_argument("--json-output", default=str(DEFAULT_CANDIDATE_OBSERVATION_JSON))
     observe_candidates_parser.add_argument("--markdown-output", default=str(DEFAULT_CANDIDATE_OBSERVATION_MARKDOWN))
     observe_candidates_parser.add_argument("--source", default="live_candidate_observation")
+    observe_candidates_parser.add_argument(
+        "--refresh-existing",
+        action="store_true",
+        help="append a fresh observation even when this job was already recorded",
+    )
 
     export_questions_parser = subparsers.add_parser(
         "export-questions",
@@ -549,6 +554,7 @@ def main() -> int:
             max_checks=args.live_check_limit,
             timeout=args.live_check_timeout,
             source=args.source,
+            refresh_existing=args.refresh_existing,
         )
         print(f"Wrote candidate observation JSON to {args.json_output}")
         print(f"Wrote candidate observation Markdown to {args.markdown_output}")

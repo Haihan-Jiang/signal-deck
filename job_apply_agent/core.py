@@ -3918,6 +3918,7 @@ def observe_candidate_pages(
     timeout: float = 15.0,
     fetcher: Any | None = None,
     source: str = "live_candidate_observation",
+    refresh_existing: bool = False,
 ) -> dict[str, Any]:
     closed_jobs = load_closed_jobs(closed_jobs_path)
     fetch_page = fetcher or fetch_live_page_text
@@ -4055,7 +4056,7 @@ def observe_candidate_pages(
         }
         normalized = _normalize_candidate_observation(observation_input, source=source)
         key = normalized["registry_key"]
-        if key in existing_keys:
+        if key in existing_keys and not refresh_existing:
             check.update({"status": "duplicate_observation", "observed": False})
             skipped.append({"reason": "duplicate", "key": key})
             checks.append(check)
@@ -4099,6 +4100,7 @@ def observe_candidate_pages(
         "observed_output": str(observed_output_path),
         "closed_jobs_path": str(closed_jobs_path),
         "max_checks": max_checks,
+        "refresh_existing": refresh_existing,
         "checks": checks,
         "observed": observed,
         "closed_candidates": closed_checks,
@@ -4123,6 +4125,7 @@ def write_candidate_observation_report(
     timeout: float = 15.0,
     fetcher: Any | None = None,
     source: str = "live_candidate_observation",
+    refresh_existing: bool = False,
 ) -> dict[str, Any]:
     report = observe_candidate_pages(
         candidates,
@@ -4132,6 +4135,7 @@ def write_candidate_observation_report(
         timeout=timeout,
         fetcher=fetcher,
         source=source,
+        refresh_existing=refresh_existing,
     )
     json_path = Path(json_output)
     markdown_path = Path(markdown_output)
@@ -4154,10 +4158,12 @@ def extract_live_job_page_metadata(
     )
     if str(company).strip().lower() in {"@linkedin", "linkedin"}:
         company = _extract_company_from_page_text(page_text)
-    questions = extract_application_prompts_from_html(
+    ashby_questions = _extract_ashby_application_prompts(page_html)
+    html_questions = [] if ashby_questions else extract_application_prompts_from_html(
         page_html,
         include_form_fields=include_form_fields,
     )
+    questions = _unique_normalized_strings([*html_questions, *ashby_questions])
     return {
         "title": title,
         "company": company,
@@ -4181,6 +4187,92 @@ def _extract_company_from_page_text(page_text: str) -> str:
     if match:
         return match.group(1).strip()
     return ""
+
+
+def _extract_ashby_application_prompts(page_html: str) -> list[str]:
+    app_data = _parse_ashby_app_data(page_html)
+    posting = app_data.get("posting") if isinstance(app_data.get("posting"), dict) else {}
+    forms: list[dict[str, Any]] = []
+    application_form = posting.get("applicationForm")
+    if isinstance(application_form, dict):
+        forms.append(application_form)
+    for survey_form in posting.get("surveyForms") or []:
+        if isinstance(survey_form, dict):
+            forms.append(survey_form)
+
+    prompts: list[str] = []
+    for form in forms:
+        for entry in _ashby_form_field_entries(form):
+            prompt = _ashby_form_entry_prompt(entry)
+            if not prompt:
+                continue
+            classification = classify_application_prompt(prompt)
+            if _skip_low_signal_prompt(prompt, classification):
+                continue
+            prompts.append(prompt)
+    return _unique_normalized_strings(prompts)
+
+
+def _ashby_form_field_entries(form: dict[str, Any]) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for key in ["fieldEntries", "entries"]:
+        entries.extend(item for item in form.get(key) or [] if isinstance(item, dict))
+    for section in form.get("sections") or []:
+        if not isinstance(section, dict):
+            continue
+        entries.extend(item for item in section.get("fieldEntries") or [] if isinstance(item, dict))
+        entries.extend(item for item in section.get("fields") or [] if isinstance(item, dict))
+    form_definition = form.get("formDefinition") if isinstance(form.get("formDefinition"), dict) else {}
+    for section in form_definition.get("sections") or []:
+        if not isinstance(section, dict):
+            continue
+        entries.extend(item for item in section.get("fields") or [] if isinstance(item, dict))
+    return entries
+
+
+def _ashby_form_entry_prompt(entry: dict[str, Any]) -> str:
+    field = entry.get("field") if isinstance(entry.get("field"), dict) else {}
+    title = _clean_html_text(str(field.get("title") or ""))
+    human_path = _clean_html_text(str(field.get("humanReadablePath") or ""))
+    description = _clean_html_text(str(entry.get("descriptionHtml") or field.get("descriptionHtml") or ""))
+    if not description:
+        description = _ashby_rich_text_to_plain(entry.get("description") or field.get("description"))
+    if description and "?" in description and not title:
+        return description
+    return title or human_path or description
+
+
+def _ashby_rich_text_to_plain(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return _clean_html_text(value)
+    if isinstance(value, dict):
+        parts: list[str] = []
+        text = value.get("text")
+        if text:
+            parts.append(str(text))
+        for item in value.get("content") or []:
+            part = _ashby_rich_text_to_plain(item)
+            if part:
+                parts.append(part)
+        return _clean_html_text(" ".join(parts))
+    if isinstance(value, list):
+        return _clean_html_text(" ".join(_ashby_rich_text_to_plain(item) for item in value))
+    return _clean_html_text(str(value))
+
+
+def _unique_normalized_strings(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        text = re.sub(r"\s+", " ", str(value or "")).strip(" *:\u00a0")
+        key = _normalize(text)
+        if not text or not key or key in seen:
+            continue
+        seen.add(key)
+        result.append(text)
+    return result
 
 
 def extract_application_prompts_from_html(

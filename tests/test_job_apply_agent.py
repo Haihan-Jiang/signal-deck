@@ -2872,6 +2872,77 @@ class JobApplyAgentTests(unittest.TestCase):
 
         self.assertEqual(metadata["company"], "Revel")
 
+    def test_extract_live_job_page_metadata_reads_ashby_app_data_fields(self) -> None:
+        page = """
+        <html>
+          <head><title>Platform Engineer @ Omnea</title></head>
+          <body>
+            You need to enable JavaScript to run this app.
+            <div>Who else works at Ashby?</div>
+          </body>
+          <script>
+            window.__appData = {
+              "posting": {
+                "applicationForm": {
+                  "fieldEntries": [
+                    {
+                      "field": {
+                        "title": "How many years of paid experience do you have?",
+                        "type": "ValueSelect"
+                      },
+                      "isRequired": true
+                    },
+                    {
+                      "field": {
+                        "title": "Please outline your compensation expectations in GBP",
+                        "type": "String"
+                      }
+                    }
+                  ],
+                  "sections": [
+                    {
+                      "fieldEntries": [
+                        {
+                          "field": {
+                            "title": "Do you require a visa or work permit?",
+                            "type": "ValueSelect"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "surveyForms": [
+                  {
+                    "fieldEntries": [
+                      {
+                        "field": {
+                          "title": "",
+                          "humanReadablePath": "Future Contact Consent",
+                          "type": "MultiValueSelect"
+                        },
+                        "descriptionHtml": "<p>Do you agree to allow Omnea to contact you about job opportunities?</p>"
+                      }
+                    ]
+                  }
+                ]
+              }
+            };
+          </script>
+        </html>
+        """
+
+        metadata = extract_live_job_page_metadata(page, include_form_fields=False)
+
+        self.assertIn("How many years of paid experience do you have?", metadata["questions"])
+        self.assertIn("Please outline your compensation expectations in GBP", metadata["questions"])
+        self.assertIn("Do you require a visa or work permit?", metadata["questions"])
+        self.assertIn(
+            "Do you agree to allow Omnea to contact you about job opportunities?",
+            metadata["questions"],
+        )
+        self.assertNotIn("Who else works at Ashby?", metadata["questions"])
+
     def test_extract_application_prompts_skips_job_board_navigation_noise(self) -> None:
         page = """
         <html>
@@ -2967,6 +3038,52 @@ class JobApplyAgentTests(unittest.TestCase):
             markdown = render_candidate_observation_markdown(report)
             self.assertIn("Candidate Observation Report", markdown)
             self.assertIn("observed_open", markdown)
+
+    def test_observe_candidate_pages_can_refresh_existing_observations(self) -> None:
+        candidates = [
+            {
+                "company": "Example",
+                "title": "Platform Engineer",
+                "platform": "Ashby",
+                "apply_url": "https://jobs.ashbyhq.com/example/abc",
+            }
+        ]
+
+        def fake_fetcher(url: str, timeout: float) -> str:
+            return "<html><label>LinkedIn Profile URL</label></html>"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            observed_output = Path(temp_dir) / "observed_candidates.jsonl"
+            closed_path = Path(temp_dir) / "closed_jobs.json"
+
+            first = observe_candidate_pages(
+                candidates,
+                observed_output,
+                closed_path,
+                fetcher=fake_fetcher,
+                max_checks=1,
+            )
+            duplicate = observe_candidate_pages(
+                candidates,
+                observed_output,
+                closed_path,
+                fetcher=fake_fetcher,
+                max_checks=1,
+            )
+            refreshed = observe_candidate_pages(
+                candidates,
+                observed_output,
+                closed_path,
+                fetcher=fake_fetcher,
+                max_checks=1,
+                refresh_existing=True,
+            )
+
+            self.assertEqual(first["observed_count"], 1)
+            self.assertEqual(duplicate["observed_count"], 0)
+            self.assertEqual(duplicate["status_counts"]["duplicate_observation"], 1)
+            self.assertEqual(refreshed["observed_count"], 1)
+            self.assertEqual(len(load_candidate_rows(observed_output)), 2)
 
     def test_write_candidate_observation_report_outputs_files(self) -> None:
         candidates = [
