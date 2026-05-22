@@ -281,6 +281,23 @@ apply URLs from search pages. Run `observe-candidates` next so every discovered
 page is live-checked, closed postings are persisted, and only open positions are
 imported.
 
+For more stable expansion after a few seed roles have been collected, expand
+the public ATS company boards behind those seed URLs instead of relying only on
+search pages:
+
+```bash
+python3 -m job_apply_agent discover-candidates \
+  --collection-plan-json job_apply_agent/outbox/collection_plan_latest.json \
+  --search-pages-per-task 0 \
+  --seed-candidates job_apply_agent/outbox/observed_candidates.jsonl \
+  --seed-candidates job_apply_agent/outbox/web_search_candidates_20260522.json \
+  --board-fetch-limit 40
+```
+
+This reads public Ashby, Greenhouse, and Lever board data, filters for target
+engineering role families, and still requires `observe-candidates` before a row
+is counted as live observed.
+
 After collecting candidate jobs externally or through supervised browser work,
 append them as normalized observations:
 

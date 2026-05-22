@@ -798,6 +798,34 @@ class JobApplyAgentTests(unittest.TestCase):
             classify_application_prompt("What company and position are you currently in?").category,
             "employment_history",
         )
+        self.assertEqual(
+            classify_application_prompt(
+                "Describe your knowledge of low-level Linux container and security primitives such as cgroups, namespaces, LSMs, and SECCOMP"
+            ).category,
+            "role_specific_free_text",
+        )
+        self.assertEqual(
+            classify_application_prompt("Where are you presently located?").category,
+            "profile_identity",
+        )
+        self.assertEqual(
+            classify_application_prompt(
+                "Which programming languages do you feel most confident using (Choose up to three)?"
+            ).category,
+            "skills_experience",
+        )
+        self.assertEqual(
+            classify_application_prompt("Are you a fluent Japanese speaker?").category,
+            "language_ability",
+        )
+        self.assertEqual(
+            classify_application_prompt("Which language(s) can you speak and write professionally?").category,
+            "language_ability",
+        )
+        self.assertEqual(
+            classify_application_prompt("Are you within commuting distance of Riyadh, Saudi Arabia?").category,
+            "location_constraint",
+        )
 
     def test_application_research_summarizes_form_snapshots_and_jsonl(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2571,6 +2599,112 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Candidate Discovery Report", markdown)
         self.assertIn("https://jobs.lever.co/acme/123", markdown)
 
+    def test_discover_candidates_expands_seed_ats_boards(self) -> None:
+        plan = {
+            "generated_at": "2026-05-22T00:00:00+00:00",
+            "tasks": [
+                {
+                    "platform": "Greenhouse",
+                    "role_family": "Site Reliability",
+                    "query": "site reliability engineer",
+                },
+                {
+                    "platform": "Lever",
+                    "role_family": "Software Backend",
+                    "query": "backend software engineer",
+                },
+                {
+                    "platform": "Ashby",
+                    "role_family": "Platform Infrastructure",
+                    "query": "platform engineer infrastructure",
+                },
+            ],
+        }
+        seed_candidates = [
+            {"platform": "Greenhouse", "apply_url": "https://job-boards.greenhouse.io/example/jobs/1"},
+            {"platform": "Lever", "apply_url": "https://jobs.lever.co/acme/2"},
+            {"platform": "Ashby", "apply_url": "https://jobs.ashbyhq.com/ashco/3"},
+        ]
+
+        def fake_fetcher(url: str, timeout: float) -> str:
+            if "boards-api.greenhouse.io" in url:
+                return json.dumps(
+                    {
+                        "jobs": [
+                            {
+                                "absolute_url": "https://job-boards.greenhouse.io/example/jobs/10",
+                                "title": "Site Reliability Engineer",
+                                "company_name": "Example",
+                                "location": {"name": "Remote"},
+                                "content": "<p>Kubernetes production reliability</p>",
+                            },
+                            {
+                                "absolute_url": "https://job-boards.greenhouse.io/example/jobs/11",
+                                "title": "Product Manager",
+                                "company_name": "Example",
+                            },
+                        ]
+                    }
+                )
+            if "api.lever.co" in url:
+                return json.dumps(
+                    [
+                        {
+                            "hostedUrl": "https://jobs.lever.co/acme/20",
+                            "text": "Backend Software Engineer",
+                            "categories": {"location": "New York, NY"},
+                            "descriptionPlain": "APIs and distributed systems",
+                        },
+                        {
+                            "hostedUrl": "https://jobs.lever.co/acme/21",
+                            "text": "Customer Success Manager",
+                        },
+                    ]
+                )
+            return """
+            <html><script>
+              window.__appData = {
+                "organization": {"name": "AshCo"},
+                "jobBoard": {"jobPostings": [
+                  {
+                    "id": "30",
+                    "title": "Platform Engineer, Kubernetes",
+                    "locationName": "Seattle, WA",
+                    "departmentName": "Engineering",
+                    "isListed": true
+                  },
+                  {
+                    "id": "31",
+                    "title": "Sales Lead",
+                    "locationName": "Remote",
+                    "isListed": true
+                  }
+                ]}
+              };
+            </script></html>
+            """
+
+        report = discover_candidates_from_collection_plan(
+            plan,
+            max_tasks=3,
+            per_task_limit=10,
+            search_pages_per_task=0,
+            seed_candidates=seed_candidates,
+            board_fetch_limit=3,
+            fetcher=fake_fetcher,
+        )
+
+        self.assertEqual(report["board_fetch_count"], 3)
+        self.assertEqual(report["board_candidate_count"], 3)
+        self.assertEqual(report["candidate_count"], 3)
+        urls = {candidate["apply_url"] for candidate in report["candidates"]}
+        self.assertIn("https://job-boards.greenhouse.io/example/jobs/10", urls)
+        self.assertIn("https://jobs.lever.co/acme/20", urls)
+        self.assertIn("https://jobs.ashbyhq.com/ashco/30", urls)
+        self.assertEqual(report["per_platform_counts"]["Greenhouse"], 1)
+        markdown = render_candidate_discovery_markdown(report)
+        self.assertIn("ATS boards fetched: 3", markdown)
+
     def test_write_candidate_discovery_report_outputs_files(self) -> None:
         plan = {
             "tasks": [
@@ -2722,6 +2856,11 @@ class JobApplyAgentTests(unittest.TestCase):
             <label>department filter</label>
             <label>question 52718138</label>
             <label>end month 0</label>
+            <label>4007244008</label>
+            <label>OpenStack</label>
+            <label>Ubuntu Server</label>
+            <label>K8s</label>
+            <label>Ready to apply?</label>
             <label>Most Recent Employer</label>
             <div>Share your hands-on experience with observability tools?</div>
           </body>
@@ -2735,6 +2874,11 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertNotIn("department filter", prompts)
         self.assertNotIn("question 52718138", prompts)
         self.assertNotIn("end month 0", prompts)
+        self.assertNotIn("4007244008", prompts)
+        self.assertNotIn("OpenStack", prompts)
+        self.assertNotIn("Ubuntu Server", prompts)
+        self.assertNotIn("K8s", prompts)
+        self.assertNotIn("Ready to apply?", prompts)
         self.assertIn("Most Recent Employer", prompts)
         self.assertIn("Share your hands-on experience with observability tools?", prompts)
 

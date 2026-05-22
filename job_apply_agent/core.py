@@ -635,7 +635,13 @@ def answer_question(
             missing,
         )
 
-    if "skill" in normalized_question or "technology" in normalized_question:
+    if (
+        "skill" in normalized_question
+        or "technology" in normalized_question
+        or "programming language" in normalized_question
+        or "programming languages" in normalized_question
+        or "open source technologies" in normalized_question
+    ):
         if not strongest_skills:
             missing.append("strongest_skills")
             strongest_skills = "PLACEHOLDER_RELEVANT_SKILLS"
@@ -927,6 +933,8 @@ def classify_application_prompt(
             "time zone",
             "timezone",
             "current location",
+            "currently located",
+            "presently located",
         ]
     ):
         return ApplicationPromptClassification(
@@ -979,7 +987,7 @@ def classify_application_prompt(
             "policy",
             "policy_acknowledgement_requires_review",
         )
-    if any(term in text for term in ["sms", "whatsapp", "text message"]):
+    if re.search(r"\b(?:sms|whatsapp)\b", text) or "text message" in text:
         return ApplicationPromptClassification(
             "communication_consent",
             "human_review_required",
@@ -993,7 +1001,26 @@ def classify_application_prompt(
             "standard_preference",
             "standard_years_experience_answer",
         )
-    if any(term in text for term in ["aws", "azure", "gcp", "google cloud", "kubernetes", "terraform"]):
+    if any(
+        term in text
+        for term in [
+            "aws",
+            "azure",
+            "gcp",
+            "google cloud",
+            "kubernetes",
+            "terraform",
+            "open source technologies",
+            "programming language",
+            "programming languages",
+            "linux administration",
+            "linux security",
+            "networking",
+            "storage",
+            "virtualisation",
+            "virtualization",
+        ]
+    ):
         return ApplicationPromptClassification(
             "skills_experience",
             "auto_answer_from_memory",
@@ -1062,6 +1089,10 @@ def classify_application_prompt(
             "tell us about",
             "explain",
             "how have you",
+            "what is an example",
+            "give a brief overview",
+            "worked on before",
+            "demonstrated leadership",
         ]
     ):
         return ApplicationPromptClassification(
@@ -1076,6 +1107,52 @@ def classify_application_prompt(
             "human_review_required",
             "employer_specific",
             "requires_employer_specific_context",
+        )
+    if any(
+        term in text
+        for term in [
+            "language(s) can you speak",
+            "language s can you speak",
+            "languages can you speak",
+            "fluent japanese",
+            "verbal and written english",
+            "professional level",
+        ]
+    ):
+        return ApplicationPromptClassification(
+            "language_ability",
+            "human_review_required",
+            "candidate_preference",
+            "language_ability_requires_confirmation",
+        )
+    if any(
+        term in text
+        for term in [
+            "commuting distance",
+            "work from canonical facilities",
+            "riyadh",
+            "taipei",
+        ]
+    ):
+        return ApplicationPromptClassification(
+            "location_constraint",
+            "human_review_required",
+            "candidate_preference",
+            "location_constraint_requires_confirmation",
+        )
+    if "own device" in text:
+        return ApplicationPromptClassification(
+            "device_policy",
+            "human_review_required",
+            "policy",
+            "device_policy_requires_confirmation",
+        )
+    if "grading system" in text:
+        return ApplicationPromptClassification(
+            "education_grading",
+            "human_review_required",
+            "resume_fact",
+            "education_grading_requires_confirmation",
         )
     return ApplicationPromptClassification(
         "unknown",
@@ -3341,6 +3418,8 @@ def discover_candidates_from_collection_plan(
     per_task_limit: int = 10,
     search_pages_per_task: int = 2,
     timeout: float = 15.0,
+    seed_candidates: list[dict[str, Any]] | None = None,
+    board_fetch_limit: int = 20,
     fetcher: Any | None = None,
 ) -> dict[str, Any]:
     fetch_page = fetcher or fetch_live_page_text
@@ -3353,6 +3432,8 @@ def discover_candidates_from_collection_plan(
     errors: list[dict[str, Any]] = []
     seen_keys: set[str] = set()
     search_page_count = 0
+    board_fetch_count = 0
+    board_candidate_count = 0
 
     for task in tasks:
         task_candidates = 0
@@ -3390,12 +3471,34 @@ def discover_candidates_from_collection_plan(
                 if task_candidates >= max(per_task_limit, 0):
                     break
 
+    if seed_candidates:
+        board_report = _discover_candidates_from_seed_boards(
+            seed_candidates,
+            tasks,
+            timeout=timeout,
+            fetcher=fetch_page,
+            board_fetch_limit=board_fetch_limit,
+            per_platform_limit=max(per_task_limit, 0) * max(len(tasks), 1),
+        )
+        board_fetch_count = int(board_report.get("board_fetch_count") or 0)
+        errors.extend(board_report.get("errors") or [])
+        for candidate in board_report.get("candidates") or []:
+            key = job_registry_key(candidate)
+            if not key or key in seen_keys:
+                continue
+            candidates.append(candidate)
+            seen_keys.add(key)
+            board_candidate_count += 1
+
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source": "collection_plan_search_discovery",
         "collection_plan_generated_at": collection_plan.get("generated_at"),
         "task_count": len(tasks),
         "search_page_count": search_page_count,
+        "seed_candidate_count": len(seed_candidates or []),
+        "board_fetch_count": board_fetch_count,
+        "board_candidate_count": board_candidate_count,
         "candidate_count": len(candidates),
         "error_count": len(errors),
         "per_platform_counts": _count_by(candidates, "platform"),
@@ -3431,6 +3534,8 @@ def write_candidate_discovery_report(
     per_task_limit: int = 10,
     search_pages_per_task: int = 2,
     timeout: float = 15.0,
+    seed_candidates: list[dict[str, Any]] | None = None,
+    board_fetch_limit: int = 20,
     fetcher: Any | None = None,
 ) -> dict[str, Any]:
     report = discover_candidates_from_collection_plan(
@@ -3439,6 +3544,8 @@ def write_candidate_discovery_report(
         per_task_limit=per_task_limit,
         search_pages_per_task=search_pages_per_task,
         timeout=timeout,
+        seed_candidates=seed_candidates,
+        board_fetch_limit=board_fetch_limit,
         fetcher=fetcher,
     )
     json_path = Path(json_output)
@@ -3457,6 +3564,9 @@ def render_candidate_discovery_markdown(report: dict[str, Any]) -> str:
         f"Generated: {report.get('generated_at')}",
         f"Tasks searched: {report.get('task_count', 0)}",
         f"Search pages fetched: {report.get('search_page_count', 0)}",
+        f"Seed candidates: {report.get('seed_candidate_count', 0)}",
+        f"ATS boards fetched: {report.get('board_fetch_count', 0)}",
+        f"Board candidates discovered: {report.get('board_candidate_count', 0)}",
         f"Candidates discovered: {report.get('candidate_count', 0)}",
         f"Errors: {report.get('error_count', 0)}",
         "",
@@ -5191,7 +5301,7 @@ def write_closed_posting_preflight(
     return report
 
 
-def fetch_live_page_text(url: str, timeout: float = 15.0, max_bytes: int = 300_000) -> str:
+def fetch_live_page_text(url: str, timeout: float = 15.0, max_bytes: int = 8_000_000) -> str:
     request = urllib.request.Request(
         url,
         headers={
@@ -7180,6 +7290,330 @@ def _load_candidate_rows(path: Path) -> list[dict[str, Any]]:
     return []
 
 
+def _discover_candidates_from_seed_boards(
+    seed_candidates: list[dict[str, Any]],
+    tasks: list[dict[str, Any]],
+    timeout: float,
+    fetcher: Any,
+    board_fetch_limit: int,
+    per_platform_limit: int,
+) -> dict[str, Any]:
+    board_seeds: list[dict[str, str]] = []
+    seen_boards: set[str] = set()
+    task_platforms = {_normalize(str(task.get("platform") or "")) for task in tasks}
+    for candidate in seed_candidates:
+        seed = _candidate_board_seed(candidate)
+        if seed is None:
+            continue
+        if task_platforms and _normalize(str(seed.get("platform") or "")) not in task_platforms:
+            continue
+        key = str(seed.get("key") or "")
+        if not key or key in seen_boards:
+            continue
+        seen_boards.add(key)
+        board_seeds.append(seed)
+
+    candidates: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    per_platform_counts: dict[str, int] = {}
+    seen_candidates: set[str] = set()
+    board_fetch_count = 0
+
+    for seed in board_seeds[: max(board_fetch_limit, 0)]:
+        platform = str(seed.get("platform") or "")
+        try:
+            board_candidates = _fetch_seed_board_candidates(seed, timeout, fetcher)
+            board_fetch_count += 1
+        except Exception as exc:  # noqa: BLE001 - keep expanding other boards.
+            errors.append(
+                {
+                    "platform": platform,
+                    "board": seed.get("slug"),
+                    "board_url": seed.get("board_url"),
+                    "error": str(exc),
+                }
+            )
+            continue
+
+        for candidate in board_candidates:
+            match = _matching_collection_task(candidate, tasks)
+            if match is None:
+                continue
+            platform_count = per_platform_counts.get(platform, 0)
+            if per_platform_limit > 0 and platform_count >= per_platform_limit:
+                continue
+            candidate["role_family"] = match.get("role_family") or candidate.get("role_family")
+            candidate["discovery_query"] = match.get("query")
+            candidate["discovery_board_url"] = seed.get("board_url")
+            candidate["source"] = "ats_board_expansion"
+            key = job_registry_key(candidate)
+            if not key or key in seen_candidates:
+                continue
+            seen_candidates.add(key)
+            candidates.append(candidate)
+            per_platform_counts[platform] = platform_count + 1
+
+    return {
+        "board_seed_count": len(board_seeds),
+        "board_fetch_count": board_fetch_count,
+        "candidate_count": len(candidates),
+        "candidates": candidates,
+        "errors": errors,
+    }
+
+
+def _candidate_board_seed(candidate: dict[str, Any]) -> dict[str, str] | None:
+    apply_url = str(
+        candidate.get("apply_url")
+        or candidate.get("short_apply_url")
+        or candidate.get("url")
+        or candidate.get("job_url")
+        or ""
+    ).strip()
+    if not apply_url:
+        return None
+    parsed = urllib.parse.urlparse(apply_url)
+    host = parsed.netloc.lower()
+    parts = [urllib.parse.unquote(part) for part in parsed.path.split("/") if part]
+    if not parts:
+        return None
+    if "job-boards.greenhouse.io" in host:
+        slug = parts[0]
+        return {
+            "key": f"greenhouse:{slug.lower()}",
+            "platform": "Greenhouse",
+            "slug": slug,
+            "company": str(candidate.get("company") or ""),
+            "board_url": f"https://boards-api.greenhouse.io/v1/boards/{urllib.parse.quote(slug)}/jobs?content=true",
+        }
+    if "jobs.lever.co" in host:
+        slug = parts[0]
+        return {
+            "key": f"lever:{slug.lower()}",
+            "platform": "Lever",
+            "slug": slug,
+            "company": str(candidate.get("company") or ""),
+            "board_url": f"https://api.lever.co/v0/postings/{urllib.parse.quote(slug)}?mode=json",
+        }
+    if "jobs.ashbyhq.com" in host:
+        slug = parts[0]
+        return {
+            "key": f"ashby:{slug.lower()}",
+            "platform": "Ashby",
+            "slug": slug,
+            "company": str(candidate.get("company") or ""),
+            "board_url": f"https://jobs.ashbyhq.com/{urllib.parse.quote(slug)}",
+        }
+    return None
+
+
+def _fetch_seed_board_candidates(
+    seed: dict[str, str],
+    timeout: float,
+    fetcher: Any,
+) -> list[dict[str, Any]]:
+    platform = str(seed.get("platform") or "")
+    if platform == "Greenhouse":
+        return _fetch_greenhouse_board_candidates(seed, timeout, fetcher)
+    if platform == "Lever":
+        return _fetch_lever_board_candidates(seed, timeout, fetcher)
+    if platform == "Ashby":
+        return _fetch_ashby_board_candidates(seed, timeout, fetcher)
+    return []
+
+
+def _fetch_greenhouse_board_candidates(
+    seed: dict[str, str],
+    timeout: float,
+    fetcher: Any,
+) -> list[dict[str, Any]]:
+    payload = json.loads(fetcher(str(seed.get("board_url") or ""), timeout))
+    jobs = payload.get("jobs") if isinstance(payload, dict) else []
+    candidates: list[dict[str, Any]] = []
+    for job in jobs or []:
+        if not isinstance(job, dict):
+            continue
+        apply_url = _normalize_candidate_apply_url(str(job.get("absolute_url") or ""))
+        title = str(job.get("title") or "").strip()
+        if not apply_url or not title:
+            continue
+        location = ""
+        if isinstance(job.get("location"), dict):
+            location = str((job.get("location") or {}).get("name") or "").strip()
+        description = _clean_html_text(html.unescape(str(job.get("content") or "")))
+        candidates.append(
+            _board_candidate(
+                platform="Greenhouse",
+                company=str(job.get("company_name") or seed.get("company") or ""),
+                title=title,
+                apply_url=apply_url,
+                location=location,
+                description=description,
+                board_slug=str(seed.get("slug") or ""),
+            )
+        )
+    return candidates
+
+
+def _fetch_lever_board_candidates(
+    seed: dict[str, str],
+    timeout: float,
+    fetcher: Any,
+) -> list[dict[str, Any]]:
+    payload = json.loads(fetcher(str(seed.get("board_url") or ""), timeout))
+    jobs = payload if isinstance(payload, list) else []
+    candidates: list[dict[str, Any]] = []
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        apply_url = _normalize_candidate_apply_url(
+            str(job.get("hostedUrl") or job.get("applyUrl") or "")
+        )
+        title = str(job.get("text") or "").strip()
+        if not apply_url or not title:
+            continue
+        categories = job.get("categories") if isinstance(job.get("categories"), dict) else {}
+        description = _clean_html_text(
+            "\n".join(
+                str(job.get(key) or "")
+                for key in ["descriptionPlain", "description", "additionalPlain", "additional"]
+            )
+        )
+        candidates.append(
+            _board_candidate(
+                platform="Lever",
+                company=str(seed.get("company") or _company_from_apply_url(apply_url)),
+                title=title,
+                apply_url=apply_url,
+                location=str(categories.get("location") or "").strip(),
+                description=description,
+                board_slug=str(seed.get("slug") or ""),
+            )
+        )
+    return candidates
+
+
+def _fetch_ashby_board_candidates(
+    seed: dict[str, str],
+    timeout: float,
+    fetcher: Any,
+) -> list[dict[str, Any]]:
+    page_html = fetcher(str(seed.get("board_url") or ""), timeout)
+    app_data = _parse_ashby_app_data(page_html)
+    organization = app_data.get("organization") if isinstance(app_data.get("organization"), dict) else {}
+    job_board = app_data.get("jobBoard") if isinstance(app_data.get("jobBoard"), dict) else {}
+    jobs = job_board.get("jobPostings") if isinstance(job_board.get("jobPostings"), list) else []
+    slug = str(seed.get("slug") or "")
+    candidates: list[dict[str, Any]] = []
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        if job.get("isListed") is False:
+            continue
+        job_id = str(job.get("id") or "").strip()
+        title = str(job.get("title") or "").strip()
+        if not job_id or not title:
+            continue
+        apply_url = _normalize_candidate_apply_url(f"https://jobs.ashbyhq.com/{slug}/{job_id}")
+        if not apply_url:
+            continue
+        description = _clean_html_text(
+            " ".join(
+                str(job.get(key) or "")
+                for key in ["departmentName", "teamName", "employmentType", "workplaceType"]
+            )
+        )
+        candidates.append(
+            _board_candidate(
+                platform="Ashby",
+                company=str(organization.get("name") or seed.get("company") or ""),
+                title=title,
+                apply_url=apply_url,
+                location=str(job.get("locationName") or job.get("locationExternalName") or "").strip(),
+                description=description,
+                board_slug=slug,
+            )
+        )
+    return candidates
+
+
+def _parse_ashby_app_data(page_html: str) -> dict[str, Any]:
+    marker = "window.__appData"
+    marker_index = str(page_html).find(marker)
+    if marker_index < 0:
+        return {}
+    equals_index = str(page_html).find("=", marker_index)
+    if equals_index < 0:
+        return {}
+    raw = str(page_html)[equals_index + 1 :].lstrip()
+    try:
+        payload, _ = json.JSONDecoder().raw_decode(raw)
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _board_candidate(
+    platform: str,
+    company: str,
+    title: str,
+    apply_url: str,
+    location: str,
+    description: str,
+    board_slug: str,
+) -> dict[str, Any]:
+    return {
+        "status": "DISCOVERED_CANDIDATE",
+        "platform": platform,
+        "company": company,
+        "title": title,
+        "apply_url": apply_url,
+        "location": location,
+        "description": description[:6000],
+        "role_family": _infer_role_family(title),
+        "board_slug": board_slug,
+    }
+
+
+def _matching_collection_task(
+    candidate: dict[str, Any],
+    tasks: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    candidate_platform = _normalize(str(candidate.get("platform") or ""))
+    for task in tasks:
+        if _normalize(str(task.get("platform") or "")) != candidate_platform:
+            continue
+        if _candidate_matches_role_family(candidate, str(task.get("role_family") or "")):
+            return task
+    return None
+
+
+def _candidate_matches_role_family(candidate: dict[str, Any], role_family: str) -> bool:
+    if not role_family:
+        return True
+    inferred = str(candidate.get("role_family") or "")
+    if inferred == role_family:
+        return True
+    if inferred and inferred != "Other":
+        return False
+    title_text = _normalize(str(candidate.get("title") or ""))
+    description_text = _normalize(str(candidate.get("description") or ""))
+    role_keywords = {
+        "Site Reliability": ["site reliability", "sre", "production reliability", "reliability engineer"],
+        "Platform Infrastructure": ["platform", "infrastructure", "kubernetes", "ci cd", "devops platform"],
+        "Cloud DevOps": ["devops", "cloud", "aws", "azure", "gcp"],
+        "Software Backend": ["backend", "api", "distributed systems", "software engineer"],
+    }
+    keywords = role_keywords.get(role_family, [_normalize(role_family)])
+    if any(keyword in title_text for keyword in keywords):
+        if not _title_has_engineering_signal(title_text):
+            return False
+        return True
+    if not _title_has_engineering_signal(title_text):
+        return False
+    return any(keyword in description_text for keyword in keywords)
+
+
 def _extract_candidate_links_from_search_html(
     page_html: str,
     platform: str = "",
@@ -7442,19 +7876,73 @@ def _application_collection_gaps(
 
 def _infer_role_family(title: str) -> str:
     text = _normalize(title)
+    engineering_signal = _title_has_engineering_signal(text)
     if "site reliability" in text or re.search(r"\bsre\b", text) or "reliability engineer" in text:
         return "Site Reliability"
-    if any(term in text for term in ["platform", "infrastructure", "kubernetes", "ci cd"]):
+    if engineering_signal and any(term in text for term in ["platform", "infrastructure", "kubernetes", "ci cd"]):
         return "Platform Infrastructure"
-    if any(term in text for term in ["devops", "cloud"]):
+    if "devops" in text or (engineering_signal and "cloud" in text):
         return "Cloud DevOps"
     if any(term in text for term in ["backend", "api", "software engineer"]):
         return "Software Backend"
-    if any(term in text for term in ["ai", "ml", "machine learning", "data"]):
+    if engineering_signal and any(term in text for term in ["ai", "ml", "machine learning", "data"]):
         return "Data AI"
-    if any(term in text for term in ["system engineer", "systems engineer", "hardware"]):
+    if engineering_signal and any(term in text for term in ["system engineer", "systems engineer", "hardware"]):
         return "Systems Hardware"
     return "Other"
+
+
+def _title_has_engineering_signal(normalized_title: str) -> bool:
+    if any(
+        term in normalized_title
+        for term in [
+            "account ",
+            "accountant",
+            "account manager",
+            "business development",
+            "content writer",
+            "customer success",
+            "developer relations",
+            "design manager",
+            "employee engagement",
+            "finance",
+            "legal",
+            "marketing",
+            "marketplace",
+            "people partner",
+            "people operations",
+            "product manager",
+            "project manager",
+            "revenue operations",
+            "sales",
+            "systems accountant",
+            "technical content architect",
+            "technical writer",
+        ]
+    ):
+        return False
+    return any(
+        term in normalized_title
+        for term in [
+            "architect",
+            "backend",
+            "cloud engineer",
+            "cloud support engineer",
+            "developer",
+            "devops",
+            "engineer",
+            "engineering",
+            "infrastructure",
+            "kubernetes",
+            "linux",
+            "platform",
+            "production",
+            "reliability",
+            "site reliability",
+            "software",
+            "systems",
+        ]
+    )
 
 
 def _field_prompt_label(field: dict[str, Any]) -> str:
@@ -7479,6 +7967,8 @@ def _skip_low_signal_prompt(
 
 
 def _is_low_signal_application_prompt(normalized: str) -> bool:
+    if re.fullmatch(r"\d{6,}", normalized):
+        return True
     if re.fullmatch(r"go (to )?page \d+", normalized):
         return True
     if re.fullmatch(r"question \d+", normalized):
@@ -7502,6 +7992,62 @@ def _is_low_signal_application_prompt(normalized: str) -> bool:
         "previous page",
         "tailor my resume",
         "toggle flyout",
+        "ai ml",
+        "bash",
+        "c",
+        "c c",
+        "ceph",
+        "cloud",
+        "commercial systems",
+        "community",
+        "consulting engineering",
+        "containers",
+        "data infrastructure",
+        "data science",
+        "databases",
+        "debian",
+        "devops",
+        "distributed systems",
+        "distro",
+        "distro packaging",
+        "embedded linux",
+        "flutter",
+        "golang",
+        "graphics",
+        "graphics browser and desktop",
+        "hardware",
+        "html css javascript",
+        "juju",
+        "kernel",
+        "landscape",
+        "linux kernel",
+        "maas",
+        "openstack",
+        "other",
+        "python",
+        "qemu kvm",
+        "ready to apply",
+        "red hat linux",
+        "robotics",
+        "rust",
+        "saas",
+        "silicon enablement and drivers",
+        "storage",
+        "ubuntu",
+        "ubuntu core",
+        "ubuntu desktop",
+        "ubuntu server",
+        "virtualisation",
+        "virtualisation vmm qemu rustvmm",
+        "web back end",
+        "web front end",
+        "iot",
+        "java",
+        "javascript",
+        "k8s",
+        "linux administration ops",
+        "linux security",
+        "networking ovn ovs sonic dent dpdk",
     }
 
 

@@ -434,6 +434,13 @@ def main() -> int:
     discover_candidates_parser.add_argument("--max-tasks", type=int, default=4)
     discover_candidates_parser.add_argument("--per-task-limit", type=int, default=10)
     discover_candidates_parser.add_argument("--search-pages-per-task", type=int, default=2)
+    discover_candidates_parser.add_argument(
+        "--seed-candidates",
+        action="append",
+        default=[],
+        help="existing candidate JSON/JSONL files whose ATS company boards should be expanded",
+    )
+    discover_candidates_parser.add_argument("--board-fetch-limit", type=int, default=20)
     discover_candidates_parser.add_argument("--timeout", type=float, default=15.0)
     discover_candidates_parser.add_argument("--json-output", default=str(DEFAULT_DISCOVERED_CANDIDATES_JSON))
     discover_candidates_parser.add_argument("--markdown-output", default=str(DEFAULT_DISCOVERED_CANDIDATES_MARKDOWN))
@@ -945,6 +952,9 @@ def main() -> int:
         if not collection_plan_path.exists():
             raise FileNotFoundError(f"collection plan not found: {args.collection_plan_json}")
         collection_plan = json.loads(collection_plan_path.read_text(encoding="utf-8"))
+        seed_candidates = []
+        for seed_path in args.seed_candidates:
+            seed_candidates.extend(load_candidate_rows(seed_path))
         report = write_candidate_discovery_report(
             collection_plan,
             args.json_output,
@@ -953,11 +963,16 @@ def main() -> int:
             per_task_limit=args.per_task_limit,
             search_pages_per_task=args.search_pages_per_task,
             timeout=args.timeout,
+            seed_candidates=seed_candidates,
+            board_fetch_limit=args.board_fetch_limit,
         )
         print(f"Wrote discovered candidates JSON to {args.json_output}")
         print(f"Wrote discovered candidates Markdown to {args.markdown_output}")
         print(f"Tasks searched: {report.get('task_count', 0)}")
         print(f"Search pages fetched: {report.get('search_page_count', 0)}")
+        print(f"Seed candidates: {report.get('seed_candidate_count', 0)}")
+        print(f"ATS boards fetched: {report.get('board_fetch_count', 0)}")
+        print(f"Board candidates: {report.get('board_candidate_count', 0)}")
         print(f"Candidates: {report.get('candidate_count', 0)}")
         print(f"Errors: {report.get('error_count', 0)}")
         return 0
