@@ -35,6 +35,7 @@ from .core import (
     write_form_fill_plan,
     write_learning_task_template,
     write_pre_submit_review,
+    write_question_export,
     write_position_readiness_report,
     write_research_coverage_gate,
     write_synthetic_apply_execution,
@@ -86,6 +87,8 @@ DEFAULT_COLLECTION_PLAN_MARKDOWN = Path(__file__).with_name("outbox") / "collect
 DEFAULT_OBSERVED_CANDIDATES = Path(__file__).with_name("outbox") / "observed_candidates.jsonl"
 DEFAULT_CANDIDATE_OBSERVATION_JSON = Path(__file__).with_name("outbox") / "candidate_observation_latest.json"
 DEFAULT_CANDIDATE_OBSERVATION_MARKDOWN = Path(__file__).with_name("outbox") / "candidate_observation_latest.md"
+DEFAULT_QUESTION_EXPORT_XLSX = Path(__file__).with_name("outbox") / "application_questions_latest.xlsx"
+DEFAULT_QUESTION_EXPORT_HTML = Path(__file__).with_name("outbox") / "application_questions_latest.html"
 DEFAULT_PERSONAL_PROFILE = Path(__file__).with_name("outbox") / "alan_jiang_profile.json"
 
 
@@ -442,6 +445,18 @@ def main() -> int:
     observe_candidates_parser.add_argument("--markdown-output", default=str(DEFAULT_CANDIDATE_OBSERVATION_MARKDOWN))
     observe_candidates_parser.add_argument("--source", default="live_candidate_observation")
 
+    export_questions_parser = subparsers.add_parser(
+        "export-questions",
+        help="write an Excel question workbook and HTML dashboard from latest research reports",
+    )
+    export_questions_parser.add_argument("--gaps-json", default=str(DEFAULT_GAPS_JSON))
+    export_questions_parser.add_argument("--readiness-json", default=str(DEFAULT_READINESS_JSON))
+    export_questions_parser.add_argument("--coverage-gate-json", default=str(DEFAULT_COVERAGE_GATE_JSON))
+    export_questions_parser.add_argument("--collection-plan-json", default=str(DEFAULT_COLLECTION_PLAN_JSON))
+    export_questions_parser.add_argument("--learning-tasks-json", default=str(DEFAULT_LEARNING_TASKS_JSON))
+    export_questions_parser.add_argument("--xlsx-output", default=str(DEFAULT_QUESTION_EXPORT_XLSX))
+    export_questions_parser.add_argument("--html-output", default=str(DEFAULT_QUESTION_EXPORT_HTML))
+
     args = parser.parse_args()
 
     if args.command == "learn":
@@ -520,6 +535,28 @@ def main() -> int:
         print(f"Observed open: {report.get('observed_count', 0)}")
         print(f"Closed: {report.get('closed_count', 0)}")
         print(f"Uncertain: {report.get('uncertain_count', 0)}")
+        return 0
+
+    if args.command == "export-questions":
+        gaps = json.loads(Path(args.gaps_json).read_text(encoding="utf-8"))
+        readiness = json.loads(Path(args.readiness_json).read_text(encoding="utf-8"))
+        coverage_gate = json.loads(Path(args.coverage_gate_json).read_text(encoding="utf-8"))
+        collection_plan = json.loads(Path(args.collection_plan_json).read_text(encoding="utf-8"))
+        learning_tasks = json.loads(Path(args.learning_tasks_json).read_text(encoding="utf-8"))
+        export = write_question_export(
+            gaps,
+            readiness,
+            coverage_gate,
+            collection_plan,
+            learning_tasks,
+            args.xlsx_output,
+            args.html_output,
+        )
+        print(f"Wrote question Excel to {args.xlsx_output}")
+        print(f"Wrote question HTML to {args.html_output}")
+        print(f"Questions: {len(export.get('question_rows', []))}")
+        print(f"Blocking prompts: {len(export.get('blocker_rows', []))}")
+        print(f"Learning tasks: {len(export.get('user_questions', []))}")
         return 0
 
     if args.command == "research":

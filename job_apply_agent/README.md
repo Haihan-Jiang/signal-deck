@@ -291,6 +291,24 @@ imports live observed-open positions. It also extracts visible labels,
 placeholders, buttons, and question text from the page so the next `research`
 and `gaps` run can add any new application questions to the learning queue.
 
+Export the current question list and automation state to Excel and HTML:
+
+```bash
+python3 -m job_apply_agent export-questions
+```
+
+This writes:
+
+```text
+job_apply_agent/outbox/application_questions_latest.xlsx
+job_apply_agent/outbox/application_questions_latest.html
+```
+
+The Excel workbook includes sheets for summary metrics, user questions,
+blocking prompts, all observed prompts, per-position readiness, collection
+targets, collection tasks, and manual gates. The HTML file presents the same
+information as a dashboard for quick review.
+
 Turn that learning queue into a fill-in template:
 
 ```bash

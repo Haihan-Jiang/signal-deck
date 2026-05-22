@@ -12,6 +12,7 @@ import urllib.parse
 import urllib.request
 import uuid
 import webbrowser
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -3131,6 +3132,258 @@ def import_candidate_observations(
         "imported": imported,
         "skipped": skipped,
     }
+
+
+def write_question_export(
+    gaps: dict[str, Any],
+    readiness: dict[str, Any],
+    coverage_gate: dict[str, Any],
+    collection_plan: dict[str, Any],
+    learning_tasks: dict[str, Any],
+    xlsx_output: str | Path,
+    html_output: str | Path,
+) -> dict[str, Any]:
+    export = build_question_export(
+        gaps,
+        readiness,
+        coverage_gate,
+        collection_plan,
+        learning_tasks,
+    )
+    xlsx_path = Path(xlsx_output)
+    html_path = Path(html_output)
+    xlsx_path.parent.mkdir(parents=True, exist_ok=True)
+    html_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_question_export_xlsx(export, xlsx_path)
+    html_path.write_text(render_question_export_html(export), encoding="utf-8")
+    export["outputs"] = {"xlsx": str(xlsx_path), "html": str(html_path)}
+    return export
+
+
+def build_question_export(
+    gaps: dict[str, Any],
+    readiness: dict[str, Any],
+    coverage_gate: dict[str, Any],
+    collection_plan: dict[str, Any],
+    learning_tasks: dict[str, Any],
+) -> dict[str, Any]:
+    question_rows = [_question_export_row(item) for item in gaps.get("prompt_statuses", [])]
+    blocker_rows = [_question_export_row(item) for item in gaps.get("blocking_prompts", [])]
+    user_questions = [_learning_task_export_row(task) for task in learning_tasks.get("tasks", [])]
+    manual_gates = [_manual_gate_export_row(item) for item in readiness.get("manual_gates", [])]
+    positions = [_position_export_row(item) for item in readiness.get("positions", [])]
+    collection_targets = [
+        {
+            "platform": target.get("platform"),
+            "role_family": target.get("role_family"),
+            "positions_observed": target.get("positions_observed", 0),
+            "positions_remaining": target.get("positions_remaining", 0),
+        }
+        for target in coverage_gate.get("next_collection_targets", [])
+    ]
+    collection_tasks = [
+        {
+            "platform": task.get("platform"),
+            "role_family": task.get("role_family"),
+            "suggested_batch_size": task.get("suggested_batch_size", 0),
+            "positions_remaining": task.get("positions_remaining", 0),
+            "query": task.get("query"),
+            "search_urls": "\n".join(_string_list(task.get("search_urls"))),
+        }
+        for task in collection_plan.get("tasks", [])
+    ]
+    summary = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "research_generated_at": gaps.get("research_generated_at"),
+        "positions_observed_total": gaps.get("positions_observed_total", 0),
+        "unique_prompts_observed": gaps.get("unique_prompts_observed", 0),
+        "ready_prompt_count": gaps.get("ready_prompt_count", 0),
+        "blocking_prompt_count": gaps.get("blocking_prompt_count", 0),
+        "learning_task_count": learning_tasks.get("task_count", len(user_questions)),
+        "manual_gate_count": readiness.get("manual_gate_count", 0),
+        "ready_for_full_automation": bool(coverage_gate.get("ready_for_full_automation")),
+        "real_platform_target_achieved": bool(coverage_gate.get("real_platform_target_achieved")),
+        "real_platform_role_target_achieved": bool(
+            coverage_gate.get("real_platform_role_target_achieved")
+        ),
+        "synthetic_platform_role_target_achieved": bool(
+            (coverage_gate.get("synthetic") or {}).get("platform_role_target_achieved")
+        ),
+        "actual_submit_count": int((coverage_gate.get("synthetic") or {}).get("actual_submit_count") or 0),
+    }
+    return {
+        "generated_at": summary["generated_at"],
+        "summary": summary,
+        "coverage_counts": gaps.get("coverage_counts", {}),
+        "readiness_counts": readiness.get("readiness_counts", {}),
+        "real_platform_counts": coverage_gate.get("real_platform_counts", {}),
+        "real_platform_shortfalls": coverage_gate.get("real_platform_shortfalls", {}),
+        "question_rows": question_rows,
+        "blocker_rows": blocker_rows,
+        "user_questions": user_questions,
+        "manual_gates": manual_gates,
+        "positions": positions,
+        "collection_targets": collection_targets,
+        "collection_tasks": collection_tasks,
+        "policy": {
+            "closed_postings": "Skip and persist postings when live text says No longer accepting applications.",
+            "fake_data": "Use fake candidate data only in local synthetic/sandbox forms, never in real employer submissions.",
+            "final_submit": "Final submit remains supervised unless explicitly approved for a real application.",
+            "sensitive_answers": "Protected-class answers are not persisted.",
+        },
+    }
+
+
+def render_question_export_html(export: dict[str, Any]) -> str:
+    summary = export.get("summary") or {}
+    parts = [
+        "<!doctype html>",
+        '<html lang="en">',
+        "<head>",
+        '<meta charset="utf-8">',
+        '<meta name="viewport" content="width=device-width, initial-scale=1">',
+        "<title>Job Application Question Export</title>",
+        "<style>",
+        _question_export_css(),
+        "</style>",
+        "</head>",
+        "<body>",
+        "<main>",
+        "<h1>Job Application Question Export</h1>",
+        f"<p class=\"muted\">Generated: {_html_escape(summary.get('generated_at'))}</p>",
+        _html_kpis(
+            [
+                ("Observed positions", summary.get("positions_observed_total", 0)),
+                ("Unique prompts", summary.get("unique_prompts_observed", 0)),
+                ("Ready prompts", summary.get("ready_prompt_count", 0)),
+                ("Blocking prompts", summary.get("blocking_prompt_count", 0)),
+                ("Learning tasks", summary.get("learning_task_count", 0)),
+                ("Manual gates", summary.get("manual_gate_count", 0)),
+            ]
+        ),
+        "<section><h2>Automation Gate</h2>",
+        _html_table(
+            ["Check", "Status"],
+            [
+                ["Ready for full automation", _yes_no(summary.get("ready_for_full_automation"))],
+                ["Real platform target achieved", _yes_no(summary.get("real_platform_target_achieved"))],
+                [
+                    "Real platform-role target achieved",
+                    _yes_no(summary.get("real_platform_role_target_achieved")),
+                ],
+                [
+                    "Synthetic platform-role target achieved",
+                    _yes_no(summary.get("synthetic_platform_role_target_achieved")),
+                ],
+                ["Actual real submit count", summary.get("actual_submit_count", 0)],
+            ],
+        ),
+        "</section>",
+        "<section><h2>Questions For User</h2>",
+        _html_table(
+            ["Storage", "Question", "Platforms", "Related prompts", "Persist allowed", "Answer"],
+            [
+                [
+                    row.get("recommended_storage"),
+                    row.get("question"),
+                    row.get("platforms"),
+                    row.get("related_prompt_count"),
+                    _yes_no(row.get("persist_allowed")),
+                    row.get("answer"),
+                ]
+                for row in export.get("user_questions", [])
+            ],
+        ),
+        "</section>",
+        "<section><h2>Blocking Prompts</h2>",
+        _html_table(
+            [
+                "Coverage status",
+                "Label",
+                "Category",
+                "Platforms",
+                "Observed",
+                "Required",
+                "Next action",
+            ],
+            [
+                [
+                    row.get("coverage_status"),
+                    row.get("label"),
+                    row.get("category"),
+                    row.get("platforms"),
+                    row.get("observed_count"),
+                    row.get("required_count"),
+                    row.get("next_action"),
+                ]
+                for row in export.get("blocker_rows", [])
+            ],
+        ),
+        "</section>",
+        "<section><h2>Coverage Counts</h2>",
+        _html_key_value_table(export.get("coverage_counts", {})),
+        "</section>",
+        "<section><h2>Readiness Counts</h2>",
+        _html_key_value_table(export.get("readiness_counts", {})),
+        "</section>",
+        "<section><h2>Collection Targets</h2>",
+        _html_table(
+            ["Platform", "Role family", "Observed", "Remaining"],
+            [
+                [
+                    row.get("platform"),
+                    row.get("role_family"),
+                    row.get("positions_observed"),
+                    row.get("positions_remaining"),
+                ]
+                for row in export.get("collection_targets", [])
+            ],
+        ),
+        "</section>",
+        "<section><h2>Position Readiness</h2>",
+        _html_table(
+            ["Readiness", "Platform", "Company", "Title", "Role family", "Prompt count", "Blockers", "Manual gates"],
+            [
+                [
+                    row.get("readiness"),
+                    row.get("platform"),
+                    row.get("company"),
+                    row.get("title"),
+                    row.get("role_family"),
+                    row.get("prompt_count"),
+                    row.get("learning_blockers"),
+                    row.get("manual_gates"),
+                ]
+                for row in export.get("positions", [])
+            ],
+        ),
+        "</section>",
+        "<section><h2>All Observed Prompts</h2>",
+        _html_table(
+            ["Status", "Label", "Category", "Action", "Platforms", "Observed", "Required", "Next action"],
+            [
+                [
+                    row.get("coverage_status"),
+                    row.get("label"),
+                    row.get("category"),
+                    row.get("automation_action"),
+                    row.get("platforms"),
+                    row.get("observed_count"),
+                    row.get("required_count"),
+                    row.get("next_action"),
+                ]
+                for row in export.get("question_rows", [])
+            ],
+        ),
+        "</section>",
+        "<section><h2>Policy</h2>",
+        _html_key_value_table(export.get("policy", {})),
+        "</section>",
+        "</main>",
+        "</body>",
+        "</html>",
+    ]
+    return "\n".join(parts)
 
 
 def load_candidate_rows(path: str | Path) -> list[dict[str, Any]]:
@@ -6763,6 +7016,380 @@ def _html_attrs(attr_text: str) -> dict[str, str]:
     for match in re.finditer(r"(?is)([a-z_:][-a-z0-9_:.]*)\s*=\s*(['\"])(.*?)\2", attr_text):
         attrs[match.group(1).lower()] = html.unescape(match.group(3)).strip()
     return attrs
+
+
+def _question_export_row(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "coverage_status": item.get("coverage_status"),
+        "label": item.get("label"),
+        "category": item.get("category"),
+        "automation_action": item.get("automation_action"),
+        "sensitivity": item.get("sensitivity"),
+        "required_count": item.get("required_count", 0),
+        "observed_count": item.get("observed_count", 0),
+        "platforms": ", ".join(_string_list(item.get("platforms"))),
+        "source_files": ", ".join(_string_list(item.get("source_files"))),
+        "coverage_reason": item.get("coverage_reason"),
+        "answer_source": item.get("answer_source"),
+        "next_action": item.get("next_action"),
+    }
+
+
+def _learning_task_export_row(task: dict[str, Any]) -> dict[str, Any]:
+    labels = _string_list(task.get("labels"))
+    return {
+        "recommended_storage": task.get("recommended_storage"),
+        "question": task.get("question"),
+        "group_key": task.get("group_key"),
+        "platforms": ", ".join(_string_list(task.get("platforms"))),
+        "labels": "\n".join(labels),
+        "related_prompt_count": task.get("related_prompt_count", len(labels)),
+        "observed_count": task.get("observed_count", 0),
+        "required_count": task.get("required_count", 0),
+        "approved": bool(task.get("approved")),
+        "answer": task.get("answer", ""),
+        "persist_allowed": task.get("persist_allowed", True),
+        "notes": task.get("notes", ""),
+    }
+
+
+def _manual_gate_export_row(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "coverage_status": item.get("coverage_status"),
+        "label": item.get("label"),
+        "category": item.get("category"),
+        "platforms": ", ".join(_string_list(item.get("platforms"))),
+        "observed_count": item.get("observed_count", 0),
+        "required_count": item.get("required_count", 0),
+        "recommended_storage": item.get("recommended_storage"),
+        "next_action": item.get("next_action"),
+    }
+
+
+def _position_export_row(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "readiness": item.get("readiness"),
+        "platform": item.get("platform"),
+        "company": item.get("company"),
+        "title": item.get("title"),
+        "role_family": item.get("role_family"),
+        "apply_url": item.get("apply_url"),
+        "prompt_count": item.get("prompt_count", 0),
+        "required_prompt_count": item.get("required_prompt_count", 0),
+        "covered_prompt_count": item.get("covered_prompt_count", 0),
+        "ready_for_autofill": item.get("ready_for_autofill"),
+        "ready_for_supervised_submit": item.get("ready_for_supervised_submit"),
+        "ready_for_unattended_submit": item.get("ready_for_unattended_submit"),
+        "learning_blockers": "; ".join(
+            str(blocker.get("label") or blocker.get("coverage_status") or "")
+            for blocker in item.get("learning_blockers", [])
+            if isinstance(blocker, dict)
+        ),
+        "manual_gates": "; ".join(
+            str(gate.get("label") or gate.get("coverage_status") or "")
+            for gate in item.get("manual_gates", [])
+            if isinstance(gate, dict)
+        ),
+        "closed_reason": item.get("closed_reason"),
+    }
+
+
+def _write_question_export_xlsx(export: dict[str, Any], path: Path) -> None:
+    sheets = [
+        ("Summary", _question_export_summary_rows(export)),
+        ("User Questions", _table_rows(export.get("user_questions", []))),
+        ("Blocking Prompts", _table_rows(export.get("blocker_rows", []))),
+        ("All Prompts", _table_rows(export.get("question_rows", []))),
+        ("Positions", _table_rows(export.get("positions", []))),
+        ("Collection Targets", _table_rows(export.get("collection_targets", []))),
+        ("Collection Tasks", _table_rows(export.get("collection_tasks", []))),
+        ("Manual Gates", _table_rows(export.get("manual_gates", []))),
+    ]
+    sheet_names = [_safe_sheet_name(name) for name, _rows in sheets]
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", _xlsx_content_types(len(sheets)))
+        archive.writestr("_rels/.rels", _xlsx_root_rels())
+        archive.writestr("docProps/core.xml", _xlsx_core_props(export.get("generated_at")))
+        archive.writestr("docProps/app.xml", _xlsx_app_props(sheet_names))
+        archive.writestr("xl/workbook.xml", _xlsx_workbook(sheet_names))
+        archive.writestr("xl/_rels/workbook.xml.rels", _xlsx_workbook_rels(len(sheets)))
+        archive.writestr("xl/styles.xml", _xlsx_styles())
+        for index, (_name, rows) in enumerate(sheets, start=1):
+            archive.writestr(
+                f"xl/worksheets/sheet{index}.xml",
+                _xlsx_sheet(rows, freeze_header=index != 1),
+            )
+
+
+def _question_export_summary_rows(export: dict[str, Any]) -> list[list[Any]]:
+    summary = export.get("summary", {})
+    rows: list[list[Any]] = [["Metric", "Value"]]
+    for key, value in summary.items():
+        rows.append([key, value])
+    rows.extend([[], ["Coverage Status", "Count"]])
+    for key, value in sorted((export.get("coverage_counts") or {}).items()):
+        rows.append([key, value])
+    rows.extend([[], ["Readiness", "Count"]])
+    for key, value in sorted((export.get("readiness_counts") or {}).items()):
+        rows.append([key, value])
+    rows.extend([[], ["Policy", "Rule"]])
+    for key, value in sorted((export.get("policy") or {}).items()):
+        rows.append([key, value])
+    return rows
+
+
+def _table_rows(items: list[dict[str, Any]]) -> list[list[Any]]:
+    if not items:
+        return [["No rows"]]
+    headers = list(items[0].keys())
+    rows = [headers]
+    for item in items:
+        rows.append([item.get(header) for header in headers])
+    return rows
+
+
+def _xlsx_sheet(rows: list[list[Any]], freeze_header: bool = True) -> str:
+    max_cols = max((len(row) for row in rows), default=1)
+    max_rows = max(len(rows), 1)
+    refs = f"A1:{_xlsx_col_name(max_cols)}{max_rows}"
+    col_xml = "".join(
+        f'<col min="{col}" max="{col}" width="{width}" customWidth="1"/>'
+        for col, width in enumerate(_xlsx_col_widths(rows, max_cols), start=1)
+    )
+    sheet_views = (
+        '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" '
+        'activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>'
+        if freeze_header and max_rows > 1
+        else '<sheetViews><sheetView workbookViewId="0"/></sheetViews>'
+    )
+    row_xml = []
+    for row_index, row in enumerate(rows, start=1):
+        cells = []
+        for col_index in range(1, max_cols + 1):
+            value = row[col_index - 1] if col_index <= len(row) else ""
+            style = 1 if row_index == 1 else 0
+            cells.append(_xlsx_cell(row_index, col_index, value, style=style))
+        row_xml.append(f'<row r="{row_index}">{"".join(cells)}</row>')
+    auto_filter = f'<autoFilter ref="{refs}"/>' if max_rows > 1 and max_cols > 1 else ""
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        f"{sheet_views}<cols>{col_xml}</cols><sheetData>{''.join(row_xml)}</sheetData>{auto_filter}"
+        "</worksheet>"
+    )
+
+
+def _xlsx_cell(row: int, col: int, value: Any, style: int = 0) -> str:
+    ref = f"{_xlsx_col_name(col)}{row}"
+    style_attr = f' s="{style}"' if style else ""
+    if value is None:
+        return f'<c r="{ref}"{style_attr}/>'
+    if isinstance(value, bool):
+        return f'<c r="{ref}" t="b"{style_attr}><v>{1 if value else 0}</v></c>'
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return f'<c r="{ref}"{style_attr}><v>{value}</v></c>'
+    text = str(value)
+    preserve = ' xml:space="preserve"' if text.strip() != text or "\n" in text else ""
+    return (
+        f'<c r="{ref}" t="inlineStr"{style_attr}><is><t{preserve}>'
+        f"{_xml_escape(text)}</t></is></c>"
+    )
+
+
+def _xlsx_col_widths(rows: list[list[Any]], max_cols: int) -> list[int]:
+    widths: list[int] = []
+    for col_index in range(max_cols):
+        longest = 10
+        for row in rows[:200]:
+            if col_index >= len(row):
+                continue
+            text = str(row[col_index] or "").split("\n", 1)[0]
+            longest = max(longest, len(text))
+        widths.append(max(10, min(55, longest + 2)))
+    return widths
+
+
+def _xlsx_col_name(index: int) -> str:
+    name = ""
+    while index:
+        index, remainder = divmod(index - 1, 26)
+        name = chr(65 + remainder) + name
+    return name or "A"
+
+
+def _safe_sheet_name(name: str) -> str:
+    return re.sub(r"[\[\]:*?/\\]", " ", str(name))[:31] or "Sheet"
+
+
+def _xlsx_content_types(sheet_count: int) -> str:
+    sheets = "".join(
+        f'<Override PartName="/xl/worksheets/sheet{index}.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        for index in range(1, sheet_count + 1)
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/xl/workbook.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        '<Override PartName="/xl/styles.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
+        '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
+        '<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>'
+        f"{sheets}</Types>"
+    )
+
+
+def _xlsx_root_rels() -> str:
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+        '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>'
+        '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>'
+        "</Relationships>"
+    )
+
+
+def _xlsx_workbook(sheet_names: list[str]) -> str:
+    sheets = "".join(
+        f'<sheet name="{_xml_escape(name)}" sheetId="{index}" r:id="rId{index}"/>'
+        for index, name in enumerate(sheet_names, start=1)
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        f"<sheets>{sheets}</sheets></workbook>"
+    )
+
+
+def _xlsx_workbook_rels(sheet_count: int) -> str:
+    rels = "".join(
+        f'<Relationship Id="rId{index}" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
+        f'Target="worksheets/sheet{index}.xml"/>'
+        for index in range(1, sheet_count + 1)
+    )
+    rels += (
+        f'<Relationship Id="rId{sheet_count + 1}" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" '
+        'Target="styles.xml"/>'
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        f"{rels}</Relationships>"
+    )
+
+
+def _xlsx_styles() -> str:
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font>'
+        '<font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Calibri"/></font></fonts>'
+        '<fills count="2"><fill><patternFill patternType="none"/></fill>'
+        '<fill><patternFill patternType="solid"><fgColor rgb="FF24435C"/><bgColor indexed="64"/></patternFill></fill></fills>'
+        '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
+        '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+        '<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1">'
+        '<alignment vertical="top" wrapText="1"/></xf>'
+        '<xf numFmtId="0" fontId="1" fillId="1" borderId="0" xfId="0" applyFill="1" applyFont="1" applyAlignment="1">'
+        '<alignment vertical="top" wrapText="1"/></xf></cellXfs>'
+        '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
+        "</styleSheet>"
+    )
+
+
+def _xlsx_core_props(generated_at: Any) -> str:
+    timestamp = str(generated_at or datetime.now(timezone.utc).isoformat())
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" '
+        'xmlns:dc="http://purl.org/dc/elements/1.1/" '
+        'xmlns:dcterms="http://purl.org/dc/terms/" '
+        'xmlns:dcmitype="http://purl.org/dc/dcmitype/" '
+        'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+        '<dc:title>Job Application Question Export</dc:title>'
+        '<dc:creator>job_apply_agent</dc:creator>'
+        f'<dcterms:created xsi:type="dcterms:W3CDTF">{_xml_escape(timestamp)}</dcterms:created>'
+        f'<dcterms:modified xsi:type="dcterms:W3CDTF">{_xml_escape(timestamp)}</dcterms:modified>'
+        "</cp:coreProperties>"
+    )
+
+
+def _xlsx_app_props(sheet_names: list[str]) -> str:
+    titles = "".join(f"<vt:lpstr>{_xml_escape(name)}</vt:lpstr>" for name in sheet_names)
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" '
+        'xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">'
+        '<Application>job_apply_agent</Application>'
+        '<TitlesOfParts><vt:vector size="{count}" baseType="lpstr">{titles}</vt:vector></TitlesOfParts>'
+        '</Properties>'
+    ).format(count=len(sheet_names), titles=titles)
+
+
+def _question_export_css() -> str:
+    return """
+body { margin: 0; font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1f2933; background: #f6f8fa; }
+main { max-width: 1180px; margin: 0 auto; padding: 32px 24px 56px; }
+h1 { margin: 0 0 4px; font-size: 28px; }
+h2 { margin: 28px 0 12px; font-size: 18px; }
+.muted { color: #5f6c7b; margin-top: 0; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 20px 0; }
+.kpi { background: white; border: 1px solid #d9e2ec; padding: 14px; border-radius: 8px; }
+.kpi .label { color: #52606d; font-size: 12px; text-transform: uppercase; letter-spacing: .02em; }
+.kpi .value { display: block; font-size: 24px; font-weight: 700; margin-top: 4px; }
+section { background: white; border: 1px solid #d9e2ec; border-radius: 8px; padding: 16px; margin-top: 18px; overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; min-width: 720px; }
+th, td { border-bottom: 1px solid #e4e7eb; padding: 8px 10px; text-align: left; vertical-align: top; }
+th { background: #24435c; color: white; position: sticky; top: 0; }
+tr:nth-child(even) td { background: #f8fafc; }
+td { white-space: pre-wrap; }
+""".strip()
+
+
+def _html_kpis(items: list[tuple[str, Any]]) -> str:
+    cards = []
+    for label, value in items:
+        cards.append(
+            '<div class="kpi"><span class="label">{label}</span><span class="value">{value}</span></div>'.format(
+                label=_html_escape(label),
+                value=_html_escape(value),
+            )
+        )
+    return '<div class="kpis">' + "".join(cards) + "</div>"
+
+
+def _html_table(headers: list[str], rows: list[list[Any]]) -> str:
+    if not rows:
+        rows = [["None"] + [""] * (len(headers) - 1)]
+    head = "".join(f"<th>{_html_escape(header)}</th>" for header in headers)
+    body_rows = []
+    for row in rows:
+        cells = "".join(f"<td>{_html_escape(row[index] if index < len(row) else '')}</td>" for index in range(len(headers)))
+        body_rows.append(f"<tr>{cells}</tr>")
+    return f"<table><thead><tr>{head}</tr></thead><tbody>{''.join(body_rows)}</tbody></table>"
+
+
+def _html_key_value_table(mapping: dict[str, Any]) -> str:
+    return _html_table(["Key", "Value"], [[key, value] for key, value in sorted(mapping.items())])
+
+
+def _yes_no(value: Any) -> str:
+    return "yes" if bool(value) else "no"
+
+
+def _html_escape(value: Any) -> str:
+    return html.escape("" if value is None else str(value))
+
+
+def _xml_escape(value: Any) -> str:
+    return html.escape("" if value is None else str(value), quote=True)
 
 
 def _humanize_field_identifier(value: str) -> str:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 from job_apply_agent.core import (
@@ -14,6 +15,7 @@ from job_apply_agent.core import (
     build_application_playbook,
     build_application_research,
     build_collection_plan_from_coverage_gate,
+    build_question_export,
     build_browser_action_manifest,
     build_closed_posting_preflight,
     build_browser_dom_execution_plan,
@@ -55,6 +57,7 @@ from job_apply_agent.core import (
     render_apply_run_audit_markdown,
     render_application_playbook_markdown,
     render_candidate_observation_markdown,
+    render_question_export_html,
     render_application_research_markdown,
     render_collection_plan_markdown,
     render_browser_action_manifest_markdown,
@@ -82,6 +85,7 @@ from job_apply_agent.core import (
     write_candidate_observation_report,
     write_closed_posting_preflight,
     write_collection_plan,
+    write_question_export,
     write_browser_dom_harness,
     write_form_fill_plan,
     write_learning_task_template,
@@ -2628,6 +2632,176 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(json_output.exists())
             self.assertTrue(markdown_output.exists())
             self.assertTrue(observed_output.exists())
+
+    def test_write_question_export_outputs_excel_and_html(self) -> None:
+        gaps = {
+            "generated_at": "2026-05-22T00:00:00+00:00",
+            "research_generated_at": "2026-05-22T00:00:00+00:00",
+            "positions_observed_total": 2,
+            "unique_prompts_observed": 3,
+            "ready_prompt_count": 1,
+            "blocking_prompt_count": 2,
+            "coverage_counts": {"covered_auto_answer": 1, "needs_user_confirmation": 1},
+            "prompt_statuses": [
+                {
+                    "label": "Have you worked at DoorDash?*",
+                    "coverage_status": "needs_user_confirmation",
+                    "category": "employment_history",
+                    "automation_action": "human_review_required",
+                    "sensitivity": "profile",
+                    "observed_count": 3,
+                    "required_count": 3,
+                    "platforms": ["Greenhouse"],
+                    "source_files": ["doordash.json"],
+                    "coverage_reason": "employer_specific_policy_or_unclear_prompt",
+                    "next_action": "ask user during supervised learning",
+                },
+                {
+                    "label": "What is your expected compensation?",
+                    "coverage_status": "covered_auto_answer",
+                    "category": "compensation",
+                    "automation_action": "auto_answer_from_memory",
+                    "sensitivity": "standard_preference",
+                    "observed_count": 4,
+                    "required_count": 4,
+                    "platforms": ["LinkedIn"],
+                    "source_files": ["linkedin.jsonl"],
+                    "answer_source": "answer_memory",
+                    "next_action": "autofill",
+                },
+            ],
+            "blocking_prompts": [
+                {
+                    "label": "Have you worked at DoorDash?*",
+                    "coverage_status": "needs_user_confirmation",
+                    "category": "employment_history",
+                    "automation_action": "human_review_required",
+                    "sensitivity": "profile",
+                    "observed_count": 3,
+                    "required_count": 3,
+                    "platforms": ["Greenhouse"],
+                    "source_files": ["doordash.json"],
+                    "next_action": "ask user during supervised learning",
+                }
+            ],
+        }
+        readiness = {
+            "readiness_counts": {"autofill_ready": 1, "needs_learning": 1},
+            "manual_gate_count": 1,
+            "positions": [
+                {
+                    "readiness": "needs_learning",
+                    "platform": "Greenhouse",
+                    "company": "DoorDash",
+                    "title": "Software Engineer",
+                    "role_family": "Software Backend",
+                    "apply_url": "https://job-boards.greenhouse.io/doordash/jobs/1",
+                    "prompt_count": 3,
+                    "required_prompt_count": 3,
+                    "covered_prompt_count": 2,
+                    "ready_for_autofill": False,
+                    "ready_for_supervised_submit": False,
+                    "ready_for_unattended_submit": False,
+                    "learning_blockers": [{"label": "Have you worked at DoorDash?*"}],
+                    "manual_gates": [{"label": "Submit application"}],
+                }
+            ],
+            "manual_gates": [
+                {
+                    "label": "Submit application",
+                    "coverage_status": "final_submit_confirmation",
+                    "category": "final_submit",
+                    "platforms": ["Greenhouse"],
+                    "observed_count": 1,
+                    "required_count": 0,
+                    "recommended_storage": "do_not_automate",
+                    "next_action": "human must approve final submit",
+                }
+            ],
+        }
+        coverage_gate = {
+            "ready_for_full_automation": False,
+            "real_platform_target_achieved": False,
+            "real_platform_role_target_achieved": False,
+            "synthetic": {"platform_role_target_achieved": True, "actual_submit_count": 0},
+            "real_platform_counts": {"Greenhouse": 2},
+            "real_platform_shortfalls": {"Greenhouse": 98},
+            "next_collection_targets": [
+                {
+                    "platform": "Greenhouse",
+                    "role_family": "Software Backend",
+                    "positions_observed": 2,
+                    "positions_remaining": 98,
+                }
+            ],
+        }
+        collection_plan = {
+            "tasks": [
+                {
+                    "platform": "Greenhouse",
+                    "role_family": "Software Backend",
+                    "suggested_batch_size": 25,
+                    "positions_remaining": 98,
+                    "query": "backend software engineer",
+                    "search_urls": ["https://example.com/search"],
+                }
+            ]
+        }
+        learning_tasks = {
+            "task_count": 1,
+            "tasks": [
+                {
+                    "recommended_storage": "answer_memory",
+                    "question": "Have you worked at DoorDash?*",
+                    "group_key": "answer_memory:doordash",
+                    "platforms": ["Greenhouse"],
+                    "labels": ["Have you worked at DoorDash?*"],
+                    "related_prompt_count": 1,
+                    "observed_count": 3,
+                    "required_count": 3,
+                    "approved": False,
+                    "answer": "",
+                    "persist_allowed": True,
+                    "notes": "",
+                }
+            ],
+        }
+
+        export = build_question_export(
+            gaps,
+            readiness,
+            coverage_gate,
+            collection_plan,
+            learning_tasks,
+        )
+        html = render_question_export_html(export)
+
+        self.assertIn("Job Application Question Export", html)
+        self.assertIn("Have you worked at DoorDash?", html)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            xlsx_output = Path(temp_dir) / "questions.xlsx"
+            html_output = Path(temp_dir) / "questions.html"
+            result = write_question_export(
+                gaps,
+                readiness,
+                coverage_gate,
+                collection_plan,
+                learning_tasks,
+                xlsx_output,
+                html_output,
+            )
+
+            self.assertEqual(len(result["question_rows"]), 2)
+            self.assertTrue(xlsx_output.exists())
+            self.assertTrue(html_output.exists())
+            with zipfile.ZipFile(xlsx_output) as workbook:
+                names = set(workbook.namelist())
+                self.assertIn("xl/workbook.xml", names)
+                self.assertIn("xl/worksheets/sheet1.xml", names)
+                self.assertIn("xl/worksheets/sheet2.xml", names)
+                user_questions = workbook.read("xl/worksheets/sheet2.xml").decode("utf-8")
+                self.assertIn("Have you worked at DoorDash?", user_questions)
 
 
 if __name__ == "__main__":
