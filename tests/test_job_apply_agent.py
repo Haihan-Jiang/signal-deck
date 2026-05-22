@@ -2883,6 +2883,59 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["candidates"][0]["source"], "direct_seed_candidate")
         self.assertIn("Direct seed candidates: 1", render_candidate_discovery_markdown(report))
 
+    def test_discover_candidates_rejects_board_titles_without_role_context(self) -> None:
+        plan = {
+            "tasks": [
+                {
+                    "platform": "Lever",
+                    "role_family": "Cloud DevOps",
+                    "query": "cloud devops engineer",
+                }
+            ]
+        }
+        seed_candidates = [
+            {"platform": "Lever", "apply_url": "https://jobs.lever.co/theodo/seed"}
+        ]
+
+        def fake_fetcher(url: str, timeout: float) -> str:
+            return json.dumps(
+                [
+                    {
+                        "hostedUrl": "https://jobs.lever.co/theodo/cloud",
+                        "text": "Cloud Engineer",
+                        "descriptionPlain": "Own cloud infrastructure and Kubernetes automation.",
+                    },
+                    {
+                        "hostedUrl": "https://jobs.lever.co/theodo/manager",
+                        "text": "Engineering Manager - Theodo Cloud",
+                        "descriptionPlain": "Cloud infrastructure delivery leadership.",
+                    },
+                    {
+                        "hostedUrl": "https://jobs.lever.co/theodo/recruiter",
+                        "text": "Business Developer & Tech Recruiter",
+                        "descriptionPlain": "DevOps and cloud hiring for consulting teams.",
+                    },
+                    {
+                        "hostedUrl": "https://jobs.lever.co/theodo/fullstack",
+                        "text": "Full Stack Engineer",
+                        "descriptionPlain": "Cloud platform delivery for customers.",
+                    },
+                ]
+            )
+
+        report = discover_candidates_from_collection_plan(
+            plan,
+            max_tasks=1,
+            per_task_limit=10,
+            search_pages_per_task=0,
+            seed_candidates=seed_candidates,
+            board_fetch_limit=1,
+            fetcher=fake_fetcher,
+        )
+
+        self.assertEqual(report["candidate_count"], 1)
+        self.assertEqual(report["candidates"][0]["title"], "Cloud Engineer")
+
     def test_write_candidate_discovery_report_outputs_files(self) -> None:
         plan = {
             "tasks": [
@@ -3177,6 +3230,39 @@ class JobApplyAgentTests(unittest.TestCase):
 
             self.assertEqual(research["positions_observed_total"], 0)
             self.assertNotIn("LinkedIn", research["platforms"])
+
+    def test_application_research_revalidates_stale_role_family_labels(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            observed_path = Path(temp_dir) / "observed_candidates.jsonl"
+            rows = [
+                {
+                    "status": "OBSERVED_CANDIDATE",
+                    "platform": "Lever",
+                    "company": "Example",
+                    "title": "Engineering Manager - Theodo Cloud",
+                    "description": "Cloud infrastructure delivery leadership.",
+                    "role_family": "Cloud DevOps",
+                    "apply_url": "https://jobs.lever.co/example/manager",
+                },
+                {
+                    "status": "OBSERVED_CANDIDATE",
+                    "platform": "Lever",
+                    "company": "Example",
+                    "title": "Senior DevOps Engineer",
+                    "role_family": "Cloud DevOps",
+                    "apply_url": "https://jobs.lever.co/example/devops",
+                },
+            ]
+            observed_path.write_text(
+                "\n".join(json.dumps(row) for row in rows) + "\n",
+                encoding="utf-8",
+            )
+
+            research = build_application_research(temp_dir, position_target=100)
+
+            self.assertEqual(research["positions_observed_total"], 2)
+            self.assertEqual(research["role_family_counts"].get("Cloud DevOps"), 1)
+            self.assertEqual(research["role_family_counts"].get("Other"), 1)
 
     def test_extract_live_job_page_metadata_finds_prompts(self) -> None:
         page = """

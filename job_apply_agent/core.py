@@ -6290,8 +6290,18 @@ def _register_research_position(
 
 def _research_position_role_family(payload: dict[str, Any]) -> str:
     role_family = str(payload.get("role_family") or payload.get("role_variant") or "").strip()
+    title_evidence = " ".join(
+        str(payload.get(key) or "")
+        for key in ["title", "title_text", "job_title"]
+    )
+    title_role_family = _infer_role_family(title_evidence)
     if role_family and role_family != "Other":
-        return role_family
+        candidate = dict(payload)
+        candidate.pop("role_family", None)
+        candidate.pop("role_variant", None)
+        if _candidate_matches_role_family(candidate, role_family):
+            return role_family
+        return title_role_family
     evidence = " ".join(
         str(payload.get(key) or "")
         for key in [
@@ -6303,6 +6313,8 @@ def _research_position_role_family(payload: dict[str, Any]) -> str:
             "page_excerpt",
         ]
     )
+    if title_role_family != "Other":
+        return title_role_family
     return _infer_role_family(evidence)
 
 
@@ -8196,7 +8208,69 @@ def _candidate_matches_role_family(candidate: dict[str, Any], role_family: str) 
         return True
     if not _title_has_engineering_signal(title_text):
         return False
+    if not _title_has_role_family_context(title_text, role_family):
+        return False
     return any(keyword in description_text for keyword in keywords)
+
+
+def _title_has_role_family_context(normalized_title: str, role_family: str) -> bool:
+    title = str(normalized_title or "")
+    if role_family in {"Site Reliability", "Platform Infrastructure", "Cloud DevOps"} and _title_is_generic_engineer(title):
+        return True
+    context_terms = {
+        "Site Reliability": [
+            "site reliability",
+            "sre",
+            "reliability",
+            "observability",
+            "production engineer",
+            "database reliability",
+            "dbre",
+        ],
+        "Platform Infrastructure": [
+            "platform",
+            "infrastructure",
+            "kubernetes",
+            "devops",
+            "developer experience",
+            "devex",
+            "linux systems",
+            "build release",
+            "systems engineer",
+        ],
+        "Cloud DevOps": [
+            "cloud",
+            "devops",
+            "platform",
+            "infrastructure",
+            "kubernetes",
+            "gitops",
+            "site reliability",
+            "sre",
+            "systems engineer",
+        ],
+        "Software Backend": [
+            "backend",
+            "back end",
+            "back-end",
+            "software engineer",
+            "software developer",
+            "server side",
+            "server-side",
+            "api",
+        ],
+    }.get(role_family, [_normalize(role_family)])
+    return any(term in title for term in context_terms)
+
+
+def _title_is_generic_engineer(normalized_title: str) -> bool:
+    return bool(
+        re.fullmatch(
+            r"(?:(?:senior|sr|staff|principal|lead|associate|junior|jr)\s+)?"
+            r"(?:software\s+)?engineer(?:\s+(?:i|ii|iii|iv|v|[1-5]))?",
+            str(normalized_title or "").strip(),
+        )
+    )
 
 
 def _extract_candidate_links_from_search_html(
@@ -8579,12 +8653,14 @@ def _title_has_engineering_signal(normalized_title: str) -> bool:
             "account ",
             "accountant",
             "account manager",
+            "business developer",
             "business development",
             "content writer",
             "customer success",
             "developer relations",
             "design manager",
             "employee engagement",
+            "engineering manager",
             "finance",
             "legal",
             "marketing",
@@ -8593,8 +8669,10 @@ def _title_has_engineering_signal(normalized_title: str) -> bool:
             "people operations",
             "product manager",
             "project manager",
+            "recruiter",
             "revenue operations",
             "sales",
+            "talent acquisition",
             "systems accountant",
             "technical content architect",
             "technical writer",
