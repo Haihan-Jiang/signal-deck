@@ -921,9 +921,28 @@ def classify_application_prompt(
     if any(
         term in text
         for term in [
+            "remote state",
+            "state will you work",
+            "work remotely from",
+            "time zone",
+            "timezone",
+            "current location",
+        ]
+    ):
+        return ApplicationPromptClassification(
+            "profile_identity",
+            "auto_fill_from_profile",
+            "profile",
+            "location_or_timezone_profile_field",
+        )
+    if any(
+        term in text
+        for term in [
             "most recent employer",
             "current employer",
             "current company",
+            "company and position",
+            "company position",
             "title held",
             "current title",
             "previous employer",
@@ -942,6 +961,8 @@ def classify_application_prompt(
             "start date year",
             "end date month",
             "end date year",
+            "end month",
+            "end year",
             "employment dates",
         ]
     ):
@@ -6009,6 +6030,24 @@ def _profile_field_status(
             "reason": "missing_education_fact",
             "next_action": "add education to profile resume_facts",
         }
+    if category == "employment_history":
+        if profile.resume_facts.get("current_role"):
+            return {"covered": True, "reason": "current_role_resume_fact_present", "source": "profile.resume_facts.current_role"}
+        return {
+            "covered": False,
+            "missing_status": "needs_resume_facts",
+            "reason": "missing_current_role_fact",
+            "next_action": "add current employer/title facts to profile resume_facts",
+        }
+    if category == "employment_dates":
+        if profile.resume_facts.get("employment_dates"):
+            return {"covered": True, "reason": "employment_dates_resume_fact_present", "source": "profile.resume_facts.employment_dates"}
+        return {
+            "covered": False,
+            "missing_status": "needs_resume_facts",
+            "reason": "missing_employment_dates",
+            "next_action": "add employment date facts from resume before autofill",
+        }
     if category == "profile_link":
         if _profile_answer_contains_any(profile, ["linkedin", "github", "portfolio", "website"]):
             return {"covered": True, "reason": "profile_link_present", "source": "profile.question_answers"}
@@ -6220,6 +6259,18 @@ def _profile_value_for_form_field(
         return _source_value("profile.name", profile.name)
     if category == "education":
         return _source_value("profile.resume_facts.education", profile.resume_facts.get("education", ""))
+    if category == "employment_history":
+        return _source_value(
+            "profile.resume_facts.current_role",
+            profile.resume_facts.get("current_role", ""),
+        )
+    if category == "employment_dates":
+        return _source_value(
+            "profile.resume_facts.employment_dates",
+            profile.resume_facts.get("employment_dates", ""),
+            missing_status="needs_resume_facts",
+            next_action="add employment date facts from resume before autofill",
+        )
     if category == "profile_link":
         for key in ["linkedin_profile", "linkedin", "profile_url"]:
             if profile.question_answers.get(key):
@@ -6272,13 +6323,20 @@ def _answer_value_for_form_field(
     }
 
 
-def _source_value(source: str, value: str) -> dict[str, Any]:
+def _source_value(
+    source: str,
+    value: str,
+    missing_status: str = "needs_profile_field",
+    next_action: str = "add missing profile value before automation",
+) -> dict[str, Any]:
     value = str(value or "").strip()
     return {
         "available": bool(value),
         "source": source,
         "value": value,
         "reason": "source_value_available" if value else "source_value_missing",
+        "missing_status": missing_status,
+        "next_action": next_action,
     }
 
 
@@ -7421,7 +7479,11 @@ def _skip_low_signal_prompt(
 
 
 def _is_low_signal_application_prompt(normalized: str) -> bool:
-    if re.fullmatch(r"go page \d+", normalized):
+    if re.fullmatch(r"go (to )?page \d+", normalized):
+        return True
+    if re.fullmatch(r"question \d+", normalized):
+        return True
+    if re.fullmatch(r"(start|end) (month|year) \d+", normalized):
         return True
     if normalized.startswith("toggle child menu"):
         return True
@@ -7436,6 +7498,7 @@ def _is_low_signal_application_prompt(normalized: str) -> bool:
         "keyword filter",
         "next page",
         "office",
+        "office filter",
         "previous page",
         "tailor my resume",
         "toggle flyout",

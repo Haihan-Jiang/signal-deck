@@ -790,6 +790,14 @@ class JobApplyAgentTests(unittest.TestCase):
             classify_application_prompt("Most Recent Employer").automation_action,
             "auto_fill_from_profile",
         )
+        self.assertEqual(
+            classify_application_prompt("What state will you work remotely from?").category,
+            "profile_identity",
+        )
+        self.assertEqual(
+            classify_application_prompt("What company and position are you currently in?").category,
+            "employment_history",
+        )
 
     def test_application_research_summarizes_form_snapshots_and_jsonl(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2712,6 +2720,8 @@ class JobApplyAgentTests(unittest.TestCase):
             <button>Toggle flyout</button>
             <button>Go to page 2</button>
             <label>department filter</label>
+            <label>question 52718138</label>
+            <label>end month 0</label>
             <label>Most Recent Employer</label>
             <div>Share your hands-on experience with observability tools?</div>
           </body>
@@ -2723,6 +2733,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertNotIn("Toggle flyout", prompts)
         self.assertNotIn("Go to page 2", prompts)
         self.assertNotIn("department filter", prompts)
+        self.assertNotIn("question 52718138", prompts)
+        self.assertNotIn("end month 0", prompts)
         self.assertIn("Most Recent Employer", prompts)
         self.assertIn("Share your hands-on experience with observability tools?", prompts)
 
