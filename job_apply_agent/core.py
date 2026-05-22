@@ -3807,6 +3807,12 @@ def render_question_export_html(export: dict[str, Any]) -> str:
         "<section><h2>Readiness Counts</h2>",
         _html_key_value_table(export.get("readiness_counts", {})),
         "</section>",
+        "<section><h2>Real Platform Counts</h2>",
+        _html_key_value_table(export.get("real_platform_counts", {})),
+        "</section>",
+        "<section><h2>Real Platform Shortfalls</h2>",
+        _html_key_value_table(export.get("real_platform_shortfalls", {})),
+        "</section>",
         "<section><h2>Collection Targets</h2>",
         _html_table(
             ["Platform", "Role family", "Observed", "Remaining"],
@@ -3818,6 +3824,22 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                     row.get("positions_remaining"),
                 ]
                 for row in export.get("collection_targets", [])
+            ],
+        ),
+        "</section>",
+        "<section><h2>Collection Tasks</h2>",
+        _html_table(
+            ["Platform", "Role family", "Batch size", "Remaining", "Query", "Search URLs"],
+            [
+                [
+                    row.get("platform"),
+                    row.get("role_family"),
+                    row.get("suggested_batch_size"),
+                    row.get("positions_remaining"),
+                    row.get("query"),
+                    row.get("search_urls"),
+                ]
+                for row in export.get("collection_tasks", [])
             ],
         ),
         "</section>",
@@ -3836,6 +3858,23 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                     row.get("manual_gates"),
                 ]
                 for row in export.get("positions", [])
+            ],
+        ),
+        "</section>",
+        "<section><h2>Manual Gates</h2>",
+        _html_table(
+            ["Coverage status", "Label", "Category", "Platforms", "Observed", "Required", "Next action"],
+            [
+                [
+                    row.get("coverage_status"),
+                    row.get("label"),
+                    row.get("category"),
+                    row.get("platforms"),
+                    row.get("observed_count"),
+                    row.get("required_count"),
+                    row.get("next_action"),
+                ]
+                for row in export.get("manual_gates", [])
             ],
         ),
         "</section>",
@@ -4109,7 +4148,12 @@ def extract_live_job_page_metadata(
 ) -> dict[str, Any]:
     page_text = _html_to_text(page_html)
     title = _extract_html_title(page_html)
-    company = _extract_html_meta(page_html, ["og:site_name", "twitter:site"])
+    company = _extract_company_from_html_title(title) or _extract_html_meta(
+        page_html,
+        ["og:site_name", "twitter:site"],
+    )
+    if str(company).strip().lower() in {"@linkedin", "linkedin"}:
+        company = _extract_company_from_page_text(page_text)
     questions = extract_application_prompts_from_html(
         page_html,
         include_form_fields=include_form_fields,
@@ -4121,6 +4165,22 @@ def extract_live_job_page_metadata(
         "description": _extract_html_meta(page_html, ["description", "og:description"]),
         "page_excerpt": page_text[:1200],
     }
+
+
+def _extract_company_from_html_title(title: str) -> str:
+    value = re.sub(r"\s+", " ", str(title or "")).strip()
+    match = re.match(r"(.+?)\s+hiring\s+.+?\s+\|\s+LinkedIn\b", value, flags=re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    return ""
+
+
+def _extract_company_from_page_text(page_text: str) -> str:
+    value = re.sub(r"\s+", " ", str(page_text or "")).strip()
+    match = re.search(r"\b([A-Z][A-Za-z0-9&.,' -]{1,80})\s+hiring\s+", value)
+    if match:
+        return match.group(1).strip()
+    return ""
 
 
 def extract_application_prompts_from_html(
@@ -5548,7 +5608,7 @@ def infer_platform_from_url(url: str) -> str | None:
 
 
 def extract_linkedin_job_id(url: str) -> str:
-    match = re.search(r"/jobs/view/(\d+)", str(url))
+    match = re.search(r"/jobs/view/(?:[^/?#]*-)?(\d+)(?:[/?#]|$)", str(url))
     return match.group(1) if match else ""
 
 
@@ -7677,18 +7737,18 @@ def _candidate_discovery_search_urls(task: dict[str, Any]) -> list[str]:
     platform = str(task.get("platform") or "")
     query = str(task.get("query") or "")
     urls: list[str] = []
-    site = _platform_primary_search_domain(platform)
-    if site and query:
-        encoded = urllib.parse.quote_plus(f"site:{site} {query}")
-        urls.extend(
-            [
-                f"https://www.bing.com/search?format=rss&q={encoded}&count=50",
-                f"https://www.bing.com/search?q={encoded}&count=50",
-            ]
-        )
     for url in _string_list(task.get("search_urls")):
         if url not in urls:
             urls.append(url)
+    site = _platform_primary_search_domain(platform)
+    if site and query:
+        encoded = urllib.parse.quote_plus(f"site:{site} {query}")
+        for url in [
+            f"https://www.bing.com/search?format=rss&q={encoded}&count=50",
+            f"https://www.bing.com/search?q={encoded}&count=50",
+        ]:
+            if url not in urls:
+                urls.append(url)
     return urls
 
 
@@ -8298,6 +8358,8 @@ def _write_question_export_xlsx(export: dict[str, Any], path: Path) -> None:
         ("Blocking Prompts", _table_rows(export.get("blocker_rows", []))),
         ("All Prompts", _table_rows(export.get("question_rows", []))),
         ("Positions", _table_rows(export.get("positions", []))),
+        ("Platform Counts", _mapping_rows(export.get("real_platform_counts", {}), "Platform", "Observed")),
+        ("Platform Shortfalls", _mapping_rows(export.get("real_platform_shortfalls", {}), "Platform", "Remaining")),
         ("Collection Targets", _table_rows(export.get("collection_targets", []))),
         ("Collection Tasks", _table_rows(export.get("collection_tasks", []))),
         ("Manual Gates", _table_rows(export.get("manual_gates", []))),
@@ -8342,6 +8404,15 @@ def _table_rows(items: list[dict[str, Any]]) -> list[list[Any]]:
     rows = [headers]
     for item in items:
         rows.append([item.get(header) for header in headers])
+    return rows
+
+
+def _mapping_rows(values: dict[str, Any], key_header: str, value_header: str) -> list[list[Any]]:
+    rows: list[list[Any]] = [[key_header, value_header]]
+    for key, value in sorted((values or {}).items()):
+        rows.append([key, value])
+    if len(rows) == 1:
+        rows.append(["No rows", ""])
     return rows
 
 

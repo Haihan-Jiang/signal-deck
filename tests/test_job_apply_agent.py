@@ -177,6 +177,11 @@ class JobApplyAgentTests(unittest.TestCase):
         }
         self.assertEqual(extract_linkedin_job_id(job["apply_url"]), "4415508499")
         self.assertEqual(job_registry_key(job), "linkedin:4415508499")
+        slug_job = {
+            "apply_url": "https://www.linkedin.com/jobs/view/site-reliability-engineer-at-clay-4338540053?position=1",
+        }
+        self.assertEqual(extract_linkedin_job_id(slug_job["apply_url"]), "4338540053")
+        self.assertEqual(job_registry_key(slug_job), "linkedin:4338540053")
 
     def test_answer_generation_uses_known_profile_facts(self) -> None:
         draft = build_application_draft(self.profile, self.jobs[0])
@@ -376,6 +381,10 @@ class JobApplyAgentTests(unittest.TestCase):
             "https://www.linkedin.com/jobs/view/4415090263/?eBP=abc&trk=search&trackingId=xyz"
         )
         self.assertEqual(shortened, "https://www.linkedin.com/jobs/view/4415090263/")
+        slug_shortened = shorten_apply_url(
+            "https://www.linkedin.com/jobs/view/site-reliability-engineer-at-clay-4338540053?position=1&pageNum=0"
+        )
+        self.assertEqual(slug_shortened, "https://www.linkedin.com/jobs/view/4338540053/")
 
     def test_telegram_alert_uses_short_apply_url(self) -> None:
         submission = {
@@ -2847,6 +2856,22 @@ class JobApplyAgentTests(unittest.TestCase):
 
         self.assertEqual(metadata["questions"], [])
 
+    def test_extract_live_job_page_metadata_finds_linkedin_company(self) -> None:
+        page = """
+        <html>
+          <head>
+            <title>Revel hiring Software Engineer - Infrastructure &amp; Deployment in Los Angeles, CA | LinkedIn</title>
+            <meta name="twitter:site" content="@LinkedIn">
+            <meta name="description" content="Posted 8:06:10 PM. About Revel...">
+          </head>
+          <body>Revel hiring Software Engineer - Infrastructure & Deployment in Los Angeles, CA</body>
+        </html>
+        """
+
+        metadata = extract_live_job_page_metadata(page, include_form_fields=False)
+
+        self.assertEqual(metadata["company"], "Revel")
+
     def test_extract_application_prompts_skips_job_board_navigation_noise(self) -> None:
         page = """
         <html>
@@ -3120,6 +3145,9 @@ class JobApplyAgentTests(unittest.TestCase):
 
         self.assertIn("Job Application Question Export", html)
         self.assertIn("Have you worked at DoorDash?", html)
+        self.assertIn("Real Platform Shortfalls", html)
+        self.assertIn("Collection Tasks", html)
+        self.assertIn("Manual Gates", html)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             xlsx_output = Path(temp_dir) / "questions.xlsx"
@@ -3142,8 +3170,12 @@ class JobApplyAgentTests(unittest.TestCase):
                 self.assertIn("xl/workbook.xml", names)
                 self.assertIn("xl/worksheets/sheet1.xml", names)
                 self.assertIn("xl/worksheets/sheet2.xml", names)
+                self.assertIn("xl/worksheets/sheet6.xml", names)
+                self.assertIn("xl/worksheets/sheet10.xml", names)
                 user_questions = workbook.read("xl/worksheets/sheet2.xml").decode("utf-8")
                 self.assertIn("Have you worked at DoorDash?", user_questions)
+                platform_shortfalls = workbook.read("xl/worksheets/sheet7.xml").decode("utf-8")
+                self.assertIn("Greenhouse", platform_shortfalls)
 
 
 if __name__ == "__main__":
