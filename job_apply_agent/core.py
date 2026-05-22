@@ -3569,6 +3569,163 @@ def write_candidate_discovery_report(
     return report
 
 
+def select_candidate_topup(
+    candidates: list[dict[str, Any]],
+    coverage_gate: dict[str, Any],
+    observed_candidates: list[dict[str, Any]] | None = None,
+    closed_jobs: dict[str, Any] | None = None,
+    limit: int = 100,
+    per_pair_limit: int = 35,
+) -> dict[str, Any]:
+    shortfalls = {
+        str(pair): int(remaining)
+        for pair, remaining in (coverage_gate.get("real_platform_role_shortfalls") or {}).items()
+        if int(remaining or 0) > 0
+    }
+    observed_keys = {
+        job_registry_key(candidate)
+        for candidate in (observed_candidates or [])
+        if job_registry_key(candidate)
+    }
+    indexed_candidates = [
+        (index, _candidate_with_role_family(candidate))
+        for index, candidate in enumerate(candidates)
+        if isinstance(candidate, dict)
+    ]
+    by_pair: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+    skipped: list[dict[str, Any]] = []
+    for index, candidate in indexed_candidates:
+        key = job_registry_key(candidate)
+        pair = _candidate_platform_role_pair(candidate)
+        if not key:
+            skipped.append({"reason": "missing_key", "index": index})
+            continue
+        if key in observed_keys:
+            skipped.append({"reason": "already_observed", "key": key, "index": index})
+            continue
+        if is_job_closed(candidate, closed_jobs):
+            skipped.append({"reason": "closed_registry", "key": key, "index": index})
+            continue
+        if not pair or shortfalls.get(pair, 0) <= 0:
+            skipped.append({"reason": "no_active_shortfall", "key": key, "pair": pair, "index": index})
+            continue
+        by_pair.setdefault(pair, []).append((index, candidate))
+
+    selected: list[dict[str, Any]] = []
+    selected_keys: set[str] = set()
+    per_pair_counts: dict[str, int] = {}
+    pair_order = sorted(shortfalls, key=lambda pair: shortfalls[pair], reverse=True)
+    for pair in pair_order:
+        pair_budget = min(max(per_pair_limit, 0), shortfalls.get(pair, 0))
+        for _index, candidate in by_pair.get(pair, []):
+            if len(selected) >= max(limit, 0) or per_pair_counts.get(pair, 0) >= pair_budget:
+                break
+            key = job_registry_key(candidate)
+            if key in selected_keys:
+                continue
+            selected.append(candidate)
+            selected_keys.add(key)
+            per_pair_counts[pair] = per_pair_counts.get(pair, 0) + 1
+        if len(selected) >= max(limit, 0):
+            break
+
+    if len(selected) < max(limit, 0):
+        for pair in pair_order:
+            for _index, candidate in by_pair.get(pair, []):
+                if len(selected) >= max(limit, 0):
+                    break
+                key = job_registry_key(candidate)
+                if key in selected_keys:
+                    continue
+                selected.append(candidate)
+                selected_keys.add(key)
+                per_pair_counts[pair] = per_pair_counts.get(pair, 0) + 1
+            if len(selected) >= max(limit, 0):
+                break
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "coverage_gap_topup_selection",
+        "candidate_count": len(candidates),
+        "observed_candidate_count": len(observed_candidates or []),
+        "active_shortfall_pair_count": len(shortfalls),
+        "limit": limit,
+        "per_pair_limit": per_pair_limit,
+        "selected_count": len(selected),
+        "skipped_count": len(skipped),
+        "per_pair_counts": dict(sorted(per_pair_counts.items())),
+        "remaining_shortfalls": shortfalls,
+        "candidates": selected,
+        "skipped": skipped[:500],
+        "next_command": (
+            "python3 -m job_apply_agent observe-candidates "
+            "--input job_apply_agent/outbox/topup_candidates_latest.json "
+            "--live-check-limit {count}"
+        ).format(count=len(selected)),
+    }
+
+
+def write_candidate_topup_selection_report(
+    candidates: list[dict[str, Any]],
+    coverage_gate: dict[str, Any],
+    observed_candidates: list[dict[str, Any]],
+    closed_jobs: dict[str, Any] | None,
+    json_output: str | Path,
+    markdown_output: str | Path,
+    limit: int = 100,
+    per_pair_limit: int = 35,
+) -> dict[str, Any]:
+    report = select_candidate_topup(
+        candidates,
+        coverage_gate,
+        observed_candidates=observed_candidates,
+        closed_jobs=closed_jobs,
+        limit=limit,
+        per_pair_limit=per_pair_limit,
+    )
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2), encoding="utf-8")
+    markdown_path.write_text(render_candidate_topup_selection_markdown(report), encoding="utf-8")
+    return report
+
+
+def render_candidate_topup_selection_markdown(report: dict[str, Any]) -> str:
+    lines = [
+        "# Candidate Top-Up Selection",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        f"Candidates considered: {report.get('candidate_count', 0)}",
+        f"Observed candidates supplied: {report.get('observed_candidate_count', 0)}",
+        f"Selected: {report.get('selected_count', 0)}",
+        f"Skipped: {report.get('skipped_count', 0)}",
+        "",
+        "## Selected By Pair",
+        "",
+    ]
+    counts = report.get("per_pair_counts") or {}
+    if counts:
+        for pair, count in sorted(counts.items(), key=lambda item: (-int(item[1]), item[0])):
+            lines.append(f"- {pair}: {count}")
+    else:
+        lines.append("- None")
+    lines.extend(["", "## Candidates", ""])
+    for candidate in (report.get("candidates") or [])[:120]:
+        lines.append(
+            "- {platform} / {role}: {company} - {title} {url}".format(
+                platform=candidate.get("platform") or "Unknown",
+                role=candidate.get("role_family") or "Other",
+                company=candidate.get("company") or "Unknown company",
+                title=candidate.get("title") or "Unknown title",
+                url=candidate.get("apply_url") or candidate.get("short_apply_url") or "",
+            ).rstrip()
+        )
+    lines.extend(["", "## Next", "", f"`{report.get('next_command')}`"])
+    return "\n".join(lines) + "\n"
+
+
 def render_candidate_discovery_markdown(report: dict[str, Any]) -> str:
     lines = [
         "# Candidate Discovery Report",
@@ -8084,6 +8241,23 @@ def _normalize_candidate_observation(candidate: dict[str, Any], source: str) -> 
     return normalized
 
 
+def _candidate_with_role_family(candidate: dict[str, Any]) -> dict[str, Any]:
+    title = str(candidate.get("title") or candidate.get("job_title") or "").strip()
+    description = str(candidate.get("description") or candidate.get("summary") or "").strip()
+    role_family = str(candidate.get("role_family") or "").strip()
+    if role_family:
+        return dict(candidate)
+    return {**candidate, "role_family": _infer_role_family(" ".join([title, description]))}
+
+
+def _candidate_platform_role_pair(candidate: dict[str, Any]) -> str:
+    platform = str(candidate.get("platform") or infer_platform_from_url(str(candidate.get("apply_url") or "")) or "")
+    role_family = str(candidate.get("role_family") or "").strip()
+    if not platform or not role_family:
+        return ""
+    return f"{platform}::{role_family}"
+
+
 def _application_collection_gaps(
     platforms: dict[str, dict[str, Any]],
     position_target: int,
@@ -8103,9 +8277,17 @@ def _infer_role_family(title: str) -> str:
     engineering_signal = _title_has_engineering_signal(text)
     if "site reliability" in text or re.search(r"\bsre\b", text) or "reliability engineer" in text:
         return "Site Reliability"
+    if (
+        "devops" in text
+        or "cloud engineer" in text
+        or "cloud infrastructure" in text
+        or "cloud operations" in text
+        or "cloud ops" in text
+    ):
+        return "Cloud DevOps"
     if engineering_signal and any(term in text for term in ["platform", "infrastructure", "kubernetes", "ci cd"]):
         return "Platform Infrastructure"
-    if "devops" in text or (engineering_signal and "cloud" in text):
+    if engineering_signal and "cloud" in text:
         return "Cloud DevOps"
     if any(term in text for term in ["backend", "api", "software engineer"]):
         return "Software Backend"

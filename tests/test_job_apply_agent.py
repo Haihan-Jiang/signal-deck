@@ -80,6 +80,7 @@ from job_apply_agent.core import (
     run_synthetic_browser_action_execution,
     run_pipeline,
     score_job,
+    select_candidate_topup,
     shorten_apply_url,
     write_answer_gap_report,
     write_apply_run_audit,
@@ -88,6 +89,7 @@ from job_apply_agent.core import (
     write_browser_action_manifest,
     write_candidate_observation_report,
     write_candidate_discovery_report,
+    write_candidate_topup_selection_report,
     write_closed_posting_preflight,
     write_collection_plan,
     write_question_export,
@@ -2781,6 +2783,104 @@ class JobApplyAgentTests(unittest.TestCase):
                 "https://job-boards.greenhouse.io/example/jobs/123",
             )
 
+    def test_select_candidate_topup_prioritizes_coverage_shortfalls(self) -> None:
+        observed = [
+            {
+                "platform": "Lever",
+                "title": "DevOps Engineer",
+                "apply_url": "https://jobs.lever.co/example/observed",
+            }
+        ]
+        closed = {
+            "jobs": [
+                {
+                    "key": "url:https://jobs.ashbyhq.com/example/closed",
+                    "status": "CLOSED",
+                    "reason": "HTTP 404 Not Found",
+                }
+            ]
+        }
+        candidates = [
+            {
+                "platform": "Lever",
+                "title": "DevOps Engineer",
+                "role_family": "Cloud DevOps",
+                "apply_url": "https://jobs.lever.co/example/observed",
+            },
+            {
+                "platform": "Lever",
+                "title": "Senior DevOps Engineer",
+                "role_family": "Cloud DevOps",
+                "apply_url": "https://jobs.lever.co/example/devops-1",
+            },
+            {
+                "platform": "Lever",
+                "title": "Cloud Infrastructure Engineer",
+                "role_family": "Cloud DevOps",
+                "apply_url": "https://jobs.lever.co/example/devops-2",
+            },
+            {
+                "platform": "Ashby",
+                "title": "Site Reliability Engineer",
+                "role_family": "Site Reliability",
+                "apply_url": "https://jobs.ashbyhq.com/example/sre",
+            },
+            {
+                "platform": "Ashby",
+                "title": "Backend Engineer",
+                "role_family": "Software Backend",
+                "apply_url": "https://jobs.ashbyhq.com/example/backend",
+            },
+            {
+                "platform": "Ashby",
+                "title": "Closed SRE",
+                "role_family": "Site Reliability",
+                "apply_url": "https://jobs.ashbyhq.com/example/closed",
+            },
+        ]
+        gate = {
+            "real_platform_role_shortfalls": {
+                "Lever::Cloud DevOps": 98,
+                "Ashby::Site Reliability": 87,
+            }
+        }
+
+        report = select_candidate_topup(
+            candidates,
+            gate,
+            observed_candidates=observed,
+            closed_jobs=closed,
+            limit=3,
+            per_pair_limit=2,
+        )
+
+        self.assertEqual(report["selected_count"], 3)
+        self.assertEqual(report["per_pair_counts"]["Lever::Cloud DevOps"], 2)
+        self.assertEqual(report["per_pair_counts"]["Ashby::Site Reliability"], 1)
+        urls = {candidate["apply_url"] for candidate in report["candidates"]}
+        self.assertNotIn("https://jobs.lever.co/example/observed", urls)
+        self.assertNotIn("https://jobs.ashbyhq.com/example/backend", urls)
+        self.assertNotIn("https://jobs.ashbyhq.com/example/closed", urls)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            json_output = Path(temp_dir) / "topup.json"
+            markdown_output = Path(temp_dir) / "topup.md"
+            written = write_candidate_topup_selection_report(
+                candidates,
+                gate,
+                observed,
+                closed,
+                json_output,
+                markdown_output,
+                limit=3,
+                per_pair_limit=2,
+            )
+
+            self.assertEqual(written["selected_count"], 3)
+            self.assertTrue(json_output.exists())
+            self.assertTrue(markdown_output.exists())
+            self.assertIn("Candidate Top-Up Selection", markdown_output.read_text())
+
     def test_import_candidate_observations_adds_research_positions(self) -> None:
         candidates = [
             {
@@ -2814,6 +2914,26 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(research["positions_observed_total"], 1)
             self.assertEqual(research["platforms"]["Lever"]["positions_observed"], 1)
             self.assertIn("Lever::Software Backend", research["coverage_groups"])
+
+    def test_devops_role_family_beats_platform_description_terms(self) -> None:
+        candidates = [
+            {
+                "company": "Example",
+                "title": "Senior DevOps Engineer",
+                "apply_url": "https://jobs.lever.co/example/devops",
+                "description": "Own cloud infrastructure, platform reliability, Kubernetes, and CI/CD.",
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_path = Path(temp_dir) / "candidates.json"
+            output_path = Path(temp_dir) / "observed_candidates.jsonl"
+            input_path.write_text(json.dumps({"candidates": candidates}), encoding="utf-8")
+
+            import_candidate_observations(input_path, output_path, source="test")
+            rows = load_candidate_rows(output_path)
+
+            self.assertEqual(rows[0]["role_family"], "Cloud DevOps")
 
     def test_application_research_ignores_closed_job_registry(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

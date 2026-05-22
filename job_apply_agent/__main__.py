@@ -30,6 +30,7 @@ from .core import (
     write_browser_action_manifest,
     write_candidate_observation_report,
     write_candidate_discovery_report,
+    write_candidate_topup_selection_report,
     write_browser_dom_harness,
     write_closed_posting_preflight,
     write_collection_plan,
@@ -87,6 +88,8 @@ DEFAULT_COLLECTION_PLAN_JSON = Path(__file__).with_name("outbox") / "collection_
 DEFAULT_COLLECTION_PLAN_MARKDOWN = Path(__file__).with_name("outbox") / "collection_plan_latest.md"
 DEFAULT_DISCOVERED_CANDIDATES_JSON = Path(__file__).with_name("outbox") / "discovered_candidates_latest.json"
 DEFAULT_DISCOVERED_CANDIDATES_MARKDOWN = Path(__file__).with_name("outbox") / "discovered_candidates_latest.md"
+DEFAULT_TOPUP_CANDIDATES_JSON = Path(__file__).with_name("outbox") / "topup_candidates_latest.json"
+DEFAULT_TOPUP_CANDIDATES_MARKDOWN = Path(__file__).with_name("outbox") / "topup_candidates_latest.md"
 DEFAULT_OBSERVED_CANDIDATES = Path(__file__).with_name("outbox") / "observed_candidates.jsonl"
 DEFAULT_CANDIDATE_OBSERVATION_JSON = Path(__file__).with_name("outbox") / "candidate_observation_latest.json"
 DEFAULT_CANDIDATE_OBSERVATION_MARKDOWN = Path(__file__).with_name("outbox") / "candidate_observation_latest.md"
@@ -472,6 +475,19 @@ def main() -> int:
         help="append a fresh observation even when this job was already recorded",
     )
 
+    select_topup_parser = subparsers.add_parser(
+        "select-topup-candidates",
+        help="select unobserved candidates that best reduce current platform-role coverage gaps",
+    )
+    select_topup_parser.add_argument("--candidates", required=True)
+    select_topup_parser.add_argument("--coverage-gate-json", default=str(DEFAULT_COVERAGE_GATE_JSON))
+    select_topup_parser.add_argument("--observed-candidates", default=str(DEFAULT_OBSERVED_CANDIDATES))
+    select_topup_parser.add_argument("--closed-jobs", default=str(DEFAULT_CLOSED_JOBS))
+    select_topup_parser.add_argument("--limit", type=int, default=100)
+    select_topup_parser.add_argument("--per-pair-limit", type=int, default=35)
+    select_topup_parser.add_argument("--json-output", default=str(DEFAULT_TOPUP_CANDIDATES_JSON))
+    select_topup_parser.add_argument("--markdown-output", default=str(DEFAULT_TOPUP_CANDIDATES_MARKDOWN))
+
     export_questions_parser = subparsers.add_parser(
         "export-questions",
         help="write an Excel question workbook and HTML dashboard from latest research reports",
@@ -563,6 +579,33 @@ def main() -> int:
         print(f"Observed open: {report.get('observed_count', 0)}")
         print(f"Closed: {report.get('closed_count', 0)}")
         print(f"Uncertain: {report.get('uncertain_count', 0)}")
+        return 0
+
+    if args.command == "select-topup-candidates":
+        candidates = load_candidate_rows(args.candidates)
+        coverage_gate = json.loads(Path(args.coverage_gate_json).read_text(encoding="utf-8"))
+        observed_candidates = (
+            load_candidate_rows(args.observed_candidates)
+            if Path(args.observed_candidates).exists()
+            else []
+        )
+        closed_jobs = load_closed_jobs(args.closed_jobs) if Path(args.closed_jobs).exists() else None
+        report = write_candidate_topup_selection_report(
+            candidates,
+            coverage_gate,
+            observed_candidates,
+            closed_jobs,
+            args.json_output,
+            args.markdown_output,
+            limit=args.limit,
+            per_pair_limit=args.per_pair_limit,
+        )
+        print(f"Wrote top-up candidate JSON to {args.json_output}")
+        print(f"Wrote top-up candidate Markdown to {args.markdown_output}")
+        print(f"Candidates considered: {report.get('candidate_count', 0)}")
+        print(f"Selected: {report.get('selected_count', 0)}")
+        for pair, count in sorted((report.get("per_pair_counts") or {}).items()):
+            print(f"{pair}: {count}")
         return 0
 
     if args.command == "export-questions":
