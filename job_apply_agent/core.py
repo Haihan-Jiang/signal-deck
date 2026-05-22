@@ -3446,6 +3446,7 @@ def discover_candidates_from_collection_plan(
     timeout: float = 15.0,
     seed_candidates: list[dict[str, Any]] | None = None,
     board_fetch_limit: int = 20,
+    max_rate_limit_errors_per_task: int = 2,
     fetcher: Any | None = None,
 ) -> dict[str, Any]:
     fetch_page = fetcher or fetch_live_page_text
@@ -3460,9 +3461,12 @@ def discover_candidates_from_collection_plan(
     search_page_count = 0
     board_fetch_count = 0
     board_candidate_count = 0
+    direct_seed_candidate_count = 0
+    rate_limited_task_count = 0
 
     for task in tasks:
         task_candidates = 0
+        task_rate_limit_errors = 0
         search_urls = _candidate_discovery_search_urls(task)[: max(search_pages_per_task, 0)]
         for search_url in search_urls:
             if task_candidates >= max(per_task_limit, 0):
@@ -3479,6 +3483,25 @@ def discover_candidates_from_collection_plan(
                         "error": str(exc),
                     }
                 )
+                if _is_rate_limit_error(exc):
+                    task_rate_limit_errors += 1
+                    if (
+                        max_rate_limit_errors_per_task >= 0
+                        and task_rate_limit_errors >= max_rate_limit_errors_per_task
+                    ):
+                        rate_limited_task_count += 1
+                        errors.append(
+                            {
+                                "platform": task.get("platform"),
+                                "role_family": task.get("role_family"),
+                                "search_url": search_url,
+                                "error": (
+                                    "Search rate limit reached; stopped remaining search pages "
+                                    "for this task and continued with ATS board expansion"
+                                ),
+                            }
+                        )
+                        break
                 continue
 
             for link in _extract_candidate_links_from_search_html(
@@ -3498,6 +3521,17 @@ def discover_candidates_from_collection_plan(
                     break
 
     if seed_candidates:
+        for seed_candidate in seed_candidates:
+            candidate = _candidate_from_seed_candidate(seed_candidate, tasks)
+            if candidate is None:
+                continue
+            key = job_registry_key(candidate)
+            if not key or key in seen_keys:
+                continue
+            candidates.append(candidate)
+            seen_keys.add(key)
+            direct_seed_candidate_count += 1
+
         board_report = _discover_candidates_from_seed_boards(
             seed_candidates,
             tasks,
@@ -3522,7 +3556,9 @@ def discover_candidates_from_collection_plan(
         "collection_plan_generated_at": collection_plan.get("generated_at"),
         "task_count": len(tasks),
         "search_page_count": search_page_count,
+        "rate_limited_task_count": rate_limited_task_count,
         "seed_candidate_count": len(seed_candidates or []),
+        "direct_seed_candidate_count": direct_seed_candidate_count,
         "board_fetch_count": board_fetch_count,
         "board_candidate_count": board_candidate_count,
         "candidate_count": len(candidates),
@@ -3562,6 +3598,7 @@ def write_candidate_discovery_report(
     timeout: float = 15.0,
     seed_candidates: list[dict[str, Any]] | None = None,
     board_fetch_limit: int = 20,
+    max_rate_limit_errors_per_task: int = 2,
     fetcher: Any | None = None,
 ) -> dict[str, Any]:
     report = discover_candidates_from_collection_plan(
@@ -3572,6 +3609,7 @@ def write_candidate_discovery_report(
         timeout=timeout,
         seed_candidates=seed_candidates,
         board_fetch_limit=board_fetch_limit,
+        max_rate_limit_errors_per_task=max_rate_limit_errors_per_task,
         fetcher=fetcher,
     )
     json_path = Path(json_output)
@@ -3747,7 +3785,9 @@ def render_candidate_discovery_markdown(report: dict[str, Any]) -> str:
         f"Generated: {report.get('generated_at')}",
         f"Tasks searched: {report.get('task_count', 0)}",
         f"Search pages fetched: {report.get('search_page_count', 0)}",
+        f"Rate-limited tasks: {report.get('rate_limited_task_count', 0)}",
         f"Seed candidates: {report.get('seed_candidate_count', 0)}",
+        f"Direct seed candidates: {report.get('direct_seed_candidate_count', 0)}",
         f"ATS boards fetched: {report.get('board_fetch_count', 0)}",
         f"Board candidates discovered: {report.get('board_candidate_count', 0)}",
         f"Candidates discovered: {report.get('candidate_count', 0)}",
@@ -7887,6 +7927,52 @@ def _fetch_seed_board_candidates(
     if platform == "Ashby":
         return _fetch_ashby_board_candidates(seed, timeout, fetcher)
     return []
+
+
+def _candidate_from_seed_candidate(
+    seed_candidate: dict[str, Any],
+    tasks: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    apply_url = _normalize_candidate_apply_url(
+        str(
+            seed_candidate.get("apply_url")
+            or seed_candidate.get("short_apply_url")
+            or seed_candidate.get("url")
+            or seed_candidate.get("job_url")
+            or ""
+        )
+    )
+    if not apply_url:
+        return None
+    title = str(seed_candidate.get("title") or seed_candidate.get("job_title") or "").strip()
+    description = str(seed_candidate.get("description") or seed_candidate.get("summary") or "").strip()
+    platform = (
+        str(seed_candidate.get("platform") or infer_platform_from_url(apply_url) or "").strip()
+        or "Unknown"
+    )
+    candidate = {
+        "status": "DISCOVERED_CANDIDATE",
+        "platform": platform,
+        "company": seed_candidate.get("company") or seed_candidate.get("company_name") or _company_from_apply_url(apply_url),
+        "title": title,
+        "job_id": seed_candidate.get("job_id") or extract_linkedin_job_id(apply_url),
+        "apply_url": apply_url,
+        "location": seed_candidate.get("location"),
+        "description": description[:6000],
+        "role_family": seed_candidate.get("role_family") or _infer_role_family(" ".join([title, description])),
+        "source": "direct_seed_candidate",
+    }
+    match = _matching_collection_task(candidate, tasks)
+    if match is None:
+        return None
+    candidate["role_family"] = match.get("role_family") or candidate.get("role_family")
+    candidate["discovery_query"] = match.get("query")
+    return {key: value for key, value in candidate.items() if value not in {None, ""}}
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "429" in text or "too many requests" in text or "rate limit" in text
 
 
 def _fetch_greenhouse_board_candidates(

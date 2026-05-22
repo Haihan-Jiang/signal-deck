@@ -2699,6 +2699,42 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["candidates"][0]["apply_url"], "https://www.linkedin.com/jobs/view/4410000001/")
         self.assertEqual(report["candidates"][0]["role_family"], "Site Reliability")
 
+    def test_discover_candidates_stops_search_pages_after_rate_limit(self) -> None:
+        plan = {
+            "tasks": [
+                {
+                    "platform": "Lever",
+                    "role_family": "Site Reliability",
+                    "query": "site reliability engineer",
+                    "search_urls": [
+                        "https://search.example/one",
+                        "https://search.example/two",
+                        "https://search.example/three",
+                    ],
+                }
+            ]
+        }
+        fetched_urls: list[str] = []
+
+        def fake_fetcher(url: str, timeout: float) -> str:
+            fetched_urls.append(url)
+            raise Exception("HTTP Error 429: Too Many Requests")
+
+        report = discover_candidates_from_collection_plan(
+            plan,
+            max_tasks=1,
+            per_task_limit=5,
+            search_pages_per_task=3,
+            fetcher=fake_fetcher,
+            max_rate_limit_errors_per_task=2,
+        )
+
+        self.assertEqual(len(fetched_urls), 2)
+        self.assertEqual(report["search_page_count"], 2)
+        self.assertEqual(report["rate_limited_task_count"], 1)
+        self.assertEqual(report["candidate_count"], 0)
+        self.assertIn("Rate-limited tasks: 1", render_candidate_discovery_markdown(report))
+
     def test_discover_candidates_expands_seed_ats_boards(self) -> None:
         plan = {
             "generated_at": "2026-05-22T00:00:00+00:00",
@@ -2804,6 +2840,48 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["per_platform_counts"]["Greenhouse"], 1)
         markdown = render_candidate_discovery_markdown(report)
         self.assertIn("ATS boards fetched: 3", markdown)
+
+    def test_discover_candidates_keeps_matching_direct_seed_jobs(self) -> None:
+        plan = {
+            "tasks": [
+                {
+                    "platform": "Lever",
+                    "role_family": "Site Reliability",
+                    "query": "site reliability engineer",
+                }
+            ]
+        }
+        seed_candidates = [
+            {
+                "platform": "Lever",
+                "company": "Example",
+                "title": "Site Reliability Engineer",
+                "apply_url": "https://jobs.lever.co/example/123",
+                "role_family": "Site Reliability",
+            },
+            {
+                "platform": "Lever",
+                "company": "Example",
+                "title": "Product Manager",
+                "apply_url": "https://jobs.lever.co/example/456",
+                "role_family": "Other",
+            },
+        ]
+
+        report = discover_candidates_from_collection_plan(
+            plan,
+            max_tasks=1,
+            per_task_limit=5,
+            search_pages_per_task=0,
+            seed_candidates=seed_candidates,
+            board_fetch_limit=0,
+        )
+
+        self.assertEqual(report["direct_seed_candidate_count"], 1)
+        self.assertEqual(report["candidate_count"], 1)
+        self.assertEqual(report["candidates"][0]["apply_url"], "https://jobs.lever.co/example/123")
+        self.assertEqual(report["candidates"][0]["source"], "direct_seed_candidate")
+        self.assertIn("Direct seed candidates: 1", render_candidate_discovery_markdown(report))
 
     def test_write_candidate_discovery_report_outputs_files(self) -> None:
         plan = {

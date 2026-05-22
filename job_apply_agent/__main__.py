@@ -444,6 +444,7 @@ def main() -> int:
         help="existing candidate JSON/JSONL files whose ATS company boards should be expanded",
     )
     discover_candidates_parser.add_argument("--board-fetch-limit", type=int, default=20)
+    discover_candidates_parser.add_argument("--max-rate-limit-errors-per-task", type=int, default=2)
     discover_candidates_parser.add_argument("--timeout", type=float, default=15.0)
     discover_candidates_parser.add_argument("--json-output", default=str(DEFAULT_DISCOVERED_CANDIDATES_JSON))
     discover_candidates_parser.add_argument("--markdown-output", default=str(DEFAULT_DISCOVERED_CANDIDATES_MARKDOWN))
@@ -1014,12 +1015,15 @@ def main() -> int:
             timeout=args.timeout,
             seed_candidates=seed_candidates,
             board_fetch_limit=args.board_fetch_limit,
+            max_rate_limit_errors_per_task=args.max_rate_limit_errors_per_task,
         )
         print(f"Wrote discovered candidates JSON to {args.json_output}")
         print(f"Wrote discovered candidates Markdown to {args.markdown_output}")
         print(f"Tasks searched: {report.get('task_count', 0)}")
         print(f"Search pages fetched: {report.get('search_page_count', 0)}")
+        print(f"Rate-limited tasks: {report.get('rate_limited_task_count', 0)}")
         print(f"Seed candidates: {report.get('seed_candidate_count', 0)}")
+        print(f"Direct seed candidates: {report.get('direct_seed_candidate_count', 0)}")
         print(f"ATS boards fetched: {report.get('board_fetch_count', 0)}")
         print(f"Board candidates: {report.get('board_candidate_count', 0)}")
         print(f"Candidates: {report.get('candidate_count', 0)}")
