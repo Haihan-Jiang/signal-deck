@@ -25,6 +25,7 @@ from .core import (
     write_apply_run_audit,
     write_application_playbook,
     write_application_research_report,
+    write_browser_action_manifest,
     write_form_fill_plan,
     write_learning_task_template,
     write_position_readiness_report,
@@ -49,6 +50,8 @@ DEFAULT_FILL_PLAN_JSON = Path(__file__).with_name("outbox") / "form_fill_plan_la
 DEFAULT_FILL_PLAN_MARKDOWN = Path(__file__).with_name("outbox") / "form_fill_plan_latest.md"
 DEFAULT_APPLY_AUDIT_JSON = Path(__file__).with_name("outbox") / "apply_run_audit_latest.json"
 DEFAULT_APPLY_AUDIT_MARKDOWN = Path(__file__).with_name("outbox") / "apply_run_audit_latest.md"
+DEFAULT_BROWSER_ACTIONS_JSON = Path(__file__).with_name("outbox") / "browser_action_manifest_latest.json"
+DEFAULT_BROWSER_ACTIONS_MARKDOWN = Path(__file__).with_name("outbox") / "browser_action_manifest_latest.md"
 DEFAULT_LEARNING_TASKS_JSON = Path(__file__).with_name("outbox") / "learning_tasks_latest.json"
 DEFAULT_LEARNING_TASKS_MARKDOWN = Path(__file__).with_name("outbox") / "learning_tasks_latest.md"
 DEFAULT_SYNTHETIC_JSON = Path(__file__).with_name("outbox") / "synthetic_100_run_latest.json"
@@ -228,6 +231,18 @@ def main() -> int:
     apply_audit_parser.add_argument("--closed-jobs", default=str(DEFAULT_CLOSED_JOBS))
     apply_audit_parser.add_argument("--json-output", default=str(DEFAULT_APPLY_AUDIT_JSON))
     apply_audit_parser.add_argument("--markdown-output", default=str(DEFAULT_APPLY_AUDIT_MARKDOWN))
+
+    browser_actions_parser = subparsers.add_parser(
+        "browser-actions",
+        help="turn a fill plan into a guarded browser action manifest",
+    )
+    browser_actions_parser.add_argument("--plan", default=str(DEFAULT_FILL_PLAN_JSON))
+    browser_actions_parser.add_argument("--page-text", default="")
+    browser_actions_parser.add_argument("--page-text-file", default=None)
+    browser_actions_parser.add_argument("--closed-jobs", default=str(DEFAULT_CLOSED_JOBS))
+    browser_actions_parser.add_argument("--include-values", action="store_true")
+    browser_actions_parser.add_argument("--json-output", default=str(DEFAULT_BROWSER_ACTIONS_JSON))
+    browser_actions_parser.add_argument("--markdown-output", default=str(DEFAULT_BROWSER_ACTIONS_MARKDOWN))
 
     learning_template_parser = subparsers.add_parser(
         "learning-template",
@@ -455,6 +470,27 @@ def main() -> int:
         print(f"Status: {audit.get('status')}")
         print(f"Autofill allowed: {str(bool(audit.get('autofill_allowed'))).lower()}")
         print(f"Would submit: {str(bool(audit.get('would_submit'))).lower()}")
+        return 0
+
+    if args.command == "browser-actions":
+        page_text = args.page_text
+        if args.page_text_file:
+            page_text = Path(args.page_text_file).read_text(encoding="utf-8")
+        closed_jobs = load_closed_jobs(args.closed_jobs)
+        manifest = write_browser_action_manifest(
+            args.plan,
+            args.json_output,
+            args.markdown_output,
+            page_text=page_text,
+            closed_jobs=closed_jobs,
+            include_values=args.include_values,
+        )
+        print(f"Wrote browser action manifest JSON to {args.json_output}")
+        print(f"Wrote browser action manifest Markdown to {args.markdown_output}")
+        print(f"Status: {manifest.get('status')}")
+        print(f"Browser actions: {manifest.get('action_count', 0)}")
+        print(f"Stop actions: {manifest.get('stop_action_count', 0)}")
+        print(f"Would submit: {str(bool(manifest.get('would_submit'))).lower()}")
         return 0
 
     if args.command == "learning-template":

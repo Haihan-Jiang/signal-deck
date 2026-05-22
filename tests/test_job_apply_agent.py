@@ -13,6 +13,7 @@ from job_apply_agent.core import (
     build_application_draft,
     build_application_playbook,
     build_application_research,
+    build_browser_action_manifest,
     build_browser_review_record,
     build_form_fill_plan,
     build_learning_task_template,
@@ -40,6 +41,7 @@ from job_apply_agent.core import (
     render_apply_run_audit_markdown,
     render_application_playbook_markdown,
     render_application_research_markdown,
+    render_browser_action_manifest_markdown,
     render_form_fill_plan_markdown,
     render_learning_task_template_markdown,
     render_position_readiness_markdown,
@@ -54,6 +56,7 @@ from job_apply_agent.core import (
     write_apply_run_audit,
     write_application_playbook,
     write_application_research_report,
+    write_browser_action_manifest,
     write_form_fill_plan,
     write_learning_task_template,
     write_position_readiness_report,
@@ -1128,6 +1131,151 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(json_output.exists())
             self.assertTrue(markdown_output.exists())
             self.assertIn("Apply Run Audit", markdown_output.read_text())
+
+    def test_browser_action_manifest_builds_safe_actions_and_stops(self) -> None:
+        plan = {
+            "title": "Application",
+            "url": "https://job-boards.greenhouse.io/example/jobs/1",
+            "platform": "Greenhouse",
+            "steps": [
+                {
+                    "field_index": 1,
+                    "item_type": "field",
+                    "tag": "INPUT",
+                    "type": "email",
+                    "name": "email",
+                    "id": "email",
+                    "action": "fill",
+                    "status": "ready",
+                    "label": "Email",
+                    "required": True,
+                    "category": "profile_identity",
+                    "value_source": "profile.email",
+                },
+                {
+                    "field_index": 2,
+                    "item_type": "field",
+                    "tag": "INPUT",
+                    "type": "file",
+                    "name": "resume",
+                    "action": "upload",
+                    "status": "ready",
+                    "label": "Resume",
+                    "required": True,
+                    "category": "resume_upload",
+                    "value_source": "profile.question_answers.resume_path",
+                },
+                {
+                    "field_index": 3,
+                    "item_type": "button",
+                    "tag": "BUTTON",
+                    "action": "submit_gate",
+                    "status": "final_submit_confirmation",
+                    "label": "Submit application",
+                    "category": "final_submit",
+                },
+                {
+                    "field_index": 4,
+                    "item_type": "field",
+                    "tag": "SELECT",
+                    "action": "manual_sensitive",
+                    "status": "sensitive_not_stored",
+                    "label": "Race/Ethnicity",
+                    "category": "protected_class",
+                },
+            ],
+        }
+
+        manifest = build_browser_action_manifest(plan)
+
+        self.assertEqual(manifest["status"], "autofill_ready_with_supervised_gates")
+        self.assertFalse(manifest["real_platform_submission"])
+        self.assertFalse(manifest["final_submit_allowed"])
+        self.assertFalse(manifest["would_submit"])
+        self.assertEqual(manifest["action_count"], 2)
+        self.assertEqual(manifest["stop_action_count"], 2)
+        actions = manifest["browser_actions"]
+        self.assertEqual(actions[0]["browser_action"], "fill")
+        self.assertIn(
+            "#email",
+            [candidate["selector"] for candidate in actions[0]["selector_candidates"]],
+        )
+        self.assertEqual(actions[1]["browser_action"], "upload_file")
+        self.assertTrue(actions[1]["requires_file"])
+        self.assertIn(
+            'input[name="resume"]',
+            [candidate["selector"] for candidate in actions[1]["selector_candidates"]],
+        )
+        self.assertNotIn(
+            "submit_gate",
+            [action["plan_action"] for action in manifest["browser_actions"]],
+        )
+        markdown = render_browser_action_manifest_markdown(manifest)
+        self.assertIn("Browser Action Manifest", markdown)
+        self.assertIn("final_submit_confirmation", markdown)
+
+    def test_browser_action_manifest_skips_closed_page_text(self) -> None:
+        plan = {
+            "title": "Closed role",
+            "url": "https://www.linkedin.com/jobs/view/123/",
+            "platform": "LinkedIn",
+            "steps": [
+                {
+                    "field_index": 1,
+                    "item_type": "field",
+                    "tag": "INPUT",
+                    "type": "email",
+                    "id": "email",
+                    "action": "fill",
+                    "status": "ready",
+                    "label": "Email",
+                    "category": "profile_identity",
+                }
+            ],
+        }
+
+        manifest = build_browser_action_manifest(
+            plan,
+            page_text="No longer accepting applications",
+        )
+
+        self.assertEqual(manifest["status"], "closed_skip")
+        self.assertEqual(manifest["action_count"], 0)
+        self.assertEqual(manifest["stop_action_count"], 1)
+        self.assertEqual(manifest["stop_actions"][0]["status"], "closed_skip")
+
+    def test_write_browser_action_manifest_outputs_reports(self) -> None:
+        plan = {
+            "title": "Application",
+            "url": "https://jobs.ashbyhq.com/example/1",
+            "platform": "Ashby",
+            "steps": [
+                {
+                    "field_index": 1,
+                    "item_type": "field",
+                    "tag": "INPUT",
+                    "type": "text",
+                    "name": "name",
+                    "action": "fill",
+                    "status": "ready",
+                    "label": "Legal Name",
+                    "category": "profile_identity",
+                    "value_source": "profile.name",
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plan_path = Path(temp_dir) / "plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            json_output = Path(temp_dir) / "manifest.json"
+            markdown_output = Path(temp_dir) / "manifest.md"
+
+            manifest = write_browser_action_manifest(plan_path, json_output, markdown_output)
+
+            self.assertEqual(manifest["action_count"], 1)
+            self.assertTrue(json_output.exists())
+            self.assertTrue(markdown_output.exists())
+            self.assertIn("Browser Action Manifest", markdown_output.read_text())
 
     def test_offline_apply_executor_runs_ready_steps_then_stops(self) -> None:
         plan = {

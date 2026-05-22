@@ -245,6 +245,26 @@ The audit says exactly which fields may be automated, which steps stop the run,
 whether the page should be skipped as closed, and confirms that final submit is
 not allowed without explicit approval.
 
+To hand a reviewed plan to a browser executor, generate a guarded browser action
+manifest:
+
+```bash
+python3 -m job_apply_agent browser-actions \
+  --plan job_apply_agent/outbox/ramp_fill_plan_latest.json
+```
+
+This writes:
+
+```text
+job_apply_agent/outbox/browser_action_manifest_latest.json
+job_apply_agent/outbox/browser_action_manifest_latest.md
+```
+
+The manifest contains selector candidates and value sources for ready
+fill/upload/generated-text actions only. Closed postings produce zero browser
+actions, and CAPTCHA, sensitive questions, manual review, and final submit stay
+as stop actions.
+
 For end-to-end safety testing with fake candidate data, use the synthetic
 offline harness. It creates fake LinkedIn/Ashby/Greenhouse/Lever-style forms,
 checks closed-posting text, builds fill plans, and summarizes blockers without

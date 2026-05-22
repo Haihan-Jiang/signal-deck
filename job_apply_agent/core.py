@@ -1402,6 +1402,87 @@ def write_apply_run_audit(
     return audit
 
 
+def build_browser_action_manifest(
+    plan: dict[str, Any],
+    page_text: str = "",
+    closed_jobs: dict[str, Any] | None = None,
+    include_values: bool = False,
+) -> dict[str, Any]:
+    audit = build_apply_run_audit(plan, page_text=page_text, closed_jobs=closed_jobs)
+    steps = [step for step in plan.get("steps", []) if isinstance(step, dict)]
+    browser_actions = [
+        _browser_action_for_step(step, include_values=include_values)
+        for step in steps
+        if step.get("status") == "ready"
+    ]
+    if audit.get("status") == "closed_skip":
+        browser_actions = []
+
+    stop_actions = [
+        {
+            **stop,
+            "safe_to_execute": False,
+            "browser_action": "stop",
+        }
+        for stop in audit.get("stop_steps", [])
+        if isinstance(stop, dict)
+    ]
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "browser_action_manifest",
+        "title": audit.get("title"),
+        "url": audit.get("url"),
+        "platform": audit.get("platform"),
+        "status": audit.get("status"),
+        "closed_reason": audit.get("closed_reason"),
+        "real_platform_submission": False,
+        "autofill_allowed": audit.get("autofill_allowed"),
+        "final_submit_allowed": False,
+        "would_submit": False,
+        "include_values": include_values,
+        "action_count": len(browser_actions),
+        "stop_action_count": len(stop_actions),
+        "browser_actions": browser_actions,
+        "stop_actions": stop_actions,
+        "policy": audit.get("policy", {}),
+        "audit": {
+            "status": audit.get("status"),
+            "automation_step_count": audit.get("automation_step_count"),
+            "stop_step_count": audit.get("stop_step_count"),
+            "missing_step_count": audit.get("missing_step_count"),
+            "manual_gate_count": audit.get("manual_gate_count"),
+            "next_action": audit.get("next_action"),
+        },
+    }
+
+
+def write_browser_action_manifest(
+    plan_path: str | Path,
+    json_output: str | Path,
+    markdown_output: str | Path,
+    page_text: str = "",
+    closed_jobs: dict[str, Any] | None = None,
+    include_values: bool = False,
+) -> dict[str, Any]:
+    plan = _read_json_file(Path(plan_path))
+    if not isinstance(plan, dict):
+        raise ValueError("plan must be a JSON object")
+    manifest = build_browser_action_manifest(
+        plan,
+        page_text=page_text,
+        closed_jobs=closed_jobs,
+        include_values=include_values,
+    )
+    manifest["plan_file"] = Path(plan_path).name
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(manifest, ensure_ascii=True, indent=2), encoding="utf-8")
+    markdown_path.write_text(render_browser_action_manifest_markdown(manifest), encoding="utf-8")
+    return manifest
+
+
 def execute_form_plan_offline(
     plan: dict[str, Any],
     page_text: str = "",
@@ -2477,6 +2558,59 @@ def render_apply_run_audit_markdown(audit: dict[str, Any]) -> str:
         lines.append("- None")
     lines.extend(["", "## Policy", ""])
     for key, value in sorted((audit.get("policy") or {}).items()):
+        lines.append(f"- {key}: {str(bool(value)).lower()}")
+    return "\n".join(lines) + "\n"
+
+
+def render_browser_action_manifest_markdown(manifest: dict[str, Any]) -> str:
+    lines = [
+        "# Browser Action Manifest",
+        "",
+        f"Generated: {manifest.get('generated_at')}",
+        f"Plan: {manifest.get('plan_file', 'unknown')}",
+        f"Title: {manifest.get('title')}",
+        f"URL: {manifest.get('url')}",
+        f"Platform: {manifest.get('platform')}",
+        f"Status: {manifest.get('status')}",
+        f"Autofill allowed: {str(bool(manifest.get('autofill_allowed'))).lower()}",
+        f"Final submit allowed: {str(bool(manifest.get('final_submit_allowed'))).lower()}",
+        f"Would submit: {str(bool(manifest.get('would_submit'))).lower()}",
+        f"Browser actions: {manifest.get('action_count', 0)}",
+        f"Stop actions: {manifest.get('stop_action_count', 0)}",
+    ]
+    if manifest.get("closed_reason"):
+        lines.append(f"Closed reason: {manifest.get('closed_reason')}")
+    lines.extend(["", "## Browser Actions", ""])
+    browser_actions = manifest.get("browser_actions", [])
+    if browser_actions:
+        for action in browser_actions[:80]:
+            selectors = action.get("selector_candidates") or []
+            selector = selectors[0].get("selector") if selectors else "no selector"
+            lines.append(
+                "- {browser_action}: `{label}` via `{selector}` ({source})".format(
+                    browser_action=action.get("browser_action"),
+                    label=action.get("label"),
+                    selector=selector,
+                    source=action.get("value_source") or "no value source",
+                )
+            )
+    else:
+        lines.append("- None")
+    lines.extend(["", "## Stop Actions", ""])
+    stop_actions = manifest.get("stop_actions", [])
+    if stop_actions:
+        for action in stop_actions[:80]:
+            lines.append(
+                "- {status}: `{label}` ({handling})".format(
+                    status=action.get("status"),
+                    label=action.get("label"),
+                    handling=action.get("handling"),
+                )
+            )
+    else:
+        lines.append("- None")
+    lines.extend(["", "## Policy", ""])
+    for key, value in sorted((manifest.get("policy") or {}).items()):
         lines.append(f"- {key}: {str(bool(value)).lower()}")
     return "\n".join(lines) + "\n"
 
@@ -4005,6 +4139,99 @@ def _apply_automation_step(step: dict[str, Any]) -> dict[str, Any]:
         "value_source": step.get("value_source"),
         "reason": step.get("reason"),
     }
+
+
+def _browser_action_for_step(step: dict[str, Any], include_values: bool = False) -> dict[str, Any]:
+    original_action = str(step.get("action") or "fill")
+    browser_action = {
+        "upload": "upload_file",
+        "generate": "fill_generated",
+        "answer": "fill",
+        "fill": "fill",
+    }.get(original_action, "fill")
+    action: dict[str, Any] = {
+        "field_index": step.get("field_index"),
+        "item_type": step.get("item_type"),
+        "browser_action": browser_action,
+        "plan_action": original_action,
+        "label": step.get("label"),
+        "category": step.get("category"),
+        "required": bool(step.get("required")),
+        "selector_candidates": _selector_candidates_for_step(step),
+        "value_source": step.get("value_source"),
+        "requires_file": original_action == "upload" or str(step.get("type") or "").lower() == "file",
+        "safe_to_execute": True,
+        "guard": "execute only when the live page is not closed and the selector matches the expected field",
+    }
+    if include_values and "value" in step:
+        action["value"] = step.get("value")
+    return action
+
+
+def _selector_candidates_for_step(step: dict[str, Any]) -> list[dict[str, str]]:
+    candidates: list[dict[str, str]] = []
+    tag = _css_tag_name(step.get("tag"))
+    step_id = _clean_selector_value(step.get("id"))
+    name = _clean_selector_value(step.get("name"))
+    field_type = _clean_selector_value(step.get("type"))
+    label = _clean_selector_value(step.get("label"))
+
+    if step_id:
+        if _is_simple_css_identifier(step_id):
+            candidates.append({"strategy": "css", "selector": f"#{step_id}", "confidence": "high"})
+        candidates.append(
+            {
+                "strategy": "css",
+                "selector": _css_attribute_selector("id", step_id, tag=tag),
+                "confidence": "high",
+            }
+        )
+    if name:
+        candidates.append(
+            {
+                "strategy": "css",
+                "selector": _css_attribute_selector("name", name, tag=tag),
+                "confidence": "high",
+            }
+        )
+    if field_type:
+        candidates.append(
+            {
+                "strategy": "css",
+                "selector": _css_attribute_selector("type", field_type, tag=tag or "input"),
+                "confidence": "medium",
+            }
+        )
+    if label:
+        candidates.append({"strategy": "label_text", "selector": label, "confidence": "medium"})
+    if step.get("field_index") is not None:
+        candidates.append(
+            {
+                "strategy": "field_index",
+                "selector": str(step.get("field_index")),
+                "confidence": "low",
+            }
+        )
+    return candidates
+
+
+def _css_attribute_selector(attribute: str, value: str, tag: str = "") -> str:
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+    prefix = tag if tag else ""
+    return f'{prefix}[{attribute}="{escaped}"]'
+
+
+def _css_tag_name(value: Any) -> str:
+    tag = str(value or "").strip().lower()
+    return tag if re.fullmatch(r"[a-z][a-z0-9-]*", tag) else ""
+
+
+def _clean_selector_value(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _is_simple_css_identifier(value: str) -> bool:
+    return bool(re.fullmatch(r"-?[_a-zA-Z][-_a-zA-Z0-9]*", value))
 
 
 def _apply_stop_step(step: dict[str, Any]) -> dict[str, Any]:
