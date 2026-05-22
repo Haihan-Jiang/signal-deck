@@ -1284,6 +1284,105 @@ def write_form_fill_plan(
     return plan
 
 
+def build_apply_run_audit(
+    plan: dict[str, Any],
+    page_text: str = "",
+    closed_jobs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    url = str(plan.get("url") or "")
+    job_like = {
+        "apply_url": url,
+        "short_apply_url": url,
+        "platform": plan.get("platform"),
+        "title": plan.get("title"),
+        "page_text": page_text,
+    }
+    closed_reason = closed_application_reason(job_like, closed_jobs=closed_jobs)
+    steps = [step for step in plan.get("steps", []) if isinstance(step, dict)]
+    automation_steps = [_apply_automation_step(step) for step in steps if step.get("status") == "ready"]
+    stop_steps = [
+        _apply_stop_step(step)
+        for step in steps
+        if step.get("status") != "ready"
+    ]
+    missing_statuses = {
+        "missing_profile_value",
+        "missing_local_material",
+        "missing_answer",
+        "missing_resume_facts",
+    }
+    missing_steps = [step for step in stop_steps if step.get("status") in missing_statuses]
+    manual_gate_statuses = {
+        "needs_human_review",
+        "manual_security_step",
+        "final_submit_confirmation",
+        "sensitive_not_stored",
+    }
+    manual_gate_steps = [step for step in stop_steps if step.get("status") in manual_gate_statuses]
+    if closed_reason:
+        status = "closed_skip"
+        next_action = "skip this posting and keep it in the closed registry"
+    elif missing_steps:
+        status = "blocked_missing_inputs"
+        next_action = "collect missing profile/material/answer inputs before browser automation"
+    elif manual_gate_steps:
+        status = "autofill_ready_with_supervised_gates"
+        next_action = "autofill ready fields, then stop for supervised gates"
+    else:
+        status = "autofill_ready"
+        next_action = "autofill ready fields and stop before final submit unless explicitly approved"
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "apply_run_audit",
+        "title": plan.get("title"),
+        "url": plan.get("url"),
+        "platform": plan.get("platform"),
+        "status": status,
+        "closed_reason": closed_reason,
+        "real_platform_submission": False,
+        "autofill_allowed": not bool(closed_reason) and not bool(missing_steps),
+        "final_submit_allowed": False,
+        "would_submit": False,
+        "policy": {
+            "fake_data_real_submission_allowed": False,
+            "submit_requires_explicit_approval": True,
+            "stop_on_closed_posting": True,
+            "stop_on_captcha_or_security": True,
+            "do_not_store_protected_class_answers": True,
+        },
+        "step_count": len(steps),
+        "automation_step_count": len(automation_steps),
+        "stop_step_count": len(stop_steps),
+        "missing_step_count": len(missing_steps),
+        "manual_gate_count": len(manual_gate_steps),
+        "status_counts": _count_by(steps, "status"),
+        "automation_steps": automation_steps,
+        "stop_steps": stop_steps,
+        "next_action": next_action,
+    }
+
+
+def write_apply_run_audit(
+    plan_path: str | Path,
+    json_output: str | Path,
+    markdown_output: str | Path,
+    page_text: str = "",
+    closed_jobs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    plan = _read_json_file(Path(plan_path))
+    if not isinstance(plan, dict):
+        raise ValueError("plan must be a JSON object")
+    audit = build_apply_run_audit(plan, page_text=page_text, closed_jobs=closed_jobs)
+    audit["plan_file"] = Path(plan_path).name
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(audit, ensure_ascii=True, indent=2), encoding="utf-8")
+    markdown_path.write_text(render_apply_run_audit_markdown(audit), encoding="utf-8")
+    return audit
+
+
 def build_learning_task_template(readiness_report: dict[str, Any]) -> dict[str, Any]:
     tasks: list[dict[str, Any]] = []
     for task in readiness_report.get("minimal_learning_tasks", []):
@@ -2159,6 +2258,69 @@ def render_form_fill_plan_markdown(plan: dict[str, Any]) -> str:
         )
         if step.get("next_action"):
             lines.append(f"  next: {step.get('next_action')}")
+    return "\n".join(lines) + "\n"
+
+
+def render_apply_run_audit_markdown(audit: dict[str, Any]) -> str:
+    lines = [
+        "# Apply Run Audit",
+        "",
+        f"Generated: {audit.get('generated_at')}",
+        f"Plan: {audit.get('plan_file', 'unknown')}",
+        f"Title: {audit.get('title')}",
+        f"URL: {audit.get('url')}",
+        f"Platform: {audit.get('platform')}",
+        f"Status: {audit.get('status')}",
+        f"Autofill allowed: {str(bool(audit.get('autofill_allowed'))).lower()}",
+        f"Final submit allowed: {str(bool(audit.get('final_submit_allowed'))).lower()}",
+        f"Would submit: {str(bool(audit.get('would_submit'))).lower()}",
+        f"Next action: {audit.get('next_action')}",
+    ]
+    if audit.get("closed_reason"):
+        lines.append(f"Closed reason: {audit.get('closed_reason')}")
+    lines.extend(
+        [
+            "",
+            "## Counts",
+            "",
+            f"- total steps: {audit.get('step_count', 0)}",
+            f"- automation steps: {audit.get('automation_step_count', 0)}",
+            f"- stop steps: {audit.get('stop_step_count', 0)}",
+            f"- missing steps: {audit.get('missing_step_count', 0)}",
+            f"- manual gates: {audit.get('manual_gate_count', 0)}",
+            "",
+            "## Automation Steps",
+            "",
+        ]
+    )
+    automation_steps = audit.get("automation_steps", [])
+    if automation_steps:
+        for step in automation_steps[:80]:
+            lines.append(
+                "- {action}: `{label}` ({source})".format(
+                    action=step.get("action"),
+                    label=step.get("label"),
+                    source=step.get("value_source") or step.get("reason"),
+                )
+            )
+    else:
+        lines.append("- None")
+    lines.extend(["", "## Stop Steps", ""])
+    stop_steps = audit.get("stop_steps", [])
+    if stop_steps:
+        for step in stop_steps[:80]:
+            lines.append(
+                "- {status}: `{label}` ({handling})".format(
+                    status=step.get("status"),
+                    label=step.get("label"),
+                    handling=step.get("handling"),
+                )
+            )
+    else:
+        lines.append("- None")
+    lines.extend(["", "## Policy", ""])
+    for key, value in sorted((audit.get("policy") or {}).items()):
+        lines.append(f"- {key}: {str(bool(value)).lower()}")
     return "\n".join(lines) + "\n"
 
 
@@ -3631,6 +3793,47 @@ def _application_playbook_global_rules(synthetic: dict[str, Any]) -> list[str]:
         )
         rules.append(f"Latest synthetic status counts: {counts}.")
     return rules
+
+
+def _apply_automation_step(step: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "field_index": step.get("field_index"),
+        "item_type": step.get("item_type"),
+        "action": step.get("action"),
+        "label": step.get("label"),
+        "category": step.get("category"),
+        "value_source": step.get("value_source"),
+        "reason": step.get("reason"),
+    }
+
+
+def _apply_stop_step(step: dict[str, Any]) -> dict[str, Any]:
+    status = str(step.get("status") or "unknown")
+    return {
+        "field_index": step.get("field_index"),
+        "item_type": step.get("item_type"),
+        "action": step.get("action"),
+        "label": step.get("label"),
+        "category": step.get("category"),
+        "status": status,
+        "reason": step.get("reason"),
+        "next_action": step.get("next_action"),
+        "handling": _apply_stop_handling(status),
+    }
+
+
+def _apply_stop_handling(status: str) -> str:
+    handling = {
+        "missing_profile_value": "add profile value before running browser automation",
+        "missing_local_material": "record approved local material path before upload",
+        "missing_answer": "ask once and store approved non-sensitive answer",
+        "missing_resume_facts": "add resume facts before generating custom material",
+        "needs_human_review": "stop and ask user in supervised flow",
+        "manual_security_step": "stop for CAPTCHA/security step",
+        "final_submit_confirmation": "stop before final submit and wait for explicit approval",
+        "sensitive_not_stored": "ask on page if needed and do not persist protected-class answer",
+    }
+    return handling.get(status, "inspect manually before continuing")
 
 
 def _playbook_handling_for_status(status: str) -> str:

@@ -227,6 +227,24 @@ profile values. Use this before browser execution to verify each field will be
 filled from profile data, answer memory, generated material, or stopped for
 human review/security/final-submit confirmation.
 
+Before wiring any browser executor, turn a fill plan into an apply-run audit:
+
+```bash
+python3 -m job_apply_agent apply-audit \
+  --plan job_apply_agent/outbox/ramp_fill_plan_latest.json
+```
+
+This writes:
+
+```text
+job_apply_agent/outbox/apply_run_audit_latest.json
+job_apply_agent/outbox/apply_run_audit_latest.md
+```
+
+The audit says exactly which fields may be automated, which steps stop the run,
+whether the page should be skipped as closed, and confirms that final submit is
+not allowed without explicit approval.
+
 For end-to-end safety testing with fake candidate data, use the synthetic
 offline harness. It creates fake LinkedIn/Ashby/Greenhouse/Lever-style forms,
 checks closed-posting text, builds fill plans, and summarizes blockers without

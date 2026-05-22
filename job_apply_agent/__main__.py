@@ -22,6 +22,7 @@ from .core import (
     refresh_closed_jobs_from_live_pages,
     run_pipeline,
     write_answer_gap_report,
+    write_apply_run_audit,
     write_application_playbook,
     write_application_research_report,
     write_form_fill_plan,
@@ -45,6 +46,8 @@ DEFAULT_READINESS_JSON = Path(__file__).with_name("outbox") / "automation_readin
 DEFAULT_READINESS_MARKDOWN = Path(__file__).with_name("outbox") / "automation_readiness_latest.md"
 DEFAULT_FILL_PLAN_JSON = Path(__file__).with_name("outbox") / "form_fill_plan_latest.json"
 DEFAULT_FILL_PLAN_MARKDOWN = Path(__file__).with_name("outbox") / "form_fill_plan_latest.md"
+DEFAULT_APPLY_AUDIT_JSON = Path(__file__).with_name("outbox") / "apply_run_audit_latest.json"
+DEFAULT_APPLY_AUDIT_MARKDOWN = Path(__file__).with_name("outbox") / "apply_run_audit_latest.md"
 DEFAULT_LEARNING_TASKS_JSON = Path(__file__).with_name("outbox") / "learning_tasks_latest.json"
 DEFAULT_LEARNING_TASKS_MARKDOWN = Path(__file__).with_name("outbox") / "learning_tasks_latest.md"
 DEFAULT_SYNTHETIC_JSON = Path(__file__).with_name("outbox") / "synthetic_100_run_latest.json"
@@ -211,6 +214,17 @@ def main() -> int:
     fill_plan_parser.add_argument("--include-values", action="store_true")
     fill_plan_parser.add_argument("--json-output", default=str(DEFAULT_FILL_PLAN_JSON))
     fill_plan_parser.add_argument("--markdown-output", default=str(DEFAULT_FILL_PLAN_MARKDOWN))
+
+    apply_audit_parser = subparsers.add_parser(
+        "apply-audit",
+        help="audit a fill plan before any browser automation or final submit",
+    )
+    apply_audit_parser.add_argument("--plan", default=str(DEFAULT_FILL_PLAN_JSON))
+    apply_audit_parser.add_argument("--page-text", default="")
+    apply_audit_parser.add_argument("--page-text-file", default=None)
+    apply_audit_parser.add_argument("--closed-jobs", default=str(DEFAULT_CLOSED_JOBS))
+    apply_audit_parser.add_argument("--json-output", default=str(DEFAULT_APPLY_AUDIT_JSON))
+    apply_audit_parser.add_argument("--markdown-output", default=str(DEFAULT_APPLY_AUDIT_MARKDOWN))
 
     learning_template_parser = subparsers.add_parser(
         "learning-template",
@@ -404,6 +418,25 @@ def main() -> int:
         )
         for status, count in plan.get("status_counts", {}).items():
             print(f"{status}: {count}")
+        return 0
+
+    if args.command == "apply-audit":
+        page_text = args.page_text
+        if args.page_text_file:
+            page_text = Path(args.page_text_file).read_text(encoding="utf-8")
+        closed_jobs = load_closed_jobs(args.closed_jobs)
+        audit = write_apply_run_audit(
+            args.plan,
+            args.json_output,
+            args.markdown_output,
+            page_text=page_text,
+            closed_jobs=closed_jobs,
+        )
+        print(f"Wrote apply run audit JSON to {args.json_output}")
+        print(f"Wrote apply run audit Markdown to {args.markdown_output}")
+        print(f"Status: {audit.get('status')}")
+        print(f"Autofill allowed: {str(bool(audit.get('autofill_allowed'))).lower()}")
+        print(f"Would submit: {str(bool(audit.get('would_submit'))).lower()}")
         return 0
 
     if args.command == "learning-template":

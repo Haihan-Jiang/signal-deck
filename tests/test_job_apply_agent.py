@@ -9,6 +9,7 @@ from job_apply_agent.core import (
     CandidateProfile,
     apply_learning_task_answers,
     build_answer_gap_report,
+    build_apply_run_audit,
     build_application_draft,
     build_application_playbook,
     build_application_research,
@@ -36,6 +37,7 @@ from job_apply_agent.core import (
     record_closed_job,
     refresh_closed_jobs_from_live_pages,
     render_answer_gap_markdown,
+    render_apply_run_audit_markdown,
     render_application_playbook_markdown,
     render_application_research_markdown,
     render_form_fill_plan_markdown,
@@ -46,6 +48,7 @@ from job_apply_agent.core import (
     score_job,
     shorten_apply_url,
     write_answer_gap_report,
+    write_apply_run_audit,
     write_application_playbook,
     write_application_research_report,
     write_form_fill_plan,
@@ -1022,6 +1025,104 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(json_output.exists())
             self.assertTrue(markdown_output.exists())
             self.assertIn("Form Fill Plan", markdown_output.read_text())
+
+    def test_apply_run_audit_stops_before_submit_and_security_steps(self) -> None:
+        plan = {
+            "title": "Application",
+            "url": "https://jobs.ashbyhq.com/example/1",
+            "platform": "Ashby",
+            "steps": [
+                {
+                    "field_index": 1,
+                    "item_type": "field",
+                    "action": "fill",
+                    "status": "ready",
+                    "label": "Email",
+                    "category": "profile_identity",
+                    "value_source": "profile.email",
+                },
+                {
+                    "field_index": 2,
+                    "item_type": "field",
+                    "action": "manual_security",
+                    "status": "manual_security_step",
+                    "label": "g-recaptcha-response",
+                    "category": "security_verification",
+                },
+                {
+                    "field_index": 3,
+                    "item_type": "button",
+                    "action": "submit_gate",
+                    "status": "final_submit_confirmation",
+                    "label": "Submit application",
+                    "category": "final_submit",
+                },
+            ],
+        }
+
+        audit = build_apply_run_audit(plan)
+
+        self.assertEqual(audit["status"], "autofill_ready_with_supervised_gates")
+        self.assertTrue(audit["autofill_allowed"])
+        self.assertFalse(audit["final_submit_allowed"])
+        self.assertFalse(audit["would_submit"])
+        self.assertEqual(audit["automation_step_count"], 1)
+        self.assertEqual(audit["manual_gate_count"], 2)
+        markdown = render_apply_run_audit_markdown(audit)
+        self.assertIn("Apply Run Audit", markdown)
+        self.assertIn("final_submit_confirmation", markdown)
+
+    def test_apply_run_audit_skips_closed_page_text(self) -> None:
+        plan = {
+            "title": "Closed role",
+            "url": "https://www.linkedin.com/jobs/view/123/",
+            "platform": "LinkedIn",
+            "steps": [
+                {
+                    "field_index": 1,
+                    "item_type": "field",
+                    "action": "fill",
+                    "status": "ready",
+                    "label": "Email",
+                    "category": "profile_identity",
+                }
+            ],
+        }
+
+        audit = build_apply_run_audit(plan, page_text="No longer accepting applications")
+
+        self.assertEqual(audit["status"], "closed_skip")
+        self.assertFalse(audit["autofill_allowed"])
+        self.assertEqual(audit["closed_reason"], "closed:no_longer_accepting_applications")
+
+    def test_write_apply_run_audit_outputs_json_and_markdown(self) -> None:
+        plan = {
+            "title": "Application",
+            "url": "https://job-boards.greenhouse.io/example/jobs/1",
+            "platform": "Greenhouse",
+            "steps": [
+                {
+                    "field_index": 1,
+                    "item_type": "field",
+                    "action": "answer",
+                    "status": "missing_answer",
+                    "label": "Have you worked here before?",
+                    "category": "employment_history",
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plan_path = Path(temp_dir) / "plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            json_output = Path(temp_dir) / "audit.json"
+            markdown_output = Path(temp_dir) / "audit.md"
+
+            audit = write_apply_run_audit(plan_path, json_output, markdown_output)
+
+            self.assertEqual(audit["status"], "blocked_missing_inputs")
+            self.assertTrue(json_output.exists())
+            self.assertTrue(markdown_output.exists())
+            self.assertIn("Apply Run Audit", markdown_output.read_text())
 
     def test_learning_task_template_applies_approved_answers(self) -> None:
         readiness = {
