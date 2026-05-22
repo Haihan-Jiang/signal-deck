@@ -47,7 +47,7 @@ SYNTHETIC_APPLICATION_ROLE_TITLES = [
     "Platform Engineer, Kubernetes",
     "Cloud Infrastructure Engineer",
     "DevOps Engineer",
-    "Backend Infrastructure Engineer",
+    "Backend Software Engineer",
 ]
 LOCAL_BROWSER_EXECUTION_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
 
@@ -2778,6 +2778,210 @@ def build_application_playbook(
         "global_rules": _application_playbook_global_rules(synthetic),
         "platforms": platforms,
     }
+
+
+def build_research_coverage_gate(
+    research: dict[str, Any],
+    synthetic: dict[str, Any] | None = None,
+    gaps: dict[str, Any] | None = None,
+    position_target: int = 100,
+    target_platforms: list[str] | None = None,
+    target_role_families: list[str] | None = None,
+) -> dict[str, Any]:
+    synthetic = synthetic or {}
+    gaps = gaps or {}
+    target_platforms = target_platforms or list(SYNTHETIC_APPLICATION_PLATFORMS)
+    target_role_families = target_role_families or _default_target_role_families()
+
+    platform_counts = {
+        platform: int(
+            (research.get("platforms", {}).get(platform, {}) or {}).get(
+                "positions_observed", 0
+            )
+        )
+        for platform in target_platforms
+    }
+    platform_shortfalls = {
+        platform: max(0, position_target - count)
+        for platform, count in platform_counts.items()
+    }
+
+    coverage_groups = research.get("coverage_groups", {}) or {}
+    platform_role_counts: dict[str, int] = {}
+    for platform in target_platforms:
+        for role_family in target_role_families:
+            key = f"{platform}::{role_family}"
+            platform_role_counts[key] = int(
+                (coverage_groups.get(key, {}) or {}).get("positions_observed", 0)
+            )
+    platform_role_shortfalls = {
+        key: max(0, position_target - count)
+        for key, count in sorted(platform_role_counts.items())
+    }
+
+    real_platform_target_achieved = all(
+        shortfall == 0 for shortfall in platform_shortfalls.values()
+    )
+    real_platform_role_target_achieved = all(
+        shortfall == 0 for shortfall in platform_role_shortfalls.values()
+    )
+    synthetic_role_achieved = bool(synthetic.get("platform_role_target_achieved"))
+    question_blocker_count = int((gaps or {}).get("blocking_prompt_count") or 0)
+    ready_for_full_automation = (
+        real_platform_target_achieved
+        and real_platform_role_target_achieved
+        and synthetic_role_achieved
+        and question_blocker_count == 0
+        and int(synthetic.get("actual_submit_count") or 0) == 0
+    )
+
+    next_collection_targets = [
+        {
+            "platform": platform,
+            "role_family": role_family,
+            "positions_observed": platform_role_counts[f"{platform}::{role_family}"],
+            "positions_remaining": platform_role_shortfalls[f"{platform}::{role_family}"],
+        }
+        for platform in target_platforms
+        for role_family in target_role_families
+        if platform_role_shortfalls[f"{platform}::{role_family}"] > 0
+    ]
+    next_collection_targets.sort(
+        key=lambda item: (
+            -int(item.get("positions_remaining") or 0),
+            str(item.get("platform") or ""),
+            str(item.get("role_family") or ""),
+        )
+    )
+
+    observed_platforms = set(str(platform) for platform in research.get("platforms", {}).keys())
+    extra_platforms = sorted(observed_platforms - set(target_platforms))
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "research_coverage_gate",
+        "position_target": position_target,
+        "target_platforms": target_platforms,
+        "target_role_families": target_role_families,
+        "positions_observed_total": int(research.get("positions_observed_total") or 0),
+        "real_platform_counts": platform_counts,
+        "real_platform_shortfalls": platform_shortfalls,
+        "real_platform_target_achieved": real_platform_target_achieved,
+        "real_platform_role_counts": dict(sorted(platform_role_counts.items())),
+        "real_platform_role_shortfalls": platform_role_shortfalls,
+        "real_platform_role_target_achieved": real_platform_role_target_achieved,
+        "observed_extra_platforms": extra_platforms,
+        "synthetic": {
+            "run_count": int(synthetic.get("run_count") or 0),
+            "per_platform_role_target": int(synthetic.get("per_platform_role_target") or 0),
+            "platform_role_target_achieved": synthetic.get("platform_role_target_achieved"),
+            "actual_submit_count": int(synthetic.get("actual_submit_count") or 0),
+            "selector_miss_count": int(synthetic.get("selector_miss_count") or 0),
+            "platform_role_counts": synthetic.get("platform_role_counts", {}),
+        },
+        "questions": {
+            "blocking_prompt_count": question_blocker_count,
+            "coverage_counts": (gaps or {}).get("coverage_counts", {}),
+        },
+        "ready_for_full_automation": ready_for_full_automation,
+        "next_collection_targets": next_collection_targets,
+    }
+
+
+def write_research_coverage_gate(
+    research: dict[str, Any],
+    synthetic: dict[str, Any] | None,
+    gaps: dict[str, Any] | None,
+    json_output: str | Path,
+    markdown_output: str | Path,
+    position_target: int = 100,
+) -> dict[str, Any]:
+    gate = build_research_coverage_gate(
+        research,
+        synthetic=synthetic,
+        gaps=gaps,
+        position_target=position_target,
+    )
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(gate, ensure_ascii=True, indent=2), encoding="utf-8")
+    markdown_path.write_text(render_research_coverage_gate_markdown(gate), encoding="utf-8")
+    return gate
+
+
+def render_research_coverage_gate_markdown(gate: dict[str, Any]) -> str:
+    lines = [
+        "# Research Coverage Gate",
+        "",
+        f"Generated: {gate.get('generated_at')}",
+        f"Target per real group: {gate.get('position_target', 100)}",
+        f"Observed real positions: {gate.get('positions_observed_total', 0)}",
+        f"Real platform target achieved: {str(bool(gate.get('real_platform_target_achieved'))).lower()}",
+        f"Real platform-role target achieved: {str(bool(gate.get('real_platform_role_target_achieved'))).lower()}",
+        f"Synthetic platform-role target achieved: {str(bool((gate.get('synthetic') or {}).get('platform_role_target_achieved'))).lower()}",
+        f"Ready for full automation: {str(bool(gate.get('ready_for_full_automation'))).lower()}",
+        "",
+        "## Real Platform Coverage",
+        "",
+        "| Platform | Observed | Remaining |",
+        "| --- | ---: | ---: |",
+    ]
+    platform_counts = gate.get("real_platform_counts") or {}
+    platform_shortfalls = gate.get("real_platform_shortfalls") or {}
+    for platform, count in sorted(platform_counts.items()):
+        lines.append(f"| {platform} | {count} | {platform_shortfalls.get(platform, 0)} |")
+
+    lines.extend(["", "## Real Platform Role Coverage", ""])
+    lines.extend(["| Platform / role family | Observed | Remaining |", "| --- | ---: | ---: |"])
+    role_counts = gate.get("real_platform_role_counts") or {}
+    role_shortfalls = gate.get("real_platform_role_shortfalls") or {}
+    for key, count in sorted(role_counts.items()):
+        lines.append(f"| {key} | {count} | {role_shortfalls.get(key, 0)} |")
+
+    synthetic = gate.get("synthetic") or {}
+    lines.extend(
+        [
+            "",
+            "## Synthetic Evidence",
+            "",
+            f"- runs: {synthetic.get('run_count', 0)}",
+            f"- per-platform-role target: {synthetic.get('per_platform_role_target', 0)}",
+            f"- platform-role target achieved: {str(synthetic.get('platform_role_target_achieved')).lower()}",
+            f"- actual submit count: {synthetic.get('actual_submit_count', 0)}",
+            f"- selector miss count: {synthetic.get('selector_miss_count', 0)}",
+        ]
+    )
+
+    questions = gate.get("questions") or {}
+    lines.extend(["", "## Question Blockers", ""])
+    lines.append(f"- blocking prompts: {questions.get('blocking_prompt_count', 0)}")
+    coverage_counts = questions.get("coverage_counts") or {}
+    for status, count in sorted(coverage_counts.items()):
+        lines.append(f"- {status}: {count}")
+
+    lines.extend(["", "## Next Collection Targets", ""])
+    targets = gate.get("next_collection_targets") or []
+    if targets:
+        for target in targets[:40]:
+            lines.append(
+                "- {platform} / {role}: collect {remaining} more (observed {observed})".format(
+                    platform=target.get("platform"),
+                    role=target.get("role_family"),
+                    remaining=target.get("positions_remaining", 0),
+                    observed=target.get("positions_observed", 0),
+                )
+            )
+    else:
+        lines.append("- None")
+
+    extras = gate.get("observed_extra_platforms") or []
+    if extras:
+        lines.extend(["", "## Observed Non-Target Platforms", ""])
+        for platform in extras:
+            lines.append(f"- {platform}")
+    return "\n".join(lines) + "\n"
 
 
 def write_application_playbook(
@@ -5687,6 +5891,15 @@ def _platform_role_target_shortfalls(
             key = _platform_role_key(platform, role_title)
             shortfalls[key] = max(0, target - int(counts.get(key, 0)))
     return dict(sorted(shortfalls.items()))
+
+
+def _default_target_role_families() -> list[str]:
+    role_families: list[str] = []
+    for title in SYNTHETIC_APPLICATION_ROLE_TITLES:
+        role_family = _infer_role_family(title)
+        if role_family not in role_families:
+            role_families.append(role_family)
+    return role_families
 
 
 def _application_collection_gaps(

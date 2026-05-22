@@ -32,6 +32,7 @@ from .core import (
     write_learning_task_template,
     write_pre_submit_review,
     write_position_readiness_report,
+    write_research_coverage_gate,
     write_synthetic_apply_execution,
     write_synthetic_application_simulation,
     write_synthetic_browser_action_execution,
@@ -74,6 +75,8 @@ DEFAULT_SYNTHETIC_BROWSER_EXEC_JSON = Path(__file__).with_name("outbox") / "synt
 DEFAULT_SYNTHETIC_BROWSER_EXEC_MARKDOWN = Path(__file__).with_name("outbox") / "synthetic_browser_action_execution_latest.md"
 DEFAULT_PLAYBOOK_JSON = Path(__file__).with_name("outbox") / "application_playbook_latest.json"
 DEFAULT_PLAYBOOK_MARKDOWN = Path(__file__).with_name("outbox") / "application_playbook_latest.md"
+DEFAULT_COVERAGE_GATE_JSON = Path(__file__).with_name("outbox") / "research_coverage_gate_latest.json"
+DEFAULT_COVERAGE_GATE_MARKDOWN = Path(__file__).with_name("outbox") / "research_coverage_gate_latest.md"
 DEFAULT_PERSONAL_PROFILE = Path(__file__).with_name("outbox") / "alan_jiang_profile.json"
 
 
@@ -386,6 +389,17 @@ def main() -> int:
     playbook_parser.add_argument("--synthetic-json", default=str(DEFAULT_SYNTHETIC_JSON))
     playbook_parser.add_argument("--json-output", default=str(DEFAULT_PLAYBOOK_JSON))
     playbook_parser.add_argument("--markdown-output", default=str(DEFAULT_PLAYBOOK_MARKDOWN))
+
+    coverage_gate_parser = subparsers.add_parser(
+        "coverage-gate",
+        help="compare real observed coverage against synthetic platform/role execution evidence",
+    )
+    coverage_gate_parser.add_argument("--research-json", default=str(DEFAULT_RESEARCH_JSON))
+    coverage_gate_parser.add_argument("--gaps-json", default=str(DEFAULT_GAPS_JSON))
+    coverage_gate_parser.add_argument("--synthetic-json", default=str(DEFAULT_SYNTHETIC_BROWSER_EXEC_JSON))
+    coverage_gate_parser.add_argument("--position-target", type=int, default=100)
+    coverage_gate_parser.add_argument("--json-output", default=str(DEFAULT_COVERAGE_GATE_JSON))
+    coverage_gate_parser.add_argument("--markdown-output", default=str(DEFAULT_COVERAGE_GATE_MARKDOWN))
 
     args = parser.parse_args()
 
@@ -765,6 +779,32 @@ def main() -> int:
         print(f"Wrote application playbook JSON to {args.json_output}")
         print(f"Wrote application playbook Markdown to {args.markdown_output}")
         print(f"Platforms: {playbook.get('platform_count', 0)}")
+        return 0
+
+    if args.command == "coverage-gate":
+        research_path = Path(args.research_json)
+        if not research_path.exists():
+            raise FileNotFoundError(f"research report not found: {args.research_json}")
+        research = json.loads(research_path.read_text(encoding="utf-8"))
+        gate = write_research_coverage_gate(
+            research,
+            _load_optional_json(args.synthetic_json),
+            _load_optional_json(args.gaps_json),
+            args.json_output,
+            args.markdown_output,
+            position_target=args.position_target,
+        )
+        print(f"Wrote research coverage gate JSON to {args.json_output}")
+        print(f"Wrote research coverage gate Markdown to {args.markdown_output}")
+        print(
+            "Real platform-role target achieved: "
+            f"{str(bool(gate.get('real_platform_role_target_achieved'))).lower()}"
+        )
+        print(
+            "Synthetic platform-role target achieved: "
+            f"{str(bool((gate.get('synthetic') or {}).get('platform_role_target_achieved'))).lower()}"
+        )
+        print(f"Next collection targets: {len(gate.get('next_collection_targets', []))}")
         return 0
 
     if args.command == "notify":

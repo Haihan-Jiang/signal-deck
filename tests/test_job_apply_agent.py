@@ -22,6 +22,7 @@ from job_apply_agent.core import (
     build_learning_task_template,
     build_pre_submit_review,
     build_position_readiness_report,
+    build_research_coverage_gate,
     build_telegram_job_alert,
     classify_application_prompt,
     closed_application_reason,
@@ -55,6 +56,7 @@ from job_apply_agent.core import (
     render_learning_task_template_markdown,
     render_pre_submit_review_markdown,
     render_position_readiness_markdown,
+    render_research_coverage_gate_markdown,
     render_synthetic_apply_execution_markdown,
     render_synthetic_browser_action_execution_markdown,
     render_synthetic_application_html,
@@ -75,6 +77,7 @@ from job_apply_agent.core import (
     write_learning_task_template,
     write_pre_submit_review,
     write_position_readiness_report,
+    write_research_coverage_gate,
     write_synthetic_apply_execution,
     write_synthetic_application_simulation,
     write_synthetic_browser_action_execution,
@@ -2206,6 +2209,83 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(json_output.exists())
             self.assertTrue(markdown_output.exists())
             self.assertIn("Application Automation Playbook", markdown_output.read_text())
+
+    def test_research_coverage_gate_reports_real_and_synthetic_shortfalls(self) -> None:
+        research = {
+            "positions_observed_total": 3,
+            "platforms": {
+                "LinkedIn": {"positions_observed": 2},
+                "Greenhouse": {"positions_observed": 1},
+                "MockJobs": {"positions_observed": 1},
+            },
+            "coverage_groups": {
+                "LinkedIn::Site Reliability": {"positions_observed": 2},
+                "Greenhouse::Platform Infrastructure": {"positions_observed": 1},
+            },
+        }
+        synthetic = {
+            "run_count": 2000,
+            "per_platform_role_target": 100,
+            "platform_role_target_achieved": True,
+            "actual_submit_count": 0,
+            "selector_miss_count": 0,
+            "platform_role_counts": {"LinkedIn | Site Reliability Engineer": 100},
+        }
+        gaps = {
+            "blocking_prompt_count": 1,
+            "coverage_counts": {"needs_answer_memory": 1},
+        }
+
+        gate = build_research_coverage_gate(
+            research,
+            synthetic=synthetic,
+            gaps=gaps,
+            position_target=2,
+            target_platforms=["LinkedIn", "Greenhouse"],
+            target_role_families=["Site Reliability", "Platform Infrastructure"],
+        )
+
+        self.assertFalse(gate["real_platform_role_target_achieved"])
+        self.assertTrue(gate["synthetic"]["platform_role_target_achieved"])
+        self.assertFalse(gate["ready_for_full_automation"])
+        self.assertEqual(gate["real_platform_shortfalls"]["LinkedIn"], 0)
+        self.assertEqual(gate["real_platform_shortfalls"]["Greenhouse"], 1)
+        self.assertEqual(gate["real_platform_role_shortfalls"]["LinkedIn::Site Reliability"], 0)
+        self.assertEqual(gate["real_platform_role_shortfalls"]["Greenhouse::Site Reliability"], 2)
+        self.assertEqual(gate["observed_extra_platforms"], ["MockJobs"])
+        self.assertGreater(len(gate["next_collection_targets"]), 0)
+        markdown = render_research_coverage_gate_markdown(gate)
+        self.assertIn("Research Coverage Gate", markdown)
+        self.assertIn("Synthetic platform-role target achieved: true", markdown)
+
+    def test_write_research_coverage_gate_outputs_reports(self) -> None:
+        research = {
+            "positions_observed_total": 1,
+            "platforms": {"LinkedIn": {"positions_observed": 1}},
+            "coverage_groups": {"LinkedIn::Site Reliability": {"positions_observed": 1}},
+        }
+        synthetic = {
+            "run_count": 1,
+            "platform_role_target_achieved": False,
+            "actual_submit_count": 0,
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            json_output = Path(temp_dir) / "coverage.json"
+            markdown_output = Path(temp_dir) / "coverage.md"
+
+            gate = write_research_coverage_gate(
+                research,
+                synthetic,
+                gaps=None,
+                json_output=json_output,
+                markdown_output=markdown_output,
+                position_target=1,
+            )
+
+            self.assertIn("real_platform_counts", gate)
+            self.assertTrue(json_output.exists())
+            self.assertTrue(markdown_output.exists())
+            self.assertIn("Research Coverage Gate", markdown_output.read_text())
 
 
 if __name__ == "__main__":

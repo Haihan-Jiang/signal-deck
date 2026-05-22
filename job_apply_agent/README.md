@@ -216,6 +216,29 @@ The readiness report marks each observed position as `autofill_ready`,
 `needs_learning`, or `needs_research`, and condenses repeated blockers into a
 minimal learning task list for answers/materials that should be confirmed once.
 
+To make the 100-position target machine-checkable across real observations and
+synthetic execution evidence:
+
+```bash
+python3 -m job_apply_agent coverage-gate \
+  --research-json job_apply_agent/outbox/application_research_latest.json \
+  --gaps-json job_apply_agent/outbox/answer_gaps_latest.json \
+  --synthetic-json job_apply_agent/outbox/synthetic_browser_action_execution_latest.json \
+  --position-target 100
+```
+
+This writes:
+
+```text
+job_apply_agent/outbox/research_coverage_gate_latest.json
+job_apply_agent/outbox/research_coverage_gate_latest.md
+```
+
+The gate separates real observed coverage from local synthetic proof. It reports
+remaining real collection targets for each platform and role family, while also
+showing whether synthetic platform/role execution reached its target with zero
+real submissions.
+
 Turn that learning queue into a fill-in template:
 
 ```bash
