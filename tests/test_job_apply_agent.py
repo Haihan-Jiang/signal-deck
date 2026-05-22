@@ -28,6 +28,7 @@ from job_apply_agent.core import (
     build_research_coverage_gate,
     build_telegram_job_alert,
     classify_application_prompt,
+    closed_application_match,
     closed_application_reason,
     closed_application_phrase,
     execute_browser_action_manifest_locally,
@@ -131,6 +132,10 @@ class JobApplyAgentTests(unittest.TestCase):
             "closed:no_longer_accepting_applications",
         )
         self.assertEqual(closed_application_phrase(job), "no longer accepting applications")
+        match = closed_application_match(job)
+        self.assertIsNotNone(match)
+        self.assertEqual(match.source_field, "page_excerpt")
+        self.assertIn("No longer accepting applications", match.snippet)
 
     def test_pipeline_skips_closed_jobs(self) -> None:
         closed_job = dict(self.jobs[0])
@@ -618,6 +623,50 @@ class JobApplyAgentTests(unittest.TestCase):
             closed_application_phrase({"page_text": "This position is no longer available."}),
             "this position is no longer available",
         )
+        self.assertEqual(
+            closed_application_phrase(
+                {"rendered_text": "We're sorry, this role is no longer open."}
+            ),
+            "job is no longer available",
+        )
+        self.assertEqual(
+            closed_application_phrase(
+                {"visible_text": "We are no longer accepting candidates for this job."}
+            ),
+            "no longer accepting candidates",
+        )
+        self.assertIsNone(
+            closed_application_phrase(
+                {
+                    "page_text": (
+                        "The application window is expected to close on 06/12/2026. "
+                        "Job posting may be removed earlier if the position is filled."
+                    )
+                }
+            )
+        )
+
+    def test_closed_preflight_reports_phrase_source_and_snippet(self) -> None:
+        candidates = [
+            {
+                "company": "RenderedClosed",
+                "title": "SRE",
+                "apply_url": "https://www.linkedin.com/jobs/view/20/",
+                "rendered_text": "Company\nSRE\nNo longer accepting new applications\nAbout the job",
+            }
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            closed_path = Path(temp_dir) / "closed_jobs.json"
+            report = build_closed_posting_preflight(
+                candidates,
+                closed_path,
+                max_checks=1,
+            )
+            self.assertEqual(report["status_counts"]["closed_embedded_text"], 1)
+            check = report["checks"][0]
+            self.assertEqual(check["closed_phrase"], "no longer accepting new applications")
+            self.assertEqual(check["closed_source_field"], "rendered_text")
+            self.assertIn("No longer accepting new applications", check["closed_snippet"])
 
     def test_closed_posting_preflight_splits_open_closed_and_uncertain(self) -> None:
         candidates = [

@@ -124,6 +124,10 @@ Use `--live-check` before Telegram/open-browser runs to fetch the current apply
 pages and automatically record closed postings when the live page says
 `No longer accepting applications`. Closed jobs are saved to
 `job_apply_agent/outbox/closed_jobs.json` and skipped in future runs.
+The closed-posting checks also accept browser-rendered text fields such as
+`rendered_text`, `visible_text`, `page_text`, or `page_excerpt` on candidate
+rows. When a page is skipped, the report records the matched closed phrase, the
+source field, and a short text snippet so the skip can be audited later.
 
 For a standalone preflight report before sending alerts or opening tabs:
 

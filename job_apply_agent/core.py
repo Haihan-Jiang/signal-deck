@@ -28,18 +28,53 @@ DEFAULT_QUESTIONS = [
 DEFAULT_TELEGRAM_ENV = Path.home() / ".signal-deck" / "runtime" / "telegram.env"
 CLOSED_APPLICATION_PHRASES = [
     "no longer accepting applications",
+    "no longer accepting new applications",
     "no longer accepting applicants",
+    "no longer accepting candidates",
+    "no longer accepting resumes",
     "not accepting applications",
     "applications for this job are no longer being accepted",
     "applications are closed",
     "application window is closed",
+    "application period is closed",
     "this job posting has expired",
+    "this job post is no longer active",
     "job is no longer available",
     "this job is no longer available",
     "this position is no longer available",
+    "this role is no longer available",
     "position has been filled",
     "this position has been filled",
     "posting has expired",
+    "listing has expired",
+]
+_CLOSED_APPLICATION_PATTERN_SPECS = [
+    (
+        "no longer accepting applications",
+        r"\b(?:we are |we re |we're )?no longer accepting (?:new )?"
+        r"(?:applications|applicants|candidates|resumes)\b",
+    ),
+    (
+        "applications are closed",
+        r"\bapplications?(?: for (?:this|the) (?:job|role|position))? "
+        r"(?:are|is) (?:now )?closed\b",
+    ),
+    (
+        "job is no longer available",
+        r"\b(?:job|posting|position|role|listing|opportunity|job post).{0,8}"
+        r"no longer (?:available|active|open)\b",
+    ),
+    (
+        "posting has expired",
+        r"\b(?:posting|post|listing|job|role|position) (?:has )?expired\b",
+    ),
+    (
+        "position has been filled",
+        r"\b(?:this )?(?:position|role|job) (?:has been|was) filled\b",
+    ),
+]
+_CLOSED_APPLICATION_PATTERNS = [
+    (phrase, re.compile(pattern)) for phrase, pattern in _CLOSED_APPLICATION_PATTERN_SPECS
 ]
 DEFAULT_LIVE_CHECK_LIMIT = 25
 SYNTHETIC_APPLICATION_PLATFORMS = ["LinkedIn", "Ashby", "Greenhouse", "Lever"]
@@ -94,6 +129,14 @@ class CandidateProfile:
             resume_facts={str(k): str(v) for k, v in payload.get("resume_facts", {}).items()},
             question_answers=question_answers,
         )
+
+
+@dataclass(frozen=True)
+class ClosedApplicationMatch:
+    phrase: str
+    reason: str
+    source_field: str
+    snippet: str
 
 
 @dataclass(frozen=True)
@@ -330,19 +373,106 @@ def closed_application_reason(
     registry_reason = _closed_registry_reason(job, closed_jobs)
     if registry_reason:
         return registry_reason
-    phrase = closed_application_phrase(job)
-    if phrase:
-        return f"closed:{_normalize(phrase).replace(' ', '_')}"
+    match = closed_application_match(job)
+    if match:
+        return match.reason
     return None
 
 
 def closed_application_phrase(job: dict[str, Any]) -> str | None:
-    text = _normalize(_flatten_text(job))
+    match = closed_application_match(job)
+    return match.phrase if match else None
+
+
+def closed_application_match(job: dict[str, Any]) -> ClosedApplicationMatch | None:
+    for source_field, text in _closed_application_search_fields(job):
+        match = _closed_application_match_text(text, source_field)
+        if match:
+            return match
+    return None
+
+
+def _closed_application_match_text(text: str, source_field: str) -> ClosedApplicationMatch | None:
+    normalized_text = _normalize(text)
+    if not normalized_text:
+        return None
     for phrase in CLOSED_APPLICATION_PHRASES:
         normalized_phrase = _normalize(phrase)
-        if normalized_phrase and normalized_phrase in text:
-            return phrase
+        if normalized_phrase and normalized_phrase in normalized_text:
+            return ClosedApplicationMatch(
+                phrase=phrase,
+                reason=f"closed:{normalized_phrase.replace(' ', '_')}",
+                source_field=source_field,
+                snippet=_closed_application_snippet(text, phrase),
+            )
+    for phrase, pattern in _CLOSED_APPLICATION_PATTERNS:
+        regex_match = pattern.search(normalized_text)
+        if regex_match:
+            return ClosedApplicationMatch(
+                phrase=phrase,
+                reason=f"closed:{_normalize(phrase).replace(' ', '_')}",
+                source_field=source_field,
+                snippet=_closed_application_snippet(text, phrase, normalized_span=regex_match.span()),
+            )
     return None
+
+
+def _closed_application_search_fields(job: dict[str, Any]) -> list[tuple[str, str]]:
+    preferred_fields = [
+        "page_text",
+        "rendered_text",
+        "visible_text",
+        "page_excerpt",
+        "description",
+        "status",
+        "title",
+    ]
+    fields: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for field in preferred_fields:
+        value = job.get(field)
+        if value is None:
+            continue
+        text = _flatten_text(value)
+        if text and text not in seen:
+            fields.append((field, text))
+            seen.add(text)
+    fallback = _flatten_text(job)
+    if fallback and fallback not in seen:
+        fields.append(("payload", fallback))
+    return fields
+
+
+def _closed_application_snippet(
+    text: str,
+    phrase: str,
+    normalized_span: tuple[int, int] | None = None,
+) -> str:
+    compact = re.sub(r"\s+", " ", str(text)).strip()
+    if not compact:
+        return ""
+    lowered = compact.lower()
+    phrase_index = lowered.find(str(phrase).lower())
+    if phrase_index >= 0:
+        start = max(0, phrase_index - 90)
+        end = min(len(compact), phrase_index + len(phrase) + 90)
+        return compact[start:end]
+    if normalized_span is not None:
+        normalized_text = _normalize(compact)
+        target = normalized_text[normalized_span[0] : normalized_span[1]]
+        target_words = [
+            word
+            for word in target.split()
+            if len(word) > 2 and word not in {"the", "this", "that", "has", "been", "are", "was"}
+        ]
+        if target_words:
+            for first_match in re.finditer(re.escape(target_words[0]), lowered):
+                window_start = max(0, first_match.start() - 90)
+                window_end = min(len(compact), first_match.start() + 260)
+                window = lowered[window_start:window_end]
+                if all(word in window for word in target_words):
+                    return compact[window_start:window_end]
+    return compact[:220]
 
 
 def build_application_draft(
@@ -3448,12 +3578,12 @@ def observe_candidate_pages(
             checks.append(check)
             continue
 
-        embedded_phrase = closed_application_phrase(candidate)
-        if embedded_phrase:
+        embedded_match = closed_application_match(candidate)
+        if embedded_match:
             record_closed_job(
                 closed_jobs_path,
                 {**candidate, "apply_url": short_url or apply_url},
-                reason=embedded_phrase,
+                reason=embedded_match.phrase,
                 source=f"{source}:embedded_text",
             )
             closed_jobs = load_closed_jobs(closed_jobs_path)
@@ -3462,7 +3592,10 @@ def observe_candidate_pages(
                 {
                     "status": "closed_embedded_text",
                     "closed": True,
-                    "reason": embedded_phrase,
+                    "reason": embedded_match.phrase,
+                    "closed_phrase": embedded_match.phrase,
+                    "closed_source_field": embedded_match.source_field,
+                    "closed_snippet": embedded_match.snippet,
                 }
             )
             checks.append(check)
@@ -3492,12 +3625,12 @@ def observe_candidate_pages(
             continue
 
         page_text = _html_to_text(page_html)
-        live_phrase = closed_application_phrase({"page_text": page_text})
-        if live_phrase:
+        live_match = closed_application_match({"page_text": page_text})
+        if live_match:
             record_closed_job(
                 closed_jobs_path,
                 {**candidate, "apply_url": short_url},
-                reason=live_phrase,
+                reason=live_match.phrase,
                 source=f"{source}:live_text",
             )
             closed_jobs = load_closed_jobs(closed_jobs_path)
@@ -3506,7 +3639,10 @@ def observe_candidate_pages(
                 {
                     "status": "closed_live_text",
                     "closed": True,
-                    "reason": live_phrase,
+                    "reason": live_match.phrase,
+                    "closed_phrase": live_match.phrase,
+                    "closed_source_field": live_match.source_field,
+                    "closed_snippet": live_match.snippet,
                 }
             )
             checks.append(check)
@@ -4679,19 +4815,22 @@ def build_closed_posting_preflight(
             checks.append(check)
             continue
 
-        embedded_phrase = closed_application_phrase(candidate)
-        if embedded_phrase:
+        embedded_match = closed_application_match(candidate)
+        if embedded_match:
             check.update(
                 {
                     "status": "closed_embedded_text",
                     "closed": True,
-                    "reason": embedded_phrase,
+                    "reason": embedded_match.phrase,
+                    "closed_phrase": embedded_match.phrase,
+                    "closed_source_field": embedded_match.source_field,
+                    "closed_snippet": embedded_match.snippet,
                 }
             )
             record_closed_job(
                 closed_jobs_path,
                 {**candidate, "apply_url": short_url or apply_url},
-                reason=embedded_phrase,
+                reason=embedded_match.phrase,
                 source=f"{source}:embedded_text",
             )
             closed_jobs = load_closed_jobs(closed_jobs_path)
@@ -4722,19 +4861,22 @@ def build_closed_posting_preflight(
             checks.append(check)
             continue
 
-        live_phrase = closed_application_phrase({"page_text": page_text})
-        if live_phrase:
+        live_match = closed_application_match({"page_text": page_text})
+        if live_match:
             check.update(
                 {
                     "status": "closed_live_text",
                     "closed": True,
-                    "reason": live_phrase,
+                    "reason": live_match.phrase,
+                    "closed_phrase": live_match.phrase,
+                    "closed_source_field": live_match.source_field,
+                    "closed_snippet": live_match.snippet,
                 }
             )
             record_closed_job(
                 closed_jobs_path,
                 {**candidate, "apply_url": short_url},
-                reason=live_phrase,
+                reason=live_match.phrase,
                 source=f"{source}:live_text",
             )
             closed_jobs = load_closed_jobs(closed_jobs_path)
