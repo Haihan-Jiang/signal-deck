@@ -29,6 +29,7 @@ from .core import (
     write_application_research_report,
     write_browser_action_manifest,
     write_candidate_observation_report,
+    write_candidate_discovery_report,
     write_browser_dom_harness,
     write_closed_posting_preflight,
     write_collection_plan,
@@ -84,6 +85,8 @@ DEFAULT_COVERAGE_GATE_JSON = Path(__file__).with_name("outbox") / "research_cove
 DEFAULT_COVERAGE_GATE_MARKDOWN = Path(__file__).with_name("outbox") / "research_coverage_gate_latest.md"
 DEFAULT_COLLECTION_PLAN_JSON = Path(__file__).with_name("outbox") / "collection_plan_latest.json"
 DEFAULT_COLLECTION_PLAN_MARKDOWN = Path(__file__).with_name("outbox") / "collection_plan_latest.md"
+DEFAULT_DISCOVERED_CANDIDATES_JSON = Path(__file__).with_name("outbox") / "discovered_candidates_latest.json"
+DEFAULT_DISCOVERED_CANDIDATES_MARKDOWN = Path(__file__).with_name("outbox") / "discovered_candidates_latest.md"
 DEFAULT_OBSERVED_CANDIDATES = Path(__file__).with_name("outbox") / "observed_candidates.jsonl"
 DEFAULT_CANDIDATE_OBSERVATION_JSON = Path(__file__).with_name("outbox") / "candidate_observation_latest.json"
 DEFAULT_CANDIDATE_OBSERVATION_MARKDOWN = Path(__file__).with_name("outbox") / "candidate_observation_latest.md"
@@ -422,6 +425,18 @@ def main() -> int:
     collection_plan_parser.add_argument("--batch-size", type=int, default=25)
     collection_plan_parser.add_argument("--json-output", default=str(DEFAULT_COLLECTION_PLAN_JSON))
     collection_plan_parser.add_argument("--markdown-output", default=str(DEFAULT_COLLECTION_PLAN_MARKDOWN))
+
+    discover_candidates_parser = subparsers.add_parser(
+        "discover-candidates",
+        help="fetch collection-plan search pages and extract candidate apply URLs",
+    )
+    discover_candidates_parser.add_argument("--collection-plan-json", default=str(DEFAULT_COLLECTION_PLAN_JSON))
+    discover_candidates_parser.add_argument("--max-tasks", type=int, default=4)
+    discover_candidates_parser.add_argument("--per-task-limit", type=int, default=10)
+    discover_candidates_parser.add_argument("--search-pages-per-task", type=int, default=2)
+    discover_candidates_parser.add_argument("--timeout", type=float, default=15.0)
+    discover_candidates_parser.add_argument("--json-output", default=str(DEFAULT_DISCOVERED_CANDIDATES_JSON))
+    discover_candidates_parser.add_argument("--markdown-output", default=str(DEFAULT_DISCOVERED_CANDIDATES_MARKDOWN))
 
     import_candidates_parser = subparsers.add_parser(
         "import-candidates",
@@ -923,6 +938,28 @@ def main() -> int:
         print(f"Wrote collection plan JSON to {args.json_output}")
         print(f"Wrote collection plan Markdown to {args.markdown_output}")
         print(f"Tasks: {plan.get('task_count', 0)}")
+        return 0
+
+    if args.command == "discover-candidates":
+        collection_plan_path = Path(args.collection_plan_json)
+        if not collection_plan_path.exists():
+            raise FileNotFoundError(f"collection plan not found: {args.collection_plan_json}")
+        collection_plan = json.loads(collection_plan_path.read_text(encoding="utf-8"))
+        report = write_candidate_discovery_report(
+            collection_plan,
+            args.json_output,
+            args.markdown_output,
+            max_tasks=args.max_tasks,
+            per_task_limit=args.per_task_limit,
+            search_pages_per_task=args.search_pages_per_task,
+            timeout=args.timeout,
+        )
+        print(f"Wrote discovered candidates JSON to {args.json_output}")
+        print(f"Wrote discovered candidates Markdown to {args.markdown_output}")
+        print(f"Tasks searched: {report.get('task_count', 0)}")
+        print(f"Search pages fetched: {report.get('search_page_count', 0)}")
+        print(f"Candidates: {report.get('candidate_count', 0)}")
+        print(f"Errors: {report.get('error_count', 0)}")
         return 0
 
     if args.command == "import-candidates":

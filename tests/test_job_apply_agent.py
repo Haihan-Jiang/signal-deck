@@ -31,6 +31,7 @@ from job_apply_agent.core import (
     closed_application_match,
     closed_application_reason,
     closed_application_phrase,
+    discover_candidates_from_collection_plan,
     execute_browser_action_manifest_locally,
     execute_form_plan_offline,
     extract_application_prompts_from_html,
@@ -58,6 +59,7 @@ from job_apply_agent.core import (
     render_apply_run_audit_markdown,
     render_application_playbook_markdown,
     render_candidate_observation_markdown,
+    render_candidate_discovery_markdown,
     render_question_export_html,
     render_application_research_markdown,
     render_collection_plan_markdown,
@@ -84,6 +86,7 @@ from job_apply_agent.core import (
     write_application_research_report,
     write_browser_action_manifest,
     write_candidate_observation_report,
+    write_candidate_discovery_report,
     write_closed_posting_preflight,
     write_collection_plan,
     write_question_export,
@@ -772,6 +775,20 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(
             classify_application_prompt("Cover Letter").automation_action,
             "generate_custom_material",
+        )
+        self.assertEqual(
+            classify_application_prompt(
+                "Outline your practical Python software engineering experience"
+            ).automation_action,
+            "generate_custom_material",
+        )
+        self.assertEqual(
+            classify_application_prompt("Please indicate your nationality").automation_action,
+            "do_not_store_sensitive",
+        )
+        self.assertEqual(
+            classify_application_prompt("Most Recent Employer").automation_action,
+            "auto_fill_from_profile",
         )
 
     def test_application_research_summarizes_form_snapshots_and_jsonl(self) -> None:
@@ -2485,6 +2502,105 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(json_output.exists())
             self.assertTrue(markdown_output.exists())
 
+    def test_discover_candidates_from_collection_plan_extracts_ats_urls(self) -> None:
+        plan = {
+            "generated_at": "2026-05-22T00:00:00+00:00",
+            "tasks": [
+                {
+                    "platform": "Ashby",
+                    "role_family": "Site Reliability",
+                    "query": "site reliability engineer",
+                    "search_urls": ["https://search.example/ashby"],
+                },
+                {
+                    "platform": "Lever",
+                    "role_family": "Software Backend",
+                    "query": "backend software engineer",
+                    "search_urls": ["https://search.example/lever"],
+                },
+            ],
+        }
+
+        def fake_fetcher(url: str, timeout: float) -> str:
+            if "ashby" in url:
+                return """
+                <html>
+                  <a href="https://jobs.ashbyhq.com/example/abc?src=LinkedIn">
+                    Site Reliability Engineer at Example
+                  </a>
+                  <a href="/url?q=https%3A%2F%2Fjobs.ashbyhq.com%2Fexample%2Fabc%3Futm%3Dx">
+                    Duplicate
+                  </a>
+                  <a href="https://example.com/not-a-job">Ignore</a>
+                </html>
+                """
+            return """
+            <html>
+              <a href="https://jobs.lever.co/acme/123?lever-source=search">
+                Backend Software Engineer - Acme
+              </a>
+            </html>
+            """
+
+        report = discover_candidates_from_collection_plan(
+            plan,
+            max_tasks=2,
+            per_task_limit=5,
+            search_pages_per_task=1,
+            fetcher=fake_fetcher,
+        )
+
+        self.assertEqual(report["candidate_count"], 2)
+        self.assertEqual(report["per_platform_counts"]["Ashby"], 1)
+        self.assertEqual(report["per_platform_counts"]["Lever"], 1)
+        self.assertEqual(
+            report["candidates"][0]["apply_url"],
+            "https://jobs.ashbyhq.com/example/abc",
+        )
+        self.assertEqual(report["candidates"][0]["role_family"], "Site Reliability")
+        self.assertIn("observe-candidates", report["next_command"])
+        markdown = render_candidate_discovery_markdown(report)
+        self.assertIn("Candidate Discovery Report", markdown)
+        self.assertIn("https://jobs.lever.co/acme/123", markdown)
+
+    def test_write_candidate_discovery_report_outputs_files(self) -> None:
+        plan = {
+            "tasks": [
+                {
+                    "platform": "Greenhouse",
+                    "role_family": "Cloud DevOps",
+                    "query": "cloud devops engineer",
+                    "search_urls": ["https://search.example/greenhouse"],
+                }
+            ]
+        }
+
+        def fake_fetcher(url: str, timeout: float) -> str:
+            return """
+            <html>
+              <a href="https://job-boards.greenhouse.io/example/jobs/123?gh_src=x">
+                Cloud DevOps Engineer - Example
+              </a>
+            </html>
+            """
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            json_output = Path(temp_dir) / "discovered.json"
+            markdown_output = Path(temp_dir) / "discovered.md"
+            report = write_candidate_discovery_report(
+                plan,
+                json_output,
+                markdown_output,
+                fetcher=fake_fetcher,
+            )
+            self.assertEqual(report["candidate_count"], 1)
+            self.assertTrue(json_output.exists())
+            self.assertTrue(markdown_output.exists())
+            self.assertEqual(
+                report["candidates"][0]["apply_url"],
+                "https://job-boards.greenhouse.io/example/jobs/123",
+            )
+
     def test_import_candidate_observations_adds_research_positions(self) -> None:
         candidates = [
             {
@@ -2588,6 +2704,27 @@ class JobApplyAgentTests(unittest.TestCase):
         metadata = extract_live_job_page_metadata(page, include_form_fields=False)
 
         self.assertEqual(metadata["questions"], [])
+
+    def test_extract_application_prompts_skips_job_board_navigation_noise(self) -> None:
+        page = """
+        <html>
+          <body>
+            <button>Toggle flyout</button>
+            <button>Go to page 2</button>
+            <label>department filter</label>
+            <label>Most Recent Employer</label>
+            <div>Share your hands-on experience with observability tools?</div>
+          </body>
+        </html>
+        """
+
+        prompts = extract_application_prompts_from_html(page)
+
+        self.assertNotIn("Toggle flyout", prompts)
+        self.assertNotIn("Go to page 2", prompts)
+        self.assertNotIn("department filter", prompts)
+        self.assertIn("Most Recent Employer", prompts)
+        self.assertIn("Share your hands-on experience with observability tools?", prompts)
 
     def test_observe_candidate_pages_records_closed_and_imports_open_questions(self) -> None:
         candidates = [

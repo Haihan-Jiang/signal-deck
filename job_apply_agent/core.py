@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import base64
 import html
 import os
 import re
@@ -833,6 +834,8 @@ def classify_application_prompt(
             "ethnicity",
             "veteran",
             "disability",
+            "nationality",
+            "national origin",
             "sexual orientation",
             "transgender",
             "pronoun",
@@ -915,6 +918,39 @@ def classify_application_prompt(
             "standard_preference",
             "standard_relocation_answer",
         )
+    if any(
+        term in text
+        for term in [
+            "most recent employer",
+            "current employer",
+            "current company",
+            "title held",
+            "current title",
+            "previous employer",
+        ]
+    ):
+        return ApplicationPromptClassification(
+            "employment_history",
+            "auto_fill_from_profile",
+            "resume_fact",
+            "employment_history_profile_field",
+        )
+    if any(
+        term in text
+        for term in [
+            "start date month",
+            "start date year",
+            "end date month",
+            "end date year",
+            "employment dates",
+        ]
+    ):
+        return ApplicationPromptClassification(
+            "employment_dates",
+            "auto_fill_from_profile",
+            "resume_fact",
+            "employment_date_profile_field",
+        )
     if "privacy" in text or "acknowledgement" in text or "acknowledgment" in text:
         return ApplicationPromptClassification(
             "policy_acknowledgement",
@@ -992,7 +1028,21 @@ def classify_application_prompt(
             "profile",
             "employer_specific_history",
         )
-    if any(term in text for term in ["why", "interest", "relevant experience", "project", "describe"]):
+    if any(
+        term in text
+        for term in [
+            "why",
+            "interest",
+            "relevant experience",
+            "project",
+            "describe",
+            "outline",
+            "share your",
+            "tell us about",
+            "explain",
+            "how have you",
+        ]
+    ):
         return ApplicationPromptClassification(
             "role_specific_free_text",
             "generate_custom_material",
@@ -3262,6 +3312,176 @@ def import_candidate_observations(
         "imported": imported,
         "skipped": skipped,
     }
+
+
+def discover_candidates_from_collection_plan(
+    collection_plan: dict[str, Any],
+    max_tasks: int = 4,
+    per_task_limit: int = 10,
+    search_pages_per_task: int = 2,
+    timeout: float = 15.0,
+    fetcher: Any | None = None,
+) -> dict[str, Any]:
+    fetch_page = fetcher or fetch_live_page_text
+    tasks = [
+        task
+        for task in collection_plan.get("tasks", [])
+        if isinstance(task, dict)
+    ][: max(max_tasks, 0)]
+    candidates: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    search_page_count = 0
+
+    for task in tasks:
+        task_candidates = 0
+        search_urls = _candidate_discovery_search_urls(task)[: max(search_pages_per_task, 0)]
+        for search_url in search_urls:
+            if task_candidates >= max(per_task_limit, 0):
+                break
+            search_page_count += 1
+            try:
+                page_html = fetch_page(search_url, timeout)
+            except Exception as exc:  # noqa: BLE001 - discovery keeps moving across tasks.
+                errors.append(
+                    {
+                        "platform": task.get("platform"),
+                        "role_family": task.get("role_family"),
+                        "search_url": search_url,
+                        "error": str(exc),
+                    }
+                )
+                continue
+
+            for link in _extract_candidate_links_from_search_html(
+                page_html,
+                platform=str(task.get("platform") or ""),
+            ):
+                candidate = _candidate_from_discovered_link(link, task, search_url)
+                if candidate is None:
+                    continue
+                key = job_registry_key(candidate)
+                if key in seen_keys:
+                    continue
+                candidates.append(candidate)
+                seen_keys.add(key)
+                task_candidates += 1
+                if task_candidates >= max(per_task_limit, 0):
+                    break
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "collection_plan_search_discovery",
+        "collection_plan_generated_at": collection_plan.get("generated_at"),
+        "task_count": len(tasks),
+        "search_page_count": search_page_count,
+        "candidate_count": len(candidates),
+        "error_count": len(errors),
+        "per_platform_counts": _count_by(candidates, "platform"),
+        "per_platform_role_counts": _platform_role_counts(
+            [
+                {
+                    "platform": candidate.get("platform"),
+                    "role_variant": candidate.get("role_family"),
+                }
+                for candidate in candidates
+            ]
+        ),
+        "candidates": candidates,
+        "errors": errors,
+        "next_command": (
+            "python3 -m job_apply_agent observe-candidates "
+            "--input job_apply_agent/outbox/discovered_candidates_latest.json "
+            "--live-check-limit 25"
+        ),
+        "policy": {
+            "read_only_discovery": True,
+            "requires_live_check_before_import": True,
+            "do_not_submit_real_applications": True,
+        },
+    }
+
+
+def write_candidate_discovery_report(
+    collection_plan: dict[str, Any],
+    json_output: str | Path,
+    markdown_output: str | Path,
+    max_tasks: int = 4,
+    per_task_limit: int = 10,
+    search_pages_per_task: int = 2,
+    timeout: float = 15.0,
+    fetcher: Any | None = None,
+) -> dict[str, Any]:
+    report = discover_candidates_from_collection_plan(
+        collection_plan,
+        max_tasks=max_tasks,
+        per_task_limit=per_task_limit,
+        search_pages_per_task=search_pages_per_task,
+        timeout=timeout,
+        fetcher=fetcher,
+    )
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2), encoding="utf-8")
+    markdown_path.write_text(render_candidate_discovery_markdown(report), encoding="utf-8")
+    return report
+
+
+def render_candidate_discovery_markdown(report: dict[str, Any]) -> str:
+    lines = [
+        "# Candidate Discovery Report",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        f"Tasks searched: {report.get('task_count', 0)}",
+        f"Search pages fetched: {report.get('search_page_count', 0)}",
+        f"Candidates discovered: {report.get('candidate_count', 0)}",
+        f"Errors: {report.get('error_count', 0)}",
+        "",
+        "## Platform Counts",
+        "",
+    ]
+    counts = report.get("per_platform_counts") or {}
+    if counts:
+        for platform, count in sorted(counts.items()):
+            lines.append(f"- {platform}: {count}")
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Candidates", ""])
+    candidates = report.get("candidates") or []
+    if candidates:
+        lines.extend(["| Platform | Role family | Company | Title | URL |", "| --- | --- | --- | --- | --- |"])
+        for candidate in candidates[:80]:
+            lines.append(
+                "| {platform} | {role} | {company} | {title} | {url} |".format(
+                    platform=candidate.get("platform") or "",
+                    role=candidate.get("role_family") or "",
+                    company=candidate.get("company") or "",
+                    title=candidate.get("title") or "",
+                    url=candidate.get("apply_url") or "",
+                )
+            )
+        if len(candidates) > 80:
+            lines.append(f"\n... {len(candidates) - 80} more in the JSON report.")
+    else:
+        lines.append("- None")
+
+    errors = report.get("errors") or []
+    if errors:
+        lines.extend(["", "## Errors", ""])
+        for error in errors[:20]:
+            lines.append(
+                "- {platform} / {role}: {error}".format(
+                    platform=error.get("platform"),
+                    role=error.get("role_family"),
+                    error=error.get("error"),
+                )
+            )
+
+    lines.extend(["", "## Next", "", f"`{report.get('next_command')}`"])
+    return "\n".join(lines) + "\n"
 
 
 def write_question_export(
@@ -6902,6 +7122,218 @@ def _load_candidate_rows(path: Path) -> list[dict[str, Any]]:
     return []
 
 
+def _extract_candidate_links_from_search_html(
+    page_html: str,
+    platform: str = "",
+) -> list[dict[str, str]]:
+    links: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for match in re.finditer(
+        r"<a\b[^>]*\bhref=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>",
+        str(page_html),
+        flags=re.IGNORECASE | re.DOTALL,
+    ):
+        href = html.unescape(match.group(1))
+        text = _clean_html_text(match.group(2))
+        for candidate_url in _candidate_urls_from_href(href):
+            normalized_url = _normalize_candidate_apply_url(candidate_url)
+            if not normalized_url:
+                continue
+            inferred_platform = infer_platform_from_url(normalized_url)
+            if platform and inferred_platform and inferred_platform.lower() != platform.lower():
+                continue
+            if platform and not inferred_platform:
+                continue
+            key = normalized_url.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            links.append({"url": normalized_url, "text": text})
+    for match in re.finditer(
+        r"<link>(.*?)</link>",
+        str(page_html),
+        flags=re.IGNORECASE | re.DOTALL,
+    ):
+        text = _clean_html_text(match.group(1))
+        for candidate_url in _candidate_urls_from_href(text):
+            normalized_url = _normalize_candidate_apply_url(candidate_url)
+            if not normalized_url:
+                continue
+            inferred_platform = infer_platform_from_url(normalized_url)
+            if platform and inferred_platform and inferred_platform.lower() != platform.lower():
+                continue
+            key = normalized_url.lower()
+            if key not in seen:
+                seen.add(key)
+                links.append({"url": normalized_url, "text": ""})
+    for match in re.finditer(r"https?://[^\s\"'<>]+", str(page_html), flags=re.IGNORECASE):
+        for candidate_url in _candidate_urls_from_href(match.group(0)):
+            normalized_url = _normalize_candidate_apply_url(candidate_url)
+            if not normalized_url:
+                continue
+            inferred_platform = infer_platform_from_url(normalized_url)
+            if platform and inferred_platform and inferred_platform.lower() != platform.lower():
+                continue
+            key = normalized_url.lower()
+            if key not in seen:
+                seen.add(key)
+                links.append({"url": normalized_url, "text": ""})
+    return links
+
+
+def _candidate_discovery_search_urls(task: dict[str, Any]) -> list[str]:
+    platform = str(task.get("platform") or "")
+    query = str(task.get("query") or "")
+    urls: list[str] = []
+    site = _platform_primary_search_domain(platform)
+    if site and query:
+        encoded = urllib.parse.quote_plus(f"site:{site} {query}")
+        urls.extend(
+            [
+                f"https://www.bing.com/search?format=rss&q={encoded}&count=50",
+                f"https://www.bing.com/search?q={encoded}&count=50",
+            ]
+        )
+    for url in _string_list(task.get("search_urls")):
+        if url not in urls:
+            urls.append(url)
+    return urls
+
+
+def _platform_primary_search_domain(platform: str) -> str:
+    normalized = _normalize(platform)
+    if normalized == "ashby":
+        return "jobs.ashbyhq.com"
+    if normalized == "greenhouse":
+        return "job-boards.greenhouse.io"
+    if normalized == "lever":
+        return "jobs.lever.co"
+    if normalized == "linkedin":
+        return "linkedin.com/jobs/view"
+    return ""
+
+
+def _candidate_urls_from_href(href: str) -> list[str]:
+    value = str(href or "").strip()
+    if not value:
+        return []
+    decoded = html.unescape(value)
+    urls: list[str] = []
+
+    def add(candidate: str) -> None:
+        candidate = urllib.parse.unquote(html.unescape(str(candidate))).strip()
+        if candidate.startswith("//"):
+            candidate = "https:" + candidate
+        if candidate.startswith("http://") or candidate.startswith("https://"):
+            urls.append(candidate)
+
+    add(decoded)
+    parsed = urllib.parse.urlparse(decoded)
+    query = urllib.parse.parse_qs(parsed.query)
+    for key in ["q", "url", "u"]:
+        for raw in query.get(key, []):
+            add(raw)
+            bing_url = _decode_bing_redirect_url(raw)
+            if bing_url:
+                add(bing_url)
+    return urls
+
+
+def _decode_bing_redirect_url(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw.startswith("a1") or len(raw) <= 2:
+        return ""
+    payload = raw[2:]
+    padding = "=" * (-len(payload) % 4)
+    try:
+        return base64.urlsafe_b64decode((payload + padding).encode("ascii")).decode(
+            "utf-8",
+            "ignore",
+        )
+    except Exception:  # noqa: BLE001 - best-effort redirect decoding.
+        return ""
+
+
+def _normalize_candidate_apply_url(url: str) -> str:
+    parsed = urllib.parse.urlparse(str(url).strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    host = parsed.netloc.lower()
+    path = parsed.path or ""
+    if "linkedin.com" in host:
+        job_id = extract_linkedin_job_id(str(url))
+        if not job_id:
+            return ""
+        return f"https://www.linkedin.com/jobs/view/{job_id}/"
+    if "greenhouse.io" in host:
+        if "/jobs/" not in path:
+            return ""
+        return shorten_apply_url(urllib.parse.urlunparse((parsed.scheme, parsed.netloc, path, "", "", "")))
+    if "ashbyhq.com" in host:
+        if len([part for part in path.split("/") if part]) < 2:
+            return ""
+        return shorten_apply_url(urllib.parse.urlunparse((parsed.scheme, parsed.netloc, path, "", "", "")))
+    if "lever.co" in host:
+        if len([part for part in path.split("/") if part]) < 2:
+            return ""
+        return shorten_apply_url(urllib.parse.urlunparse((parsed.scheme, parsed.netloc, path, "", "", "")))
+    return ""
+
+
+def _candidate_from_discovered_link(
+    link: dict[str, str],
+    task: dict[str, Any],
+    search_url: str,
+) -> dict[str, Any] | None:
+    apply_url = _normalize_candidate_apply_url(str(link.get("url") or ""))
+    if not apply_url:
+        return None
+    platform = infer_platform_from_url(apply_url) or str(task.get("platform") or "Unknown")
+    company = _company_from_apply_url(apply_url)
+    title = _title_from_search_result_text(str(link.get("text") or ""), company)
+    candidate = {
+        "status": "DISCOVERED_CANDIDATE",
+        "platform": platform,
+        "company": company,
+        "title": title,
+        "job_id": extract_linkedin_job_id(apply_url),
+        "apply_url": apply_url,
+        "role_family": task.get("role_family"),
+        "discovery_query": task.get("query"),
+        "discovery_search_url": search_url,
+        "source": "collection_plan_search_discovery",
+    }
+    return {key: value for key, value in candidate.items() if value not in {None, ""}}
+
+
+def _company_from_apply_url(url: str) -> str:
+    parsed = urllib.parse.urlparse(str(url))
+    parts = [urllib.parse.unquote(part) for part in parsed.path.split("/") if part]
+    host = parsed.netloc.lower()
+    company = ""
+    if "greenhouse.io" in host and parts:
+        company = parts[0]
+    elif "ashbyhq.com" in host and parts:
+        company = parts[0]
+    elif "lever.co" in host and parts:
+        company = parts[0]
+    if not company:
+        return ""
+    return re.sub(r"[-_]+", " ", company).strip().title()
+
+
+def _title_from_search_result_text(text: str, company: str = "") -> str:
+    value = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not value:
+        return ""
+    value = re.sub(r"\s+\|\s+LinkedIn.*$", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"\s+-\s+[^-]{1,80}\s+Jobs?\s*$", "", value, flags=re.IGNORECASE)
+    if company:
+        value = re.sub(rf"\s+at\s+{re.escape(company)}\b.*$", "", value, flags=re.IGNORECASE)
+        value = re.sub(rf"\s+-\s+{re.escape(company)}\b.*$", "", value, flags=re.IGNORECASE)
+    return value[:180]
+
+
 def _normalize_candidate_observation(candidate: dict[str, Any], source: str) -> dict[str, Any]:
     apply_url = str(
         candidate.get("apply_url")
@@ -6989,10 +7421,24 @@ def _skip_low_signal_prompt(
 
 
 def _is_low_signal_application_prompt(normalized: str) -> bool:
+    if re.fullmatch(r"go page \d+", normalized):
+        return True
+    if normalized.startswith("toggle child menu"):
+        return True
     return normalized in {
         "ai powered advice",
         "am i a good fit for this job",
+        "department",
+        "department filter",
+        "discipline",
+        "discipline 0",
+        "enter manually",
+        "keyword filter",
+        "next page",
+        "office",
+        "previous page",
         "tailor my resume",
+        "toggle flyout",
     }
 
 

@@ -259,6 +259,28 @@ job_apply_agent/outbox/collection_plan_latest.json
 job_apply_agent/outbox/collection_plan_latest.md
 ```
 
+Use the collection queue to fetch public search result pages and extract ATS
+apply URLs into a candidate file:
+
+```bash
+python3 -m job_apply_agent discover-candidates \
+  --collection-plan-json job_apply_agent/outbox/collection_plan_latest.json \
+  --max-tasks 4 \
+  --per-task-limit 10
+```
+
+This writes:
+
+```text
+job_apply_agent/outbox/discovered_candidates_latest.json
+job_apply_agent/outbox/discovered_candidates_latest.md
+```
+
+Discovery is read-only. It only extracts LinkedIn, Ashby, Greenhouse, and Lever
+apply URLs from search pages. Run `observe-candidates` next so every discovered
+page is live-checked, closed postings are persisted, and only open positions are
+imported.
+
 After collecting candidate jobs externally or through supervised browser work,
 append them as normalized observations:
 
