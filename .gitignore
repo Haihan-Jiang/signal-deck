@@ -3,3 +3,4 @@ __pycache__/
 .DS_Store
 .idea/
 logs/
+daily_ops_agent/outbox/
