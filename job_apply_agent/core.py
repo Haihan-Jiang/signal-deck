@@ -898,6 +898,8 @@ def build_application_research(
         payload = _read_json_file(path)
         if not isinstance(payload, dict):
             continue
+        if _is_closed_jobs_registry_payload(path, payload):
+            continue
         if isinstance(payload.get("fields"), list) or isinstance(payload.get("buttons"), list):
             _collect_form_snapshot_research(path, payload, items, positions)
         if isinstance(payload.get("questions"), list):
@@ -3095,7 +3097,7 @@ def import_candidate_observations(
     output_path: str | Path,
     source: str = "manual_collection",
 ) -> dict[str, Any]:
-    candidates = _load_candidate_rows(Path(input_path))
+    candidates = load_candidate_rows(input_path)
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     existing_keys: set[str] = set()
@@ -3129,6 +3131,387 @@ def import_candidate_observations(
         "imported": imported,
         "skipped": skipped,
     }
+
+
+def load_candidate_rows(path: str | Path) -> list[dict[str, Any]]:
+    return _load_candidate_rows(Path(path))
+
+
+def observe_candidate_pages(
+    candidates: list[dict[str, Any]],
+    observed_output_path: str | Path,
+    closed_jobs_path: str | Path,
+    max_checks: int | None = DEFAULT_LIVE_CHECK_LIMIT,
+    timeout: float = 15.0,
+    fetcher: Any | None = None,
+    source: str = "live_candidate_observation",
+) -> dict[str, Any]:
+    closed_jobs = load_closed_jobs(closed_jobs_path)
+    fetch_page = fetcher or fetch_live_page_text
+    output = Path(observed_output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    existing_keys: set[str] = set()
+    if output.exists():
+        for row in load_submissions_jsonl(output, limit=None):
+            existing_keys.add(job_registry_key(row))
+
+    checks: list[dict[str, Any]] = []
+    observed: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    live_checked_count = 0
+    newly_closed_count = 0
+
+    for index, candidate in enumerate(candidates, start=1):
+        apply_url = str(
+            candidate.get("apply_url")
+            or candidate.get("short_apply_url")
+            or candidate.get("url")
+            or candidate.get("job_url")
+            or ""
+        ).strip()
+        short_url = shorten_apply_url(apply_url, candidate)
+        check = {
+            "index": index,
+            "key": job_registry_key({**candidate, "apply_url": short_url or apply_url}),
+            "company": candidate.get("company") or candidate.get("company_name"),
+            "title": candidate.get("title") or candidate.get("job_title"),
+            "platform": candidate.get("platform") or infer_platform_from_url(short_url),
+            "job_id": candidate.get("job_id") or extract_linkedin_job_id(short_url),
+            "url": short_url,
+            "status": "pending",
+            "closed": False,
+            "observed": False,
+        }
+
+        registry_reason = _closed_registry_reason(candidate, closed_jobs)
+        if registry_reason:
+            check.update(
+                {
+                    "status": "closed_registry",
+                    "closed": True,
+                    "reason": registry_reason.removeprefix("closed:").replace("_", " "),
+                }
+            )
+            checks.append(check)
+            continue
+
+        embedded_phrase = closed_application_phrase(candidate)
+        if embedded_phrase:
+            record_closed_job(
+                closed_jobs_path,
+                {**candidate, "apply_url": short_url or apply_url},
+                reason=embedded_phrase,
+                source=f"{source}:embedded_text",
+            )
+            closed_jobs = load_closed_jobs(closed_jobs_path)
+            newly_closed_count += 1
+            check.update(
+                {
+                    "status": "closed_embedded_text",
+                    "closed": True,
+                    "reason": embedded_phrase,
+                }
+            )
+            checks.append(check)
+            continue
+
+        if not short_url:
+            check["status"] = "missing_apply_url"
+            checks.append(check)
+            continue
+
+        if not should_live_check_url(short_url):
+            check["status"] = "not_live_checkable"
+            checks.append(check)
+            continue
+
+        if max_checks is not None and max_checks >= 0 and live_checked_count >= max_checks:
+            check["status"] = "not_checked_limit"
+            checks.append(check)
+            continue
+
+        live_checked_count += 1
+        try:
+            page_html = fetch_page(short_url, timeout)
+        except Exception as exc:  # noqa: BLE001 - observation reports uncertainty.
+            check.update({"status": "check_error", "error": str(exc)})
+            checks.append(check)
+            continue
+
+        page_text = _html_to_text(page_html)
+        live_phrase = closed_application_phrase({"page_text": page_text})
+        if live_phrase:
+            record_closed_job(
+                closed_jobs_path,
+                {**candidate, "apply_url": short_url},
+                reason=live_phrase,
+                source=f"{source}:live_text",
+            )
+            closed_jobs = load_closed_jobs(closed_jobs_path)
+            newly_closed_count += 1
+            check.update(
+                {
+                    "status": "closed_live_text",
+                    "closed": True,
+                    "reason": live_phrase,
+                }
+            )
+            checks.append(check)
+            continue
+
+        platform = candidate.get("platform") or infer_platform_from_url(short_url)
+        metadata = extract_live_job_page_metadata(
+            page_html,
+            include_form_fields=str(platform or "").lower() != "linkedin",
+        )
+        observation_input = {
+            **candidate,
+            "apply_url": short_url,
+            "platform": platform,
+            "company": candidate.get("company") or candidate.get("company_name") or metadata.get("company"),
+            "title": candidate.get("title") or candidate.get("job_title") or metadata.get("title"),
+            "questions": candidate.get("questions") or metadata.get("questions"),
+            "page_excerpt": candidate.get("page_excerpt") or metadata.get("page_excerpt"),
+            "description": candidate.get("description") or metadata.get("description"),
+        }
+        normalized = _normalize_candidate_observation(observation_input, source=source)
+        key = normalized["registry_key"]
+        if key in existing_keys:
+            check.update({"status": "duplicate_observation", "observed": False})
+            skipped.append({"reason": "duplicate", "key": key})
+            checks.append(check)
+            continue
+        observed.append(normalized)
+        existing_keys.add(key)
+        check.update(
+            {
+                "status": "observed_open",
+                "observed": True,
+                "question_count": len(_string_list(normalized.get("questions"))),
+            }
+        )
+        checks.append(check)
+
+    with output.open("a", encoding="utf-8") as handle:
+        for row in observed:
+            handle.write(json.dumps(row, ensure_ascii=True, sort_keys=True) + "\n")
+
+    closed_checks = [check for check in checks if check.get("closed")]
+    observed_checks = [check for check in checks if check.get("observed")]
+    error_checks = [check for check in checks if check.get("status") == "check_error"]
+    uncertain_checks = [
+        check
+        for check in checks
+        if not check.get("closed") and not check.get("observed")
+    ]
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": source,
+        "candidate_count": len(candidates),
+        "checked_count": len(checks),
+        "live_checked_count": live_checked_count,
+        "observed_count": len(observed_checks),
+        "closed_count": len(closed_checks),
+        "newly_closed_count": newly_closed_count,
+        "uncertain_count": len(uncertain_checks),
+        "error_count": len(error_checks),
+        "skipped_count": len(skipped),
+        "status_counts": _count_by(checks, "status"),
+        "observed_output": str(observed_output_path),
+        "closed_jobs_path": str(closed_jobs_path),
+        "max_checks": max_checks,
+        "checks": checks,
+        "observed": observed,
+        "closed_candidates": closed_checks,
+        "uncertain_candidates": uncertain_checks,
+        "skipped": skipped,
+        "policy": {
+            "stop_on_closed_posting": True,
+            "persist_closed_postings": True,
+            "write_only_live_observed_open_positions": True,
+            "do_not_submit_real_applications": True,
+        },
+    }
+
+
+def write_candidate_observation_report(
+    candidates: list[dict[str, Any]],
+    observed_output_path: str | Path,
+    closed_jobs_path: str | Path,
+    json_output: str | Path,
+    markdown_output: str | Path,
+    max_checks: int | None = DEFAULT_LIVE_CHECK_LIMIT,
+    timeout: float = 15.0,
+    fetcher: Any | None = None,
+    source: str = "live_candidate_observation",
+) -> dict[str, Any]:
+    report = observe_candidate_pages(
+        candidates,
+        observed_output_path,
+        closed_jobs_path,
+        max_checks=max_checks,
+        timeout=timeout,
+        fetcher=fetcher,
+        source=source,
+    )
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2), encoding="utf-8")
+    markdown_path.write_text(render_candidate_observation_markdown(report), encoding="utf-8")
+    return report
+
+
+def extract_live_job_page_metadata(
+    page_html: str,
+    include_form_fields: bool = True,
+) -> dict[str, Any]:
+    page_text = _html_to_text(page_html)
+    title = _extract_html_title(page_html)
+    company = _extract_html_meta(page_html, ["og:site_name", "twitter:site"])
+    questions = extract_application_prompts_from_html(
+        page_html,
+        include_form_fields=include_form_fields,
+    )
+    return {
+        "title": title,
+        "company": company,
+        "questions": questions,
+        "description": _extract_html_meta(page_html, ["description", "og:description"]),
+        "page_excerpt": page_text[:1200],
+    }
+
+
+def extract_application_prompts_from_html(
+    page_html: str,
+    include_form_fields: bool = True,
+) -> list[str]:
+    prompts: list[str] = []
+
+    def add(value: str, source_kind: str = "text") -> None:
+        text = _clean_html_text(value)
+        if source_kind == "button" and _normalize(text) not in {
+            "submit application",
+            "submit",
+            "continue",
+            "next",
+            "save and continue",
+        }:
+            return
+        if not _looks_like_application_prompt(text):
+            return
+        normalized = _normalize_question(text)
+        if len(text) < 2 or not normalized:
+            return
+        if normalized in {_normalize_question(item) for item in prompts}:
+            return
+        prompts.append(text)
+
+    if include_form_fields:
+        for pattern in [
+            r"(?is)<label\b[^>]*>(.*?)</label>",
+            r"(?is)<legend\b[^>]*>(.*?)</legend>",
+        ]:
+            for match in re.finditer(pattern, page_html):
+                add(match.group(1))
+
+        for match in re.finditer(r"(?is)<button\b[^>]*>(.*?)</button>", page_html):
+            add(match.group(1), source_kind="button")
+
+        for tag_match in re.finditer(
+            r"(?is)<(?:input|textarea|select|button)\b([^>]*)>",
+            page_html,
+        ):
+            attrs = _html_attrs(tag_match.group(1))
+            for attr in ["aria-label", "placeholder", "name", "id"]:
+                value = attrs.get(attr)
+                if not value:
+                    continue
+                if attr in {"name", "id"}:
+                    value = _humanize_field_identifier(value)
+                add(value, source_kind="field_attr")
+
+    for match in re.finditer(r"(?is)>([^<>]{8,240}\?)<", page_html):
+        add(match.group(1), source_kind="question")
+
+    return prompts[:80]
+
+
+def render_candidate_observation_markdown(report: dict[str, Any]) -> str:
+    lines = [
+        "# Candidate Observation Report",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        f"Candidates: {report.get('candidate_count', 0)}",
+        f"Live checked: {report.get('live_checked_count', 0)}",
+        f"Observed open: {report.get('observed_count', 0)}",
+        f"Closed: {report.get('closed_count', 0)}",
+        f"Newly closed: {report.get('newly_closed_count', 0)}",
+        f"Uncertain: {report.get('uncertain_count', 0)}",
+        f"Errors: {report.get('error_count', 0)}",
+        f"Observed output: {report.get('observed_output')}",
+        "",
+        "## Status Counts",
+        "",
+    ]
+    for status, count in sorted((report.get("status_counts") or {}).items()):
+        lines.append(f"- {status}: {count}")
+
+    observed = report.get("observed") or []
+    lines.extend(["", "## Observed Open Positions", ""])
+    if observed:
+        for item in observed[:80]:
+            lines.append(
+                "- {platform}: {company} - {title} ({questions} question(s))".format(
+                    platform=item.get("platform") or "Unknown",
+                    company=item.get("company") or "Unknown",
+                    title=item.get("title") or "Unknown",
+                    questions=len(_string_list(item.get("questions"))),
+                )
+            )
+            if item.get("apply_url"):
+                lines.append(f"  url: {item.get('apply_url')}")
+    else:
+        lines.append("- None")
+
+    closed = report.get("closed_candidates") or []
+    lines.extend(["", "## Closed Candidates", ""])
+    if closed:
+        for item in closed[:80]:
+            lines.append(
+                "- {status}: {company} - {title} ({reason})".format(
+                    status=item.get("status"),
+                    company=item.get("company") or "Unknown",
+                    title=item.get("title") or "Unknown",
+                    reason=item.get("reason") or "closed",
+                )
+            )
+            if item.get("url"):
+                lines.append(f"  url: {item.get('url')}")
+    else:
+        lines.append("- None")
+
+    uncertain = report.get("uncertain_candidates") or []
+    lines.extend(["", "## Uncertain Candidates", ""])
+    if uncertain:
+        for item in uncertain[:80]:
+            detail = item.get("error") or item.get("status") or "uncertain"
+            lines.append(
+                "- {status}: {company} - {title} ({detail})".format(
+                    status=item.get("status"),
+                    company=item.get("company") or "Unknown",
+                    title=item.get("title") or "Unknown",
+                    detail=detail,
+                )
+            )
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Policy", ""])
+    for key, value in sorted((report.get("policy") or {}).items()):
+        lines.append(f"- {key}: {str(bool(value)).lower()}")
+    return "\n".join(lines) + "\n"
 
 
 def write_application_playbook(
@@ -4543,6 +4926,18 @@ def _read_json_file(path: Path) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def _is_closed_jobs_registry_payload(path: Path, payload: dict[str, Any]) -> bool:
+    if path.name == "closed_jobs.json":
+        return True
+    jobs = payload.get("jobs")
+    if not isinstance(jobs, list) or not jobs:
+        return False
+    return all(
+        isinstance(job, dict) and str(job.get("status") or "").upper() == "CLOSED"
+        for job in jobs
+    )
 
 
 def _collect_form_snapshot_research(
@@ -6305,6 +6700,151 @@ def _flatten_text(value: Any) -> str:
     if isinstance(value, list):
         return " ".join(_flatten_text(item) for item in value)
     return str(value)
+
+
+def _html_to_text(html_text: str) -> str:
+    text = re.sub(r"(?is)<(script|style)\b.*?</\1>", " ", str(html_text or ""))
+    text = re.sub(r"(?is)<br\s*/?>", "\n", text)
+    text = re.sub(r"(?is)</(p|div|li|label|legend|h[1-6]|tr)>", "\n", text)
+    text = re.sub(r"(?is)<[^>]+>", " ", text)
+    return re.sub(r"\s+", " ", html.unescape(text)).strip()
+
+
+def _clean_html_text(value: str) -> str:
+    return re.sub(r"\s+", " ", _html_to_text(value)).strip(" *:\u00a0")
+
+
+def _extract_html_meta(html_text: str, names: list[str]) -> str | None:
+    wanted = {_normalize(name) for name in names}
+    for match in re.finditer(r"(?is)<meta\b([^>]*)>", str(html_text or "")):
+        attrs = _html_attrs(match.group(1))
+        key = attrs.get("property") or attrs.get("name")
+        if key and _normalize(key) in wanted:
+            content = attrs.get("content")
+            if content:
+                return html.unescape(content).strip()
+    return None
+
+
+def _extract_html_title(html_text: str) -> str | None:
+    meta_title = _extract_html_meta(html_text, ["og:title", "twitter:title"])
+    if meta_title:
+        return meta_title
+    match = re.search(r"(?is)<title\b[^>]*>(.*?)</title>", str(html_text or ""))
+    if match:
+        title = _clean_html_text(match.group(1))
+        return title or None
+    return None
+
+
+def _html_attrs(attr_text: str) -> dict[str, str]:
+    attrs: dict[str, str] = {}
+    for match in re.finditer(r"(?is)([a-z_:][-a-z0-9_:.]*)\s*=\s*(['\"])(.*?)\2", attr_text):
+        attrs[match.group(1).lower()] = html.unescape(match.group(3)).strip()
+    return attrs
+
+
+def _humanize_field_identifier(value: str) -> str:
+    text = str(value or "").strip()
+    if len(text) > 80 or re.search(r"[\[\]/{}]|_{2,}", text):
+        return ""
+    text = re.sub(r"([a-z])([A-Z])", r"\1 \2", text)
+    text = re.sub(r"[-_.:]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _looks_like_application_prompt(text: str) -> bool:
+    normalized = _normalize(text)
+    if not normalized:
+        return False
+    low_signal = {
+        "apply",
+        "clear text",
+        "close",
+        "continue with google",
+        "dismiss",
+        "forgot password",
+        "jobs",
+        "language",
+        "learning",
+        "more searches",
+        "open menu",
+        "people",
+        "primary",
+        "search",
+        "set alert",
+        "show",
+        "show fewer jobs like this",
+        "show fewer similar searches",
+        "show less",
+        "show more",
+        "show more jobs like this",
+        "show more similar searches",
+        "sign in",
+        "sign in with email",
+    }
+    if normalized in low_signal:
+        return False
+    meta_keys = {
+        "bingbot",
+        "description",
+        "locale",
+        "pagekey",
+        "robots",
+        "theme color",
+        "twitter card",
+        "twitter description",
+        "twitter image",
+        "twitter site",
+        "twitter title",
+        "viewport",
+    }
+    if normalized.startswith("public jobs ") or normalized in meta_keys:
+        return False
+    if len(text) > 160 and "?" not in text:
+        return False
+    language_options = {
+        "arabic",
+        "bangla",
+        "chinese simplified",
+        "chinese traditional",
+        "czech",
+        "danish",
+        "dutch",
+        "english english",
+        "finnish",
+        "french",
+        "german",
+        "greek",
+        "hindi",
+        "hungarian",
+        "indonesian",
+        "italian",
+        "japanese",
+        "korean",
+        "malay",
+        "marathi",
+        "norwegian",
+        "persian",
+        "polish",
+        "portuguese",
+        "romanian",
+        "russian",
+        "spanish",
+        "swedish",
+        "tagalog",
+        "thai",
+        "turkish",
+        "ukrainian",
+        "vietnamese",
+    }
+    if normalized in language_options or normalized.endswith(" selected"):
+        return False
+    if len(text) >= 8:
+        non_ascii = sum(1 for char in text if ord(char) > 127)
+        if non_ascii / max(len(text), 1) > 0.25:
+            return False
+    return True
 
 
 def _normalize(value: str) -> str:

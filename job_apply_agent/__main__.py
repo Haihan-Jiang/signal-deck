@@ -11,6 +11,7 @@ from .core import (
     build_application_research,
     build_position_readiness_report,
     import_candidate_observations,
+    load_candidate_rows,
     learn_answers,
     load_answer_memory,
     load_closed_jobs,
@@ -27,6 +28,7 @@ from .core import (
     write_application_playbook,
     write_application_research_report,
     write_browser_action_manifest,
+    write_candidate_observation_report,
     write_browser_dom_harness,
     write_closed_posting_preflight,
     write_collection_plan,
@@ -82,6 +84,8 @@ DEFAULT_COVERAGE_GATE_MARKDOWN = Path(__file__).with_name("outbox") / "research_
 DEFAULT_COLLECTION_PLAN_JSON = Path(__file__).with_name("outbox") / "collection_plan_latest.json"
 DEFAULT_COLLECTION_PLAN_MARKDOWN = Path(__file__).with_name("outbox") / "collection_plan_latest.md"
 DEFAULT_OBSERVED_CANDIDATES = Path(__file__).with_name("outbox") / "observed_candidates.jsonl"
+DEFAULT_CANDIDATE_OBSERVATION_JSON = Path(__file__).with_name("outbox") / "candidate_observation_latest.json"
+DEFAULT_CANDIDATE_OBSERVATION_MARKDOWN = Path(__file__).with_name("outbox") / "candidate_observation_latest.md"
 DEFAULT_PERSONAL_PROFILE = Path(__file__).with_name("outbox") / "alan_jiang_profile.json"
 
 
@@ -424,6 +428,20 @@ def main() -> int:
     import_candidates_parser.add_argument("--output", default=str(DEFAULT_OBSERVED_CANDIDATES))
     import_candidates_parser.add_argument("--source", default="manual_collection")
 
+    observe_candidates_parser = subparsers.add_parser(
+        "observe-candidates",
+        help="live-check candidate URLs, persist closed pages, and import open observed positions",
+    )
+    observe_candidates_parser.add_argument("--input", required=True)
+    observe_candidates_parser.add_argument("--limit", type=int, default=-1)
+    observe_candidates_parser.add_argument("--output", default=str(DEFAULT_OBSERVED_CANDIDATES))
+    observe_candidates_parser.add_argument("--closed-jobs", default=str(DEFAULT_CLOSED_JOBS))
+    observe_candidates_parser.add_argument("--live-check-limit", type=int, default=25)
+    observe_candidates_parser.add_argument("--live-check-timeout", type=float, default=15.0)
+    observe_candidates_parser.add_argument("--json-output", default=str(DEFAULT_CANDIDATE_OBSERVATION_JSON))
+    observe_candidates_parser.add_argument("--markdown-output", default=str(DEFAULT_CANDIDATE_OBSERVATION_MARKDOWN))
+    observe_candidates_parser.add_argument("--source", default="live_candidate_observation")
+
     args = parser.parse_args()
 
     if args.command == "learn":
@@ -478,6 +496,29 @@ def main() -> int:
         print(f"Live checked: {report.get('live_checked_count', 0)}")
         print(f"Closed: {report.get('closed_count', 0)}")
         print(f"Open eligible: {report.get('open_eligible_count', 0)}")
+        print(f"Uncertain: {report.get('uncertain_count', 0)}")
+        return 0
+
+    if args.command == "observe-candidates":
+        candidates = load_candidate_rows(args.input)
+        if args.limit is not None and args.limit >= 0:
+            candidates = candidates[: args.limit]
+        report = write_candidate_observation_report(
+            candidates,
+            args.output,
+            args.closed_jobs,
+            args.json_output,
+            args.markdown_output,
+            max_checks=args.live_check_limit,
+            timeout=args.live_check_timeout,
+            source=args.source,
+        )
+        print(f"Wrote candidate observation JSON to {args.json_output}")
+        print(f"Wrote candidate observation Markdown to {args.markdown_output}")
+        print(f"Candidates: {report.get('candidate_count', 0)}")
+        print(f"Live checked: {report.get('live_checked_count', 0)}")
+        print(f"Observed open: {report.get('observed_count', 0)}")
+        print(f"Closed: {report.get('closed_count', 0)}")
         print(f"Uncertain: {report.get('uncertain_count', 0)}")
         return 0
 

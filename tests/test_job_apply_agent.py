@@ -30,6 +30,8 @@ from job_apply_agent.core import (
     closed_application_phrase,
     execute_browser_action_manifest_locally,
     execute_form_plan_offline,
+    extract_application_prompts_from_html,
+    extract_live_job_page_metadata,
     extract_linkedin_job_id,
     find_learned_answer,
     import_candidate_observations,
@@ -38,18 +40,21 @@ from job_apply_agent.core import (
     is_job_closed,
     learn_answers,
     load_answer_memory,
+    load_candidate_rows,
     load_closed_jobs,
     load_jobs,
     load_profile,
     load_submissions_jsonl,
     load_telegram_config,
     notify_telegram_for_submissions,
+    observe_candidate_pages,
     open_apply_urls_in_browser,
     record_closed_job,
     refresh_closed_jobs_from_live_pages,
     render_answer_gap_markdown,
     render_apply_run_audit_markdown,
     render_application_playbook_markdown,
+    render_candidate_observation_markdown,
     render_application_research_markdown,
     render_collection_plan_markdown,
     render_browser_action_manifest_markdown,
@@ -74,6 +79,7 @@ from job_apply_agent.core import (
     write_application_playbook,
     write_application_research_report,
     write_browser_action_manifest,
+    write_candidate_observation_report,
     write_closed_posting_preflight,
     write_collection_plan,
     write_browser_dom_harness,
@@ -2380,6 +2386,169 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(research["positions_observed_total"], 1)
             self.assertEqual(research["platforms"]["Lever"]["positions_observed"], 1)
             self.assertIn("Lever::Software Backend", research["coverage_groups"])
+
+    def test_application_research_ignores_closed_job_registry(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            closed_registry = {
+                "version": 1,
+                "jobs": [
+                    {
+                        "key": "linkedin:4415508499",
+                        "status": "CLOSED",
+                        "reason": "No longer accepting applications",
+                        "platform": "LinkedIn",
+                        "job_id": "4415508499",
+                        "company": "ClosedCo",
+                        "title": "Site Reliability Engineer",
+                        "short_apply_url": "https://www.linkedin.com/jobs/view/4415508499/",
+                    }
+                ],
+            }
+            (Path(temp_dir) / "closed_jobs.json").write_text(
+                json.dumps(closed_registry),
+                encoding="utf-8",
+            )
+
+            research = build_application_research(temp_dir, position_target=100)
+
+            self.assertEqual(research["positions_observed_total"], 0)
+            self.assertNotIn("LinkedIn", research["platforms"])
+
+    def test_extract_live_job_page_metadata_finds_prompts(self) -> None:
+        page = """
+        <html>
+          <head>
+            <meta property="og:title" content="Backend Software Engineer">
+            <meta property="og:site_name" content="ExampleCo">
+            <meta name="description" content="Build reliable APIs.">
+          </head>
+          <body>
+            <label>First Name *</label>
+            <input aria-label="Email" />
+            <div>Are you legally authorized to work in the United States?</div>
+            <button>Submit Application</button>
+          </body>
+        </html>
+        """
+
+        metadata = extract_live_job_page_metadata(page)
+        prompts = extract_application_prompts_from_html(page)
+
+        self.assertEqual(metadata["title"], "Backend Software Engineer")
+        self.assertEqual(metadata["company"], "ExampleCo")
+        self.assertIn("First Name", prompts)
+        self.assertIn("Email", prompts)
+        self.assertIn("Are you legally authorized to work in the United States?", prompts)
+
+    def test_extract_live_job_page_metadata_can_skip_listing_page_form_noise(self) -> None:
+        page = """
+        <html>
+          <body>
+            <label>Email or phone</label>
+            <input name="session_password" aria-label="Password">
+            <input name="keywords" aria-label="Search job titles or companies">
+            <div>Am I a good fit for this job?</div>
+            <a>Forgot password?</a>
+          </body>
+        </html>
+        """
+
+        metadata = extract_live_job_page_metadata(page, include_form_fields=False)
+
+        self.assertEqual(metadata["questions"], ["Am I a good fit for this job?"])
+
+    def test_observe_candidate_pages_records_closed_and_imports_open_questions(self) -> None:
+        candidates = [
+            {
+                "platform": "LinkedIn",
+                "job_id": "4415508499",
+                "company": "ClosedCo",
+                "title": "SRE",
+                "apply_url": "https://www.linkedin.com/jobs/view/4415508499/?trk=search",
+            },
+            {
+                "platform": "Greenhouse",
+                "company": "OpenCo",
+                "title": "Backend Software Engineer",
+                "apply_url": "https://job-boards.greenhouse.io/openco/jobs/123?src=LinkedIn",
+            },
+        ]
+
+        def fake_fetcher(url: str, timeout: float) -> str:
+            if "4415508499" in url:
+                return "<html>No longer accepting applications</html>"
+            return """
+            <html>
+              <head><meta property="og:site_name" content="OpenCo"></head>
+              <body>
+                <label>LinkedIn Profile</label>
+                <div>Will you now or in the future require visa sponsorship?</div>
+                <button>Submit application</button>
+              </body>
+            </html>
+            """
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            observed_output = Path(temp_dir) / "observed_candidates.jsonl"
+            closed_path = Path(temp_dir) / "closed_jobs.json"
+
+            report = observe_candidate_pages(
+                candidates,
+                observed_output,
+                closed_path,
+                fetcher=fake_fetcher,
+                max_checks=5,
+                source="test_observation",
+            )
+            research = build_application_research(temp_dir, position_target=100)
+
+            self.assertEqual(report["live_checked_count"], 2)
+            self.assertEqual(report["closed_count"], 1)
+            self.assertEqual(report["observed_count"], 1)
+            self.assertEqual(report["status_counts"]["closed_live_text"], 1)
+            self.assertEqual(report["status_counts"]["observed_open"], 1)
+            self.assertTrue(is_job_closed(candidates[0], load_closed_jobs(closed_path)))
+            observed_rows = load_candidate_rows(observed_output)
+            self.assertEqual(len(observed_rows), 1)
+            self.assertEqual(observed_rows[0]["status"], "OBSERVED_CANDIDATE")
+            self.assertIn("LinkedIn Profile", observed_rows[0]["questions"])
+            self.assertEqual(research["positions_observed_total"], 1)
+            self.assertIn("Greenhouse::Software Backend", research["coverage_groups"])
+            markdown = render_candidate_observation_markdown(report)
+            self.assertIn("Candidate Observation Report", markdown)
+            self.assertIn("observed_open", markdown)
+
+    def test_write_candidate_observation_report_outputs_files(self) -> None:
+        candidates = [
+            {
+                "company": "Example",
+                "title": "Platform Engineer",
+                "apply_url": "https://jobs.ashbyhq.com/example/abc",
+            }
+        ]
+
+        def fake_fetcher(url: str, timeout: float) -> str:
+            return "<html><label>Website</label><button>Submit Application</button></html>"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            observed_output = Path(temp_dir) / "observed.jsonl"
+            closed_path = Path(temp_dir) / "closed.json"
+            json_output = Path(temp_dir) / "observation.json"
+            markdown_output = Path(temp_dir) / "observation.md"
+
+            report = write_candidate_observation_report(
+                candidates,
+                observed_output,
+                closed_path,
+                json_output,
+                markdown_output,
+                fetcher=fake_fetcher,
+            )
+
+            self.assertEqual(report["observed_count"], 1)
+            self.assertTrue(json_output.exists())
+            self.assertTrue(markdown_output.exists())
+            self.assertTrue(observed_output.exists())
 
 
 if __name__ == "__main__":

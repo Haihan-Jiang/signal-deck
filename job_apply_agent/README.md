@@ -267,6 +267,30 @@ python3 -m job_apply_agent import-candidates \
 Imported rows use `status=OBSERVED_CANDIDATE`, are de-duplicated by registry
 key, and are counted by the next `research` run.
 
+For a stricter collection step, live-check candidate URLs before importing
+them:
+
+```bash
+python3 -m job_apply_agent observe-candidates \
+  --input collected_jobs.jsonl \
+  --output job_apply_agent/outbox/observed_candidates.jsonl \
+  --closed-jobs job_apply_agent/outbox/closed_jobs.json \
+  --live-check-limit 25
+```
+
+This writes:
+
+```text
+job_apply_agent/outbox/candidate_observation_latest.json
+job_apply_agent/outbox/candidate_observation_latest.md
+```
+
+`observe-candidates` fetches each apply page, records pages that say
+`No longer accepting applications` into the closed-job registry, and only
+imports live observed-open positions. It also extracts visible labels,
+placeholders, buttons, and question text from the page so the next `research`
+and `gaps` run can add any new application questions to the learning queue.
+
 Turn that learning queue into a fill-in template:
 
 ```bash
