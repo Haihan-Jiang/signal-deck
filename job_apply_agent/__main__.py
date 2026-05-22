@@ -28,9 +28,11 @@ from .core import (
     write_browser_action_manifest,
     write_form_fill_plan,
     write_learning_task_template,
+    write_pre_submit_review,
     write_position_readiness_report,
     write_synthetic_apply_execution,
     write_synthetic_application_simulation,
+    write_synthetic_browser_action_execution,
 )
 
 
@@ -52,12 +54,16 @@ DEFAULT_APPLY_AUDIT_JSON = Path(__file__).with_name("outbox") / "apply_run_audit
 DEFAULT_APPLY_AUDIT_MARKDOWN = Path(__file__).with_name("outbox") / "apply_run_audit_latest.md"
 DEFAULT_BROWSER_ACTIONS_JSON = Path(__file__).with_name("outbox") / "browser_action_manifest_latest.json"
 DEFAULT_BROWSER_ACTIONS_MARKDOWN = Path(__file__).with_name("outbox") / "browser_action_manifest_latest.md"
+DEFAULT_PRE_SUBMIT_REVIEW_JSON = Path(__file__).with_name("outbox") / "pre_submit_review_latest.json"
+DEFAULT_PRE_SUBMIT_REVIEW_MARKDOWN = Path(__file__).with_name("outbox") / "pre_submit_review_latest.md"
 DEFAULT_LEARNING_TASKS_JSON = Path(__file__).with_name("outbox") / "learning_tasks_latest.json"
 DEFAULT_LEARNING_TASKS_MARKDOWN = Path(__file__).with_name("outbox") / "learning_tasks_latest.md"
 DEFAULT_SYNTHETIC_JSON = Path(__file__).with_name("outbox") / "synthetic_100_run_latest.json"
 DEFAULT_SYNTHETIC_MARKDOWN = Path(__file__).with_name("outbox") / "synthetic_100_run_latest.md"
 DEFAULT_SYNTHETIC_EXEC_JSON = Path(__file__).with_name("outbox") / "synthetic_apply_execution_latest.json"
 DEFAULT_SYNTHETIC_EXEC_MARKDOWN = Path(__file__).with_name("outbox") / "synthetic_apply_execution_latest.md"
+DEFAULT_SYNTHETIC_BROWSER_EXEC_JSON = Path(__file__).with_name("outbox") / "synthetic_browser_action_execution_latest.json"
+DEFAULT_SYNTHETIC_BROWSER_EXEC_MARKDOWN = Path(__file__).with_name("outbox") / "synthetic_browser_action_execution_latest.md"
 DEFAULT_PLAYBOOK_JSON = Path(__file__).with_name("outbox") / "application_playbook_latest.json"
 DEFAULT_PLAYBOOK_MARKDOWN = Path(__file__).with_name("outbox") / "application_playbook_latest.md"
 DEFAULT_PERSONAL_PROFILE = Path(__file__).with_name("outbox") / "alan_jiang_profile.json"
@@ -244,6 +250,28 @@ def main() -> int:
     browser_actions_parser.add_argument("--json-output", default=str(DEFAULT_BROWSER_ACTIONS_JSON))
     browser_actions_parser.add_argument("--markdown-output", default=str(DEFAULT_BROWSER_ACTIONS_MARKDOWN))
 
+    pre_submit_parser = subparsers.add_parser(
+        "pre-submit-review",
+        help="aggregate browser manifests and learning gaps into a user confirmation checklist",
+    )
+    pre_submit_parser.add_argument(
+        "--manifest",
+        action="append",
+        default=None,
+        help="browser action manifest JSON; may be passed more than once",
+    )
+    pre_submit_parser.add_argument(
+        "--outbox-dir",
+        default=str(Path(__file__).with_name("outbox")),
+        help="used to discover *_browser_actions_latest.json when --manifest is omitted",
+    )
+    pre_submit_parser.add_argument("--readiness-json", default=str(DEFAULT_READINESS_JSON))
+    pre_submit_parser.add_argument("--gaps-json", default=str(DEFAULT_GAPS_JSON))
+    pre_submit_parser.add_argument("--learning-tasks-json", default=str(DEFAULT_LEARNING_TASKS_JSON))
+    pre_submit_parser.add_argument("--synthetic-json", default=str(DEFAULT_SYNTHETIC_EXEC_JSON))
+    pre_submit_parser.add_argument("--json-output", default=str(DEFAULT_PRE_SUBMIT_REVIEW_JSON))
+    pre_submit_parser.add_argument("--markdown-output", default=str(DEFAULT_PRE_SUBMIT_REVIEW_MARKDOWN))
+
     learning_template_parser = subparsers.add_parser(
         "learning-template",
         help="write a reusable answer/material template from readiness blockers",
@@ -288,6 +316,21 @@ def main() -> int:
     synthetic_exec_parser.add_argument("--include-values", action="store_true")
     synthetic_exec_parser.add_argument("--json-output", default=str(DEFAULT_SYNTHETIC_EXEC_JSON))
     synthetic_exec_parser.add_argument("--markdown-output", default=str(DEFAULT_SYNTHETIC_EXEC_MARKDOWN))
+
+    synthetic_browser_exec_parser = subparsers.add_parser(
+        "synthetic-browser-exec",
+        help="execute synthetic browser action manifests against local fake forms",
+    )
+    synthetic_browser_exec_parser.add_argument("--count", type=int, default=100)
+    synthetic_browser_exec_parser.add_argument(
+        "--per-platform-target",
+        type=int,
+        default=None,
+        help="run this many synthetic browser executions for each synthetic platform",
+    )
+    synthetic_browser_exec_parser.add_argument("--include-values", action="store_true")
+    synthetic_browser_exec_parser.add_argument("--json-output", default=str(DEFAULT_SYNTHETIC_BROWSER_EXEC_JSON))
+    synthetic_browser_exec_parser.add_argument("--markdown-output", default=str(DEFAULT_SYNTHETIC_BROWSER_EXEC_MARKDOWN))
 
     playbook_parser = subparsers.add_parser(
         "playbook",
@@ -493,6 +536,31 @@ def main() -> int:
         print(f"Would submit: {str(bool(manifest.get('would_submit'))).lower()}")
         return 0
 
+    if args.command == "pre-submit-review":
+        manifest_paths = (
+            [Path(value) for value in args.manifest]
+            if args.manifest
+            else _discover_browser_action_manifests(args.outbox_dir)
+        )
+        if not manifest_paths:
+            raise FileNotFoundError("no browser action manifests found; pass --manifest or run browser-actions first")
+        review = write_pre_submit_review(
+            manifest_paths,
+            args.json_output,
+            args.markdown_output,
+            readiness=_load_optional_json(args.readiness_json),
+            gaps=_load_optional_json(args.gaps_json),
+            learning_tasks=_load_optional_json(args.learning_tasks_json),
+            synthetic=_load_optional_json(args.synthetic_json),
+        )
+        print(f"Wrote pre-submit review JSON to {args.json_output}")
+        print(f"Wrote pre-submit review Markdown to {args.markdown_output}")
+        print(f"Manifests: {review.get('manifest_count', 0)}")
+        print(f"Browser actions: {review.get('total_action_count', 0)}")
+        print(f"Confirmation items: {review.get('confirmation_item_count', 0)}")
+        print(f"Actual submit count: {review.get('actual_submit_count', 0)}")
+        return 0
+
     if args.command == "learning-template":
         readiness_path = Path(args.readiness_json)
         if not readiness_path.exists():
@@ -553,6 +621,28 @@ def main() -> int:
                 f"achieved={str(bool(report.get('platform_target_achieved'))).lower()}"
             )
         print(f"Actual submit count: {report.get('actual_submit_count', 0)}")
+        for outcome, count in report.get("outcome_counts", {}).items():
+            print(f"{outcome}: {count}")
+        return 0
+
+    if args.command == "synthetic-browser-exec":
+        report = write_synthetic_browser_action_execution(
+            args.json_output,
+            args.markdown_output,
+            count=args.count,
+            include_values=args.include_values,
+            per_platform_target=args.per_platform_target,
+        )
+        print(f"Wrote synthetic browser action execution JSON to {args.json_output}")
+        print(f"Wrote synthetic browser action execution Markdown to {args.markdown_output}")
+        print(f"Runs: {report.get('run_count', 0)}")
+        if report.get("per_platform_target"):
+            print(
+                f"Per-platform target: {report.get('per_platform_target')} "
+                f"achieved={str(bool(report.get('platform_target_achieved'))).lower()}"
+            )
+        print(f"Actual submit count: {report.get('actual_submit_count', 0)}")
+        print(f"Selector misses: {report.get('selector_miss_count', 0)}")
         for outcome, count in report.get("outcome_counts", {}).items():
             print(f"{outcome}: {count}")
         return 0
@@ -718,6 +808,24 @@ def _load_optional_json(path_value: str | None) -> dict | None:
         return None
     payload = json.loads(path.read_text(encoding="utf-8"))
     return payload if isinstance(payload, dict) else None
+
+
+def _discover_browser_action_manifests(outbox_dir: str | Path) -> list[Path]:
+    outbox = Path(outbox_dir)
+    paths: list[Path] = []
+    if outbox.exists():
+        paths.extend(sorted(outbox.glob("*_browser_actions_latest.json")))
+    if DEFAULT_BROWSER_ACTIONS_JSON.exists():
+        paths.append(DEFAULT_BROWSER_ACTIONS_JSON)
+    deduped: list[Path] = []
+    seen: set[Path] = set()
+    for path in paths:
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        deduped.append(path)
+    return deduped
 
 
 if __name__ == "__main__":

@@ -1483,6 +1483,223 @@ def write_browser_action_manifest(
     return manifest
 
 
+def build_pre_submit_review(
+    manifests: list[dict[str, Any]],
+    readiness: dict[str, Any] | None = None,
+    gaps: dict[str, Any] | None = None,
+    learning_tasks: dict[str, Any] | None = None,
+    synthetic: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    manifest_rows = [manifest for manifest in manifests if isinstance(manifest, dict)]
+    positions: list[dict[str, Any]] = []
+    confirmation_items: list[dict[str, Any]] = []
+    for manifest in manifest_rows:
+        position_items: list[dict[str, Any]] = []
+        for stop in manifest.get("stop_actions", []):
+            if not isinstance(stop, dict):
+                continue
+            item = _confirmation_item_from_stop_action(stop, manifest)
+            _append_unique_confirmation_item(confirmation_items, item)
+            _append_unique_confirmation_item(position_items, item)
+        positions.append(
+            {
+                "manifest_file": manifest.get("manifest_file") or manifest.get("plan_file"),
+                "title": manifest.get("title"),
+                "url": manifest.get("url"),
+                "platform": manifest.get("platform"),
+                "status": manifest.get("status"),
+                "closed_reason": manifest.get("closed_reason"),
+                "action_count": int(manifest.get("action_count") or 0),
+                "stop_action_count": int(manifest.get("stop_action_count") or 0),
+                "autofill_allowed": bool(manifest.get("autofill_allowed")),
+                "would_submit": bool(manifest.get("would_submit")),
+                "confirmation_item_count": len(position_items),
+                "confirmation_items": position_items,
+            }
+        )
+
+    if gaps:
+        for prompt in gaps.get("blocking_prompts", []):
+            if isinstance(prompt, dict):
+                _append_unique_confirmation_item(
+                    confirmation_items,
+                    _confirmation_item_from_gap(prompt),
+                )
+    if learning_tasks:
+        for task in learning_tasks.get("tasks", []):
+            if isinstance(task, dict) and not bool(task.get("approved")):
+                _append_unique_confirmation_item(
+                    confirmation_items,
+                    _confirmation_item_from_learning_task(task),
+                )
+
+    submit_allowed_count = sum(1 for manifest in manifest_rows if bool(manifest.get("would_submit")))
+    total_action_count = sum(int(manifest.get("action_count") or 0) for manifest in manifest_rows)
+    total_stop_count = sum(int(manifest.get("stop_action_count") or 0) for manifest in manifest_rows)
+    questions_to_confirm = _question_checklist_from_confirmation_items(confirmation_items)
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "pre_submit_review",
+        "manifest_count": len(manifest_rows),
+        "position_count": len(positions),
+        "autofill_ready_position_count": sum(
+            1
+            for position in positions
+            if position.get("autofill_allowed") and not position.get("closed_reason")
+        ),
+        "closed_position_count": sum(1 for position in positions if position.get("closed_reason")),
+        "total_action_count": total_action_count,
+        "total_stop_action_count": total_stop_count,
+        "confirmation_item_count": len(confirmation_items),
+        "question_to_confirm_count": len(questions_to_confirm),
+        "confirmation_status_counts": _count_by(confirmation_items, "status"),
+        "submit_allowed_count": submit_allowed_count,
+        "real_platform_submission": False,
+        "final_submit_allowed": False,
+        "would_submit": False,
+        "actual_submit_count": int((synthetic or {}).get("actual_submit_count") or 0),
+        "positions": positions,
+        "confirmation_items": confirmation_items,
+        "questions_to_confirm": questions_to_confirm,
+        "readiness_summary": {
+            "positions_observed_total": (readiness or {}).get("positions_observed_total", 0),
+            "readiness_counts": (readiness or {}).get("readiness_counts", {}),
+            "learning_queue_count": (readiness or {}).get("learning_queue_count", 0),
+            "minimal_learning_task_count": (readiness or {}).get("minimal_learning_task_count", 0),
+            "manual_gate_count": (readiness or {}).get("manual_gate_count", 0),
+        },
+        "gap_summary": {
+            "unique_prompts_observed": (gaps or {}).get("unique_prompts_observed", 0),
+            "blocking_prompt_count": (gaps or {}).get("blocking_prompt_count", 0),
+            "coverage_counts": (gaps or {}).get("coverage_counts", {}),
+        },
+        "synthetic_summary": {
+            "run_count": (synthetic or {}).get("run_count", 0),
+            "per_platform_target": (synthetic or {}).get("per_platform_target", 0),
+            "platform_target_achieved": (synthetic or {}).get("platform_target_achieved"),
+            "actual_submit_count": int((synthetic or {}).get("actual_submit_count") or 0),
+            "outcome_counts": (synthetic or {}).get("outcome_counts", {}),
+            "policy_stop_counts": (synthetic or {}).get("policy_stop_counts", {}),
+            "platform_counts": (synthetic or {}).get("platform_counts", {}),
+        },
+        "policy": {
+            "real_platform_submission": False,
+            "final_submit_allowed": False,
+            "fake_data_real_submission_allowed": False,
+            "stop_on_closed_posting": True,
+            "stop_on_captcha_or_security": True,
+        },
+    }
+
+
+def write_pre_submit_review(
+    manifest_paths: list[str | Path],
+    json_output: str | Path,
+    markdown_output: str | Path,
+    readiness: dict[str, Any] | None = None,
+    gaps: dict[str, Any] | None = None,
+    learning_tasks: dict[str, Any] | None = None,
+    synthetic: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    manifests: list[dict[str, Any]] = []
+    for manifest_path in manifest_paths:
+        path = Path(manifest_path)
+        payload = _read_json_file(path)
+        if not isinstance(payload, dict):
+            raise ValueError(f"manifest must be a JSON object: {path}")
+        payload["manifest_file"] = path.name
+        manifests.append(payload)
+    review = build_pre_submit_review(
+        manifests,
+        readiness=readiness,
+        gaps=gaps,
+        learning_tasks=learning_tasks,
+        synthetic=synthetic,
+    )
+    review["manifest_files"] = [Path(path).name for path in manifest_paths]
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(review, ensure_ascii=True, indent=2), encoding="utf-8")
+    markdown_path.write_text(render_pre_submit_review_markdown(review), encoding="utf-8")
+    return review
+
+
+def execute_browser_action_manifest_locally(
+    manifest: dict[str, Any],
+    snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    fields = [field for field in snapshot.get("fields", []) if isinstance(field, dict)]
+    executed_actions: list[dict[str, Any]] = []
+    selector_misses: list[dict[str, Any]] = []
+    if manifest.get("status") == "closed_skip":
+        outcome = "closed_skip"
+        policy_stop = "closed_posting"
+    else:
+        for action in manifest.get("browser_actions", []):
+            if not isinstance(action, dict):
+                continue
+            target = _resolve_browser_action_target(action, fields)
+            if target is None:
+                selector_misses.append(
+                    {
+                        "field_index": action.get("field_index"),
+                        "label": action.get("label"),
+                        "browser_action": action.get("browser_action"),
+                        "selector_candidates": action.get("selector_candidates", []),
+                    }
+                )
+                continue
+            executed_actions.append(
+                {
+                    "field_index": target.get("i"),
+                    "label": _field_prompt_label(target),
+                    "browser_action": action.get("browser_action"),
+                    "plan_action": action.get("plan_action"),
+                    "value_source": action.get("value_source"),
+                    "selector_strategy": target.get("_matched_strategy"),
+                    "selector": target.get("_matched_selector"),
+                    "result": f"locally_executed_{action.get('browser_action') or 'fill'}",
+                }
+            )
+        if selector_misses:
+            outcome = "selector_resolution_failed"
+            policy_stop = "selector_resolution"
+        elif manifest.get("stop_actions"):
+            outcome = "executed_to_policy_stop"
+            policy_stop = str(manifest["stop_actions"][0].get("status") or "manual_gate")
+        else:
+            outcome = "completed_autofill_no_submit"
+            policy_stop = "final_submit_not_requested"
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "local_browser_manifest_executor",
+        "title": manifest.get("title"),
+        "url": manifest.get("url"),
+        "platform": manifest.get("platform"),
+        "outcome": outcome,
+        "policy_stop": policy_stop,
+        "real_platform_submission": False,
+        "would_submit": False,
+        "actual_submit_count": 0,
+        "manifest_action_count": manifest.get("action_count", 0),
+        "executed_action_count": len(executed_actions),
+        "selector_miss_count": len(selector_misses),
+        "stop_action_count": manifest.get("stop_action_count", 0),
+        "executed_actions": executed_actions,
+        "selector_misses": selector_misses,
+        "stop_actions": manifest.get("stop_actions", []),
+        "manifest": {
+            "status": manifest.get("status"),
+            "closed_reason": manifest.get("closed_reason"),
+            "autofill_allowed": manifest.get("autofill_allowed"),
+            "final_submit_allowed": manifest.get("final_submit_allowed"),
+        },
+    }
+
+
 def execute_form_plan_offline(
     plan: dict[str, Any],
     page_text: str = "",
@@ -1618,6 +1835,93 @@ def write_synthetic_apply_execution(
     markdown_path.parent.mkdir(parents=True, exist_ok=True)
     json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2), encoding="utf-8")
     markdown_path.write_text(render_synthetic_apply_execution_markdown(report), encoding="utf-8")
+    return report
+
+
+def run_synthetic_browser_action_execution(
+    count: int = 100,
+    include_values: bool = False,
+    per_platform_target: int | None = None,
+) -> dict[str, Any]:
+    profile = build_synthetic_candidate_profile()
+    executions: list[dict[str, Any]] = []
+    if per_platform_target is not None:
+        run_count = max(per_platform_target, 0) * len(SYNTHETIC_APPLICATION_PLATFORMS)
+    else:
+        run_count = max(count, 0)
+
+    for index in range(1, run_count + 1):
+        snapshot = _build_synthetic_application_snapshot(index)
+        plan = build_form_fill_plan(
+            snapshot,
+            profile=profile,
+            answer_memory=None,
+            include_values=include_values,
+        )
+        manifest = build_browser_action_manifest(
+            plan,
+            page_text=str(snapshot.get("page_text") or ""),
+            include_values=include_values,
+        )
+        execution = execute_browser_action_manifest_locally(manifest, snapshot)
+        execution.update(
+            {
+                "index": index,
+                "company": snapshot.get("company"),
+                "job_title": snapshot.get("job_title"),
+            }
+        )
+        executions.append(execution)
+
+    platform_counts = _count_by(executions, "platform")
+    platform_target = int(per_platform_target or 0)
+    platform_target_shortfalls = {
+        platform: max(0, platform_target - int(platform_counts.get(platform, 0)))
+        for platform in SYNTHETIC_APPLICATION_PLATFORMS
+    }
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "execution": "local_synthetic_browser_action_executor",
+        "requested_count": run_count,
+        "per_platform_target": platform_target,
+        "platform_target_achieved": (
+            all(count == 0 for count in platform_target_shortfalls.values())
+            if platform_target
+            else None
+        ),
+        "platform_target_shortfalls": platform_target_shortfalls if platform_target else {},
+        "run_count": len(executions),
+        "real_platform_submission": False,
+        "actual_submit_count": sum(int(item.get("actual_submit_count", 0)) for item in executions),
+        "would_submit_count": sum(1 for item in executions if bool(item.get("would_submit"))),
+        "outcome_counts": _count_by(executions, "outcome"),
+        "policy_stop_counts": _count_by(executions, "policy_stop"),
+        "platform_counts": platform_counts,
+        "executed_action_count": sum(int(item.get("executed_action_count", 0)) for item in executions),
+        "selector_miss_count": sum(int(item.get("selector_miss_count", 0)) for item in executions),
+        "stop_action_count": sum(int(item.get("stop_action_count", 0)) for item in executions),
+        "runs": executions,
+    }
+
+
+def write_synthetic_browser_action_execution(
+    json_output: str | Path,
+    markdown_output: str | Path,
+    count: int = 100,
+    include_values: bool = False,
+    per_platform_target: int | None = None,
+) -> dict[str, Any]:
+    report = run_synthetic_browser_action_execution(
+        count=count,
+        include_values=include_values,
+        per_platform_target=per_platform_target,
+    )
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2), encoding="utf-8")
+    markdown_path.write_text(render_synthetic_browser_action_execution_markdown(report), encoding="utf-8")
     return report
 
 
@@ -2615,6 +2919,107 @@ def render_browser_action_manifest_markdown(manifest: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def render_pre_submit_review_markdown(review: dict[str, Any]) -> str:
+    lines = [
+        "# Pre-Submit Review",
+        "",
+        f"Generated: {review.get('generated_at')}",
+        f"Manifests: {review.get('manifest_count', 0)}",
+        f"Positions: {review.get('position_count', 0)}",
+        f"Autofill-ready positions: {review.get('autofill_ready_position_count', 0)}",
+        f"Closed positions: {review.get('closed_position_count', 0)}",
+        f"Browser actions: {review.get('total_action_count', 0)}",
+        f"Stop actions: {review.get('total_stop_action_count', 0)}",
+        f"Confirmation items: {review.get('confirmation_item_count', 0)}",
+        f"Questions to confirm: {review.get('question_to_confirm_count', 0)}",
+        f"Actual submit count: {review.get('actual_submit_count', 0)}",
+        f"Would submit: {str(bool(review.get('would_submit'))).lower()}",
+        "",
+        "## Confirmation Status Counts",
+        "",
+    ]
+    for status, count in sorted((review.get("confirmation_status_counts") or {}).items()):
+        lines.append(f"- {status}: {count}")
+
+    lines.extend(["", "## Positions", ""])
+    positions = review.get("positions", [])
+    if positions:
+        for position in positions[:80]:
+            lines.append(
+                "- {status}: {title} [{platform}; actions={actions}; stops={stops}]".format(
+                    status=position.get("status"),
+                    title=position.get("title") or "Unknown title",
+                    platform=position.get("platform") or "Unknown",
+                    actions=position.get("action_count", 0),
+                    stops=position.get("stop_action_count", 0),
+                )
+            )
+            items = position.get("confirmation_items") or []
+            if items:
+                labels = "; ".join(str(item.get("label")) for item in items[:4])
+                lines.append(f"  confirm: {labels}")
+            if position.get("closed_reason"):
+                lines.append(f"  closed: {position.get('closed_reason')}")
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Questions To Confirm", ""])
+    questions = review.get("questions_to_confirm", [])
+    if questions:
+        for question in questions[:120]:
+            lines.append(
+                "- {status}: {label} [{category}]".format(
+                    status=", ".join(question.get("statuses", [])),
+                    label=question.get("label") or "Unknown",
+                    category=question.get("category") or "uncategorized",
+                )
+            )
+            if question.get("sources"):
+                lines.append(f"  sources: {', '.join(question.get('sources', []))}")
+            if question.get("next_actions"):
+                lines.append(f"  next: {question.get('next_actions')[0]}")
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Items To Confirm", ""])
+    confirmation_items = review.get("confirmation_items", [])
+    if confirmation_items:
+        for item in confirmation_items[:120]:
+            lines.append(
+                "- {status}: {label} [{source}; {category}]".format(
+                    status=item.get("status"),
+                    label=item.get("label") or item.get("question") or "Unknown",
+                    source=item.get("source"),
+                    category=item.get("category") or "uncategorized",
+                )
+            )
+            if item.get("next_action"):
+                lines.append(f"  next: {item.get('next_action')}")
+    else:
+        lines.append("- None")
+
+    synthetic = review.get("synthetic_summary") or {}
+    lines.extend(
+        [
+            "",
+            "## Synthetic Evidence",
+            "",
+            f"- runs: {synthetic.get('run_count', 0)}",
+            f"- per-platform target: {synthetic.get('per_platform_target', 0)}",
+            f"- platform target achieved: {str(synthetic.get('platform_target_achieved')).lower()}",
+            f"- actual submit count: {synthetic.get('actual_submit_count', 0)}",
+        ]
+    )
+    policy_stops = synthetic.get("policy_stop_counts") or {}
+    if policy_stops:
+        lines.append("- policy stops: " + ", ".join(f"{key}={value}" for key, value in sorted(policy_stops.items())))
+
+    lines.extend(["", "## Policy", ""])
+    for key, value in sorted((review.get("policy") or {}).items()):
+        lines.append(f"- {key}: {str(bool(value)).lower()}")
+    return "\n".join(lines) + "\n"
+
+
 def render_synthetic_apply_execution_markdown(report: dict[str, Any]) -> str:
     lines = [
         "# Synthetic Apply Execution",
@@ -2655,6 +3060,57 @@ def render_synthetic_apply_execution_markdown(report: dict[str, Any]) -> str:
         stop_steps = run.get("stop_steps") or []
         if stop_steps:
             labels = "; ".join(str(step.get("label")) for step in stop_steps[:4])
+            lines.append(f"  gates: {labels}")
+    return "\n".join(lines) + "\n"
+
+
+def render_synthetic_browser_action_execution_markdown(report: dict[str, Any]) -> str:
+    lines = [
+        "# Synthetic Browser Action Execution",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        f"Runs: {report.get('run_count', 0)}",
+        f"Execution: {report.get('execution')}",
+        f"Per-platform target: {report.get('per_platform_target', 0)}",
+        f"Platform target achieved: {str(report.get('platform_target_achieved')).lower()}",
+        f"Real platform submission: {str(bool(report.get('real_platform_submission'))).lower()}",
+        f"Actual submit count: {report.get('actual_submit_count', 0)}",
+        f"Would submit count: {report.get('would_submit_count', 0)}",
+        f"Executed browser actions: {report.get('executed_action_count', 0)}",
+        f"Selector misses: {report.get('selector_miss_count', 0)}",
+        f"Stop actions: {report.get('stop_action_count', 0)}",
+        "",
+        "## Outcome Counts",
+        "",
+    ]
+    for outcome, count in sorted(report.get("outcome_counts", {}).items()):
+        lines.append(f"- {outcome}: {count}")
+    lines.extend(["", "## Policy Stop Counts", ""])
+    for stop, count in sorted(report.get("policy_stop_counts", {}).items()):
+        lines.append(f"- {stop}: {count}")
+    lines.extend(["", "## Platform Counts", ""])
+    for platform, count in sorted(report.get("platform_counts", {}).items()):
+        lines.append(f"- {platform}: {count}")
+    lines.extend(["", "## First Runs", ""])
+    for run in report.get("runs", [])[:20]:
+        lines.append(
+            "- {outcome}: {company} - {title} [{platform}; actions={actions}; misses={misses}; stop={stop}]".format(
+                outcome=run.get("outcome"),
+                company=run.get("company"),
+                title=run.get("job_title") or run.get("title"),
+                platform=run.get("platform"),
+                actions=run.get("executed_action_count", 0),
+                misses=run.get("selector_miss_count", 0),
+                stop=run.get("policy_stop"),
+            )
+        )
+        misses = run.get("selector_misses") or []
+        if misses:
+            labels = "; ".join(str(item.get("label")) for item in misses[:4])
+            lines.append(f"  selector misses: {labels}")
+        stops = run.get("stop_actions") or []
+        if stops:
+            labels = "; ".join(str(step.get("label")) for step in stops[:4])
             lines.append(f"  gates: {labels}")
     return "\n".join(lines) + "\n"
 
@@ -4232,6 +4688,176 @@ def _clean_selector_value(value: Any) -> str:
 
 def _is_simple_css_identifier(value: str) -> bool:
     return bool(re.fullmatch(r"-?[_a-zA-Z][-_a-zA-Z0-9]*", value))
+
+
+def _resolve_browser_action_target(
+    action: dict[str, Any],
+    fields: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    for candidate in action.get("selector_candidates", []):
+        if not isinstance(candidate, dict):
+            continue
+        matches = [
+            field
+            for field in fields
+            if _field_matches_selector_candidate(field, candidate)
+        ]
+        if len(matches) == 1:
+            return {
+                **matches[0],
+                "_matched_strategy": candidate.get("strategy"),
+                "_matched_selector": candidate.get("selector"),
+            }
+    return None
+
+
+def _field_matches_selector_candidate(
+    field: dict[str, Any],
+    candidate: dict[str, Any],
+) -> bool:
+    strategy = str(candidate.get("strategy") or "")
+    selector = str(candidate.get("selector") or "")
+    if strategy == "field_index":
+        return str(field.get("i")) == selector
+    if strategy == "label_text":
+        return _normalize(_field_prompt_label(field)) == _normalize(selector)
+    if strategy != "css":
+        return False
+    if selector.startswith("#"):
+        return str(field.get("id") or "").strip() == selector[1:]
+    match = re.fullmatch(
+        r"(?:(?P<tag>[a-z][a-z0-9-]*)?)\[(?P<attr>[A-Za-z_][A-Za-z0-9_-]*)=\"(?P<value>(?:\\.|[^\"])*)\"\]",
+        selector,
+    )
+    if not match:
+        return False
+    tag = str(match.group("tag") or "")
+    if tag and _css_tag_name(field.get("tag")) != tag:
+        return False
+    attr = str(match.group("attr"))
+    value = match.group("value").replace('\\"', '"').replace("\\\\", "\\")
+    return str(field.get(attr) or "").strip() == value
+
+
+def _confirmation_item_from_stop_action(
+    stop: dict[str, Any],
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
+    status = str(stop.get("status") or "unknown")
+    return {
+        "source": "browser_manifest",
+        "status": status,
+        "label": stop.get("label"),
+        "category": stop.get("category"),
+        "platform": manifest.get("platform"),
+        "title": manifest.get("title"),
+        "url": manifest.get("url"),
+        "required": bool(stop.get("required")),
+        "next_action": stop.get("handling") or stop.get("next_action"),
+        "persist_allowed": status not in {"sensitive_not_stored", "manual_security_step", "final_submit_confirmation"},
+    }
+
+
+def _confirmation_item_from_gap(prompt: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "source": "answer_gap",
+        "status": prompt.get("coverage_status"),
+        "label": prompt.get("label"),
+        "category": prompt.get("category"),
+        "platforms": prompt.get("platforms", []),
+        "required_count": prompt.get("required_count", 0),
+        "observed_count": prompt.get("observed_count", 0),
+        "next_action": prompt.get("next_action"),
+        "persist_allowed": prompt.get("coverage_status") != "sensitive_not_stored",
+    }
+
+
+def _confirmation_item_from_learning_task(task: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "source": "learning_task",
+        "status": "needs_user_confirmation",
+        "label": task.get("question"),
+        "category": task.get("recommended_storage"),
+        "platforms": task.get("platforms", []),
+        "labels": task.get("labels", []),
+        "next_action": "approve and fill answer in learning task template",
+        "persist_allowed": bool(task.get("persist_allowed", True)),
+    }
+
+
+def _append_unique_confirmation_item(
+    items: list[dict[str, Any]],
+    item: dict[str, Any],
+) -> None:
+    key = (
+        str(item.get("source") or ""),
+        str(item.get("status") or ""),
+        _normalize(str(item.get("label") or "")),
+        str(item.get("platform") or ",".join(item.get("platforms", [])) or ""),
+    )
+    for existing in items:
+        existing_key = (
+            str(existing.get("source") or ""),
+            str(existing.get("status") or ""),
+            _normalize(str(existing.get("label") or "")),
+            str(existing.get("platform") or ",".join(existing.get("platforms", [])) or ""),
+        )
+        if existing_key == key:
+            return
+    items.append(item)
+
+
+def _question_checklist_from_confirmation_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    question_statuses = {
+        "needs_answer_memory",
+        "needs_human_review",
+        "needs_user_confirmation",
+        "sensitive_not_stored",
+    }
+    by_label: dict[str, dict[str, Any]] = {}
+    for item in items:
+        status = str(item.get("status") or "")
+        if status not in question_statuses:
+            continue
+        label = str(item.get("label") or "").strip()
+        if not label:
+            continue
+        key = _normalize(label)
+        row = by_label.setdefault(
+            key,
+            {
+                "label": label,
+                "category": item.get("category"),
+                "statuses": [],
+                "sources": [],
+                "platforms": [],
+                "next_actions": [],
+                "persist_allowed": True,
+            },
+        )
+        _append_unique_scalar(row["statuses"], status)
+        _append_unique_scalar(row["sources"], str(item.get("source") or "unknown"))
+        for platform in _string_list(item.get("platforms")):
+            _append_unique_scalar(row["platforms"], platform)
+        if item.get("platform"):
+            _append_unique_scalar(row["platforms"], str(item.get("platform")))
+        if item.get("next_action"):
+            _append_unique_scalar(row["next_actions"], str(item.get("next_action")))
+        if item.get("persist_allowed") is False:
+            row["persist_allowed"] = False
+    rows = list(by_label.values())
+    rows.sort(
+        key=lambda row: (
+            min(_answer_status_sort_rank(status) for status in row.get("statuses", []) or ["unknown"]),
+            str(row.get("label") or ""),
+        )
+    )
+    return rows
+
+
+def _append_unique_scalar(values: list[str], value: str) -> None:
+    if value and value not in values:
+        values.append(value)
 
 
 def _apply_stop_step(step: dict[str, Any]) -> dict[str, Any]:

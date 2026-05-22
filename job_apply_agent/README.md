@@ -265,6 +265,27 @@ fill/upload/generated-text actions only. Closed postings produce zero browser
 actions, and CAPTCHA, sensitive questions, manual review, and final submit stay
 as stop actions.
 
+To collect the remaining user-confirmation questions and browser stop points
+into one pre-submit checklist:
+
+```bash
+python3 -m job_apply_agent pre-submit-review \
+  --manifest job_apply_agent/outbox/ramp_browser_actions_latest.json \
+  --manifest job_apply_agent/outbox/doordash_browser_actions_latest.json
+```
+
+This writes:
+
+```text
+job_apply_agent/outbox/pre_submit_review_latest.json
+job_apply_agent/outbox/pre_submit_review_latest.md
+```
+
+The review combines browser manifests, answer gaps, readiness, learning tasks,
+and synthetic execution evidence. It is the handoff document for deciding which
+answers can be learned once, which protected-class/security/final-submit gates
+must remain supervised, and how much of the current queue can be autofilled.
+
 For end-to-end safety testing with fake candidate data, use the synthetic
 offline harness. It creates fake LinkedIn/Ashby/Greenhouse/Lever-style forms,
 checks closed-posting text, builds fill plans, and summarizes blockers without
@@ -307,6 +328,25 @@ job_apply_agent/outbox/synthetic_apply_execution_latest.md
 
 It simulates each ready fill/upload/answer step, records the first policy stop,
 skips closed postings, and still records `actual_submit_count: 0`.
+
+To verify the browser-action layer itself, execute generated manifests against
+local fake forms:
+
+```bash
+python3 -m job_apply_agent synthetic-browser-exec --per-platform-target 100
+```
+
+This writes:
+
+```text
+job_apply_agent/outbox/synthetic_browser_action_execution_latest.json
+job_apply_agent/outbox/synthetic_browser_action_execution_latest.md
+```
+
+This checks that selector candidates in the manifest resolve to the intended
+local form fields across LinkedIn/Ashby/Greenhouse/Lever-style synthetic forms.
+It still never opens real employer pages and still records `actual_submit_count:
+0`.
 
 Generate a platform playbook from the real observed artifacts plus the synthetic
 run:

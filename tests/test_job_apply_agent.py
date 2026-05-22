@@ -17,11 +17,14 @@ from job_apply_agent.core import (
     build_browser_review_record,
     build_form_fill_plan,
     build_learning_task_template,
+    build_pre_submit_review,
     build_position_readiness_report,
     build_telegram_job_alert,
     classify_application_prompt,
     closed_application_reason,
     closed_application_phrase,
+    execute_browser_action_manifest_locally,
+    execute_form_plan_offline,
     extract_linkedin_job_id,
     find_learned_answer,
     job_registry_key,
@@ -44,11 +47,13 @@ from job_apply_agent.core import (
     render_browser_action_manifest_markdown,
     render_form_fill_plan_markdown,
     render_learning_task_template_markdown,
+    render_pre_submit_review_markdown,
     render_position_readiness_markdown,
     render_synthetic_apply_execution_markdown,
+    render_synthetic_browser_action_execution_markdown,
     run_synthetic_application_simulation,
     run_synthetic_apply_execution,
-    execute_form_plan_offline,
+    run_synthetic_browser_action_execution,
     run_pipeline,
     score_job,
     shorten_apply_url,
@@ -59,9 +64,11 @@ from job_apply_agent.core import (
     write_browser_action_manifest,
     write_form_fill_plan,
     write_learning_task_template,
+    write_pre_submit_review,
     write_position_readiness_report,
     write_synthetic_apply_execution,
     write_synthetic_application_simulation,
+    write_synthetic_browser_action_execution,
 )
 
 
@@ -1277,6 +1284,118 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(markdown_output.exists())
             self.assertIn("Browser Action Manifest", markdown_output.read_text())
 
+    def test_pre_submit_review_aggregates_manifests_and_confirmation_items(self) -> None:
+        manifest = {
+            "title": "Application",
+            "url": "https://job-boards.greenhouse.io/example/jobs/1",
+            "platform": "Greenhouse",
+            "status": "autofill_ready_with_supervised_gates",
+            "autofill_allowed": True,
+            "would_submit": False,
+            "action_count": 2,
+            "stop_action_count": 2,
+            "stop_actions": [
+                {
+                    "status": "needs_human_review",
+                    "label": "Have you worked here before?",
+                    "category": "employment_history",
+                    "handling": "stop and ask user in supervised flow",
+                },
+                {
+                    "status": "final_submit_confirmation",
+                    "label": "Submit application",
+                    "category": "final_submit",
+                    "handling": "stop before final submit and wait for explicit approval",
+                },
+            ],
+        }
+        gaps = {
+            "unique_prompts_observed": 2,
+            "blocking_prompt_count": 1,
+            "coverage_counts": {"needs_answer_memory": 1},
+            "blocking_prompts": [
+                {
+                    "coverage_status": "needs_answer_memory",
+                    "label": "Do you have GCP experience?",
+                    "category": "skills_experience",
+                    "platforms": ["LinkedIn"],
+                    "required_count": 1,
+                    "observed_count": 1,
+                    "next_action": "ask once, then save approved answer memory",
+                }
+            ],
+        }
+        learning_tasks = {
+            "tasks": [
+                {
+                    "question": "Do you have GCP experience?",
+                    "recommended_storage": "answer_memory",
+                    "platforms": ["LinkedIn"],
+                    "approved": False,
+                    "persist_allowed": True,
+                }
+            ]
+        }
+        synthetic = {
+            "run_count": 400,
+            "per_platform_target": 100,
+            "platform_target_achieved": True,
+            "actual_submit_count": 0,
+            "policy_stop_counts": {"final_submit_confirmation": 100},
+        }
+
+        review = build_pre_submit_review(
+            [manifest],
+            gaps=gaps,
+            learning_tasks=learning_tasks,
+            synthetic=synthetic,
+        )
+
+        self.assertEqual(review["manifest_count"], 1)
+        self.assertEqual(review["total_action_count"], 2)
+        self.assertEqual(review["total_stop_action_count"], 2)
+        self.assertEqual(review["actual_submit_count"], 0)
+        self.assertFalse(review["would_submit"])
+        self.assertEqual(review["question_to_confirm_count"], 2)
+        self.assertEqual(review["confirmation_status_counts"]["final_submit_confirmation"], 1)
+        self.assertIn("needs_answer_memory", review["confirmation_status_counts"])
+        labels = [item["label"] for item in review["questions_to_confirm"]]
+        self.assertEqual(labels.count("Do you have GCP experience?"), 1)
+        markdown = render_pre_submit_review_markdown(review)
+        self.assertIn("Pre-Submit Review", markdown)
+        self.assertIn("Questions To Confirm", markdown)
+        self.assertIn("Do you have GCP experience?", markdown)
+
+    def test_write_pre_submit_review_outputs_reports(self) -> None:
+        manifest = {
+            "title": "Application",
+            "url": "https://jobs.ashbyhq.com/example/1",
+            "platform": "Ashby",
+            "status": "autofill_ready",
+            "autofill_allowed": True,
+            "would_submit": False,
+            "action_count": 1,
+            "stop_action_count": 0,
+            "stop_actions": [],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "manifest.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            json_output = Path(temp_dir) / "review.json"
+            markdown_output = Path(temp_dir) / "review.md"
+
+            review = write_pre_submit_review(
+                [manifest_path],
+                json_output,
+                markdown_output,
+            )
+
+            self.assertEqual(review["manifest_count"], 1)
+            self.assertEqual(review["autofill_ready_position_count"], 1)
+            self.assertTrue(json_output.exists())
+            self.assertTrue(markdown_output.exists())
+            self.assertIn("Pre-Submit Review", markdown_output.read_text())
+
     def test_offline_apply_executor_runs_ready_steps_then_stops(self) -> None:
         plan = {
             "title": "Application",
@@ -1339,6 +1458,105 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(execution["executed_step_count"], 0)
         self.assertEqual(execution["stop_steps"][0]["status"], "closed_skip")
 
+    def test_local_browser_manifest_executor_resolves_selectors_and_stops(self) -> None:
+        snapshot = {
+            "title": "Application",
+            "url": "https://job-boards.greenhouse.io/example/jobs/1",
+            "fields": [
+                {"i": 1, "tag": "INPUT", "type": "email", "id": "email", "label": "Email"},
+                {"i": 2, "tag": "INPUT", "type": "file", "name": "resume", "label": "Resume"},
+            ],
+        }
+        plan = {
+            "title": snapshot["title"],
+            "url": snapshot["url"],
+            "platform": "Greenhouse",
+            "steps": [
+                {
+                    "field_index": 1,
+                    "item_type": "field",
+                    "tag": "INPUT",
+                    "type": "email",
+                    "id": "email",
+                    "action": "fill",
+                    "status": "ready",
+                    "label": "Email",
+                    "category": "profile_identity",
+                    "value_source": "profile.email",
+                },
+                {
+                    "field_index": 2,
+                    "item_type": "field",
+                    "tag": "INPUT",
+                    "type": "file",
+                    "name": "resume",
+                    "action": "upload",
+                    "status": "ready",
+                    "label": "Resume",
+                    "category": "resume_upload",
+                    "value_source": "profile.question_answers.resume_path",
+                },
+                {
+                    "field_index": 3,
+                    "item_type": "button",
+                    "action": "submit_gate",
+                    "status": "final_submit_confirmation",
+                    "label": "Submit application",
+                    "category": "final_submit",
+                },
+            ],
+        }
+        manifest = build_browser_action_manifest(plan)
+
+        execution = execute_browser_action_manifest_locally(manifest, snapshot)
+
+        self.assertEqual(execution["outcome"], "executed_to_policy_stop")
+        self.assertEqual(execution["policy_stop"], "final_submit_confirmation")
+        self.assertEqual(execution["executed_action_count"], 2)
+        self.assertEqual(execution["selector_miss_count"], 0)
+        self.assertEqual(execution["actual_submit_count"], 0)
+        self.assertFalse(execution["would_submit"])
+        self.assertEqual(execution["executed_actions"][0]["selector"], "#email")
+
+    def test_local_browser_manifest_executor_does_not_fill_closed_postings(self) -> None:
+        snapshot = {
+            "title": "Closed role",
+            "url": "https://www.linkedin.com/jobs/view/123/",
+            "page_text": "No longer accepting applications",
+            "fields": [
+                {"i": 1, "tag": "INPUT", "type": "email", "id": "email", "label": "Email"},
+            ],
+        }
+        plan = {
+            "title": snapshot["title"],
+            "url": snapshot["url"],
+            "platform": "LinkedIn",
+            "steps": [
+                {
+                    "field_index": 1,
+                    "item_type": "field",
+                    "tag": "INPUT",
+                    "type": "email",
+                    "id": "email",
+                    "action": "fill",
+                    "status": "ready",
+                    "label": "Email",
+                    "category": "profile_identity",
+                    "value_source": "profile.email",
+                }
+            ],
+        }
+        manifest = build_browser_action_manifest(
+            plan,
+            page_text=str(snapshot["page_text"]),
+        )
+
+        execution = execute_browser_action_manifest_locally(manifest, snapshot)
+
+        self.assertEqual(execution["outcome"], "closed_skip")
+        self.assertEqual(execution["executed_action_count"], 0)
+        self.assertEqual(execution["selector_miss_count"], 0)
+
     def test_synthetic_apply_execution_runs_hundred_without_real_submit(self) -> None:
         report = run_synthetic_apply_execution(count=20)
 
@@ -1385,6 +1603,44 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(json_output.exists())
             self.assertTrue(markdown_output.exists())
             self.assertIn("Synthetic Apply Execution", markdown_output.read_text())
+
+    def test_synthetic_browser_action_execution_targets_each_platform(self) -> None:
+        report = run_synthetic_browser_action_execution(per_platform_target=3)
+
+        self.assertEqual(report["run_count"], 12)
+        self.assertEqual(report["per_platform_target"], 3)
+        self.assertTrue(report["platform_target_achieved"])
+        self.assertEqual(report["platform_target_shortfalls"], {
+            "Ashby": 0,
+            "Greenhouse": 0,
+            "Lever": 0,
+            "LinkedIn": 0,
+        })
+        self.assertEqual(report["selector_miss_count"], 0)
+        self.assertEqual(report["actual_submit_count"], 0)
+        self.assertGreater(report["executed_action_count"], 0)
+        markdown = render_synthetic_browser_action_execution_markdown(report)
+        self.assertIn("Synthetic Browser Action Execution", markdown)
+        self.assertIn("Actual submit count: 0", markdown)
+
+    def test_write_synthetic_browser_action_execution_outputs_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            json_output = Path(temp_dir) / "browser_execution.json"
+            markdown_output = Path(temp_dir) / "browser_execution.md"
+
+            report = write_synthetic_browser_action_execution(
+                json_output,
+                markdown_output,
+                count=8,
+                per_platform_target=2,
+            )
+
+            self.assertEqual(report["run_count"], 8)
+            self.assertTrue(report["platform_target_achieved"])
+            self.assertEqual(report["selector_miss_count"], 0)
+            self.assertTrue(json_output.exists())
+            self.assertTrue(markdown_output.exists())
+            self.assertIn("Synthetic Browser Action Execution", markdown_output.read_text())
 
     def test_learning_task_template_applies_approved_answers(self) -> None:
         readiness = {
