@@ -362,6 +362,13 @@ To satisfy a 100-position target for each synthetic platform:
 python3 -m job_apply_agent synthetic-exec --per-platform-target 100
 ```
 
+For the stricter target of 100 synthetic positions for every platform and
+role-title pair:
+
+```bash
+python3 -m job_apply_agent synthetic-exec --per-platform-role-target 100
+```
+
 This writes:
 
 ```text
@@ -377,6 +384,12 @@ local fake forms:
 
 ```bash
 python3 -m job_apply_agent synthetic-browser-exec --per-platform-target 100
+```
+
+Use the same stricter platform/role coverage gate for browser actions:
+
+```bash
+python3 -m job_apply_agent synthetic-browser-exec --per-platform-role-target 100
 ```
 
 This writes:

@@ -345,6 +345,12 @@ def main() -> int:
         default=None,
         help="run this many synthetic applications for each synthetic platform",
     )
+    synthetic_exec_parser.add_argument(
+        "--per-platform-role-target",
+        type=int,
+        default=None,
+        help="run this many synthetic applications for each platform and role-title pair",
+    )
     synthetic_exec_parser.add_argument("--include-values", action="store_true")
     synthetic_exec_parser.add_argument("--json-output", default=str(DEFAULT_SYNTHETIC_EXEC_JSON))
     synthetic_exec_parser.add_argument("--markdown-output", default=str(DEFAULT_SYNTHETIC_EXEC_MARKDOWN))
@@ -359,6 +365,12 @@ def main() -> int:
         type=int,
         default=None,
         help="run this many synthetic browser executions for each synthetic platform",
+    )
+    synthetic_browser_exec_parser.add_argument(
+        "--per-platform-role-target",
+        type=int,
+        default=None,
+        help="run this many synthetic browser executions for each platform and role-title pair",
     )
     synthetic_browser_exec_parser.add_argument("--include-values", action="store_true")
     synthetic_browser_exec_parser.add_argument("--json-output", default=str(DEFAULT_SYNTHETIC_BROWSER_EXEC_JSON))
@@ -686,6 +698,7 @@ def main() -> int:
             count=args.count,
             include_values=args.include_values,
             per_platform_target=args.per_platform_target,
+            per_platform_role_target=args.per_platform_role_target,
         )
         print(f"Wrote synthetic apply execution JSON to {args.json_output}")
         print(f"Wrote synthetic apply execution Markdown to {args.markdown_output}")
@@ -694,6 +707,11 @@ def main() -> int:
             print(
                 f"Per-platform target: {report.get('per_platform_target')} "
                 f"achieved={str(bool(report.get('platform_target_achieved'))).lower()}"
+            )
+        if report.get("per_platform_role_target"):
+            print(
+                f"Per-platform-role target: {report.get('per_platform_role_target')} "
+                f"achieved={str(bool(report.get('platform_role_target_achieved'))).lower()}"
             )
         print(f"Actual submit count: {report.get('actual_submit_count', 0)}")
         for outcome, count in report.get("outcome_counts", {}).items():
@@ -707,6 +725,7 @@ def main() -> int:
             count=args.count,
             include_values=args.include_values,
             per_platform_target=args.per_platform_target,
+            per_platform_role_target=args.per_platform_role_target,
         )
         print(f"Wrote synthetic browser action execution JSON to {args.json_output}")
         print(f"Wrote synthetic browser action execution Markdown to {args.markdown_output}")
@@ -715,6 +734,11 @@ def main() -> int:
             print(
                 f"Per-platform target: {report.get('per_platform_target')} "
                 f"achieved={str(bool(report.get('platform_target_achieved'))).lower()}"
+            )
+        if report.get("per_platform_role_target"):
+            print(
+                f"Per-platform-role target: {report.get('per_platform_role_target')} "
+                f"achieved={str(bool(report.get('platform_role_target_achieved'))).lower()}"
             )
         print(f"Actual submit count: {report.get('actual_submit_count', 0)}")
         print(f"Selector misses: {report.get('selector_miss_count', 0)}")

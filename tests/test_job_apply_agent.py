@@ -1905,6 +1905,18 @@ class JobApplyAgentTests(unittest.TestCase):
         for count in report["platform_counts"].values():
             self.assertEqual(count, 3)
 
+    def test_synthetic_apply_execution_can_target_each_platform_role_pair(self) -> None:
+        report = run_synthetic_apply_execution(per_platform_role_target=2)
+
+        self.assertEqual(report["run_count"], 40)
+        self.assertEqual(report["per_platform_role_target"], 2)
+        self.assertTrue(report["platform_role_target_achieved"])
+        self.assertEqual(set(report["platform_role_target_shortfalls"].values()), {0})
+        self.assertEqual(len(report["platform_role_counts"]), 20)
+        for count in report["platform_role_counts"].values():
+            self.assertEqual(count, 2)
+        self.assertEqual(report["actual_submit_count"], 0)
+
     def test_write_synthetic_apply_execution_outputs_reports(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             json_output = Path(temp_dir) / "execution.json"
@@ -1941,6 +1953,21 @@ class JobApplyAgentTests(unittest.TestCase):
         markdown = render_synthetic_browser_action_execution_markdown(report)
         self.assertIn("Synthetic Browser Action Execution", markdown)
         self.assertIn("Actual submit count: 0", markdown)
+
+    def test_synthetic_browser_action_execution_targets_each_platform_role_pair(self) -> None:
+        report = run_synthetic_browser_action_execution(per_platform_role_target=2)
+
+        self.assertEqual(report["run_count"], 40)
+        self.assertEqual(report["per_platform_role_target"], 2)
+        self.assertTrue(report["platform_role_target_achieved"])
+        self.assertEqual(set(report["platform_role_target_shortfalls"].values()), {0})
+        self.assertEqual(len(report["platform_role_counts"]), 20)
+        for count in report["platform_role_counts"].values():
+            self.assertEqual(count, 2)
+        self.assertEqual(report["actual_submit_count"], 0)
+        self.assertEqual(report["selector_miss_count"], 0)
+        markdown = render_synthetic_browser_action_execution_markdown(report)
+        self.assertIn("Platform-role target achieved: true", markdown)
 
     def test_write_synthetic_browser_action_execution_outputs_reports(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

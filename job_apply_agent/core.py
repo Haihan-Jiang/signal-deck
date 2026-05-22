@@ -42,6 +42,13 @@ CLOSED_APPLICATION_PHRASES = [
 ]
 DEFAULT_LIVE_CHECK_LIMIT = 25
 SYNTHETIC_APPLICATION_PLATFORMS = ["LinkedIn", "Ashby", "Greenhouse", "Lever"]
+SYNTHETIC_APPLICATION_ROLE_TITLES = [
+    "Site Reliability Engineer",
+    "Platform Engineer, Kubernetes",
+    "Cloud Infrastructure Engineer",
+    "DevOps Engineer",
+    "Backend Infrastructure Engineer",
+]
 LOCAL_BROWSER_EXECUTION_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
 
 
@@ -1584,10 +1591,14 @@ def build_pre_submit_review(
             "run_count": (synthetic or {}).get("run_count", 0),
             "per_platform_target": (synthetic or {}).get("per_platform_target", 0),
             "platform_target_achieved": (synthetic or {}).get("platform_target_achieved"),
+            "per_platform_role_target": (synthetic or {}).get("per_platform_role_target", 0),
+            "platform_role_target_achieved": (synthetic or {}).get("platform_role_target_achieved"),
             "actual_submit_count": int((synthetic or {}).get("actual_submit_count") or 0),
             "outcome_counts": (synthetic or {}).get("outcome_counts", {}),
             "policy_stop_counts": (synthetic or {}).get("policy_stop_counts", {}),
             "platform_counts": (synthetic or {}).get("platform_counts", {}),
+            "role_variant_counts": (synthetic or {}).get("role_variant_counts", {}),
+            "platform_role_counts": (synthetic or {}).get("platform_role_counts", {}),
         },
         "policy": {
             "real_platform_submission": False,
@@ -1998,15 +2009,37 @@ def run_synthetic_apply_execution(
     count: int = 100,
     include_values: bool = False,
     per_platform_target: int | None = None,
+    per_platform_role_target: int | None = None,
 ) -> dict[str, Any]:
     profile = build_synthetic_candidate_profile()
     executions: list[dict[str, Any]] = []
-    if per_platform_target is not None:
+    snapshots: list[dict[str, Any]] = []
+    if per_platform_role_target is not None:
+        index = 1
+        for platform in SYNTHETIC_APPLICATION_PLATFORMS:
+            for role_title in SYNTHETIC_APPLICATION_ROLE_TITLES:
+                for _ in range(max(per_platform_role_target, 0)):
+                    snapshots.append(
+                        _build_synthetic_application_snapshot(
+                            index,
+                            platform=platform,
+                            role_title=role_title,
+                        )
+                    )
+                    index += 1
+    elif per_platform_target is not None:
         run_count = max(per_platform_target, 0) * len(SYNTHETIC_APPLICATION_PLATFORMS)
+        snapshots = [
+            _build_synthetic_application_snapshot(index)
+            for index in range(1, run_count + 1)
+        ]
     else:
         run_count = max(count, 0)
-    for index in range(1, run_count + 1):
-        snapshot = _build_synthetic_application_snapshot(index)
+        snapshots = [
+            _build_synthetic_application_snapshot(index)
+            for index in range(1, run_count + 1)
+        ]
+    for index, snapshot in enumerate(snapshots, start=1):
         plan = build_form_fill_plan(
             snapshot,
             profile=profile,
@@ -2019,20 +2052,29 @@ def run_synthetic_apply_execution(
                 "index": index,
                 "company": snapshot.get("company"),
                 "job_title": snapshot.get("job_title"),
+                "role_variant": snapshot.get("role_variant") or snapshot.get("job_title"),
+                "role_family": snapshot.get("role_family"),
             }
         )
         executions.append(execution)
 
     platform_counts = _count_by(executions, "platform")
+    role_variant_counts = _count_by(executions, "role_variant")
+    platform_role_counts = _platform_role_counts(executions)
     platform_target = int(per_platform_target or 0)
+    platform_role_target = int(per_platform_role_target or 0)
     platform_target_shortfalls = {
         platform: max(0, platform_target - int(platform_counts.get(platform, 0)))
         for platform in SYNTHETIC_APPLICATION_PLATFORMS
     }
+    platform_role_target_shortfalls = _platform_role_target_shortfalls(
+        platform_role_counts,
+        platform_role_target,
+    )
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "execution": "offline_synthetic_apply_executor",
-        "requested_count": run_count,
+        "requested_count": len(snapshots),
         "per_platform_target": platform_target,
         "platform_target_achieved": (
             all(count == 0 for count in platform_target_shortfalls.values())
@@ -2040,12 +2082,23 @@ def run_synthetic_apply_execution(
             else None
         ),
         "platform_target_shortfalls": platform_target_shortfalls if platform_target else {},
+        "per_platform_role_target": platform_role_target,
+        "platform_role_target_achieved": (
+            all(count == 0 for count in platform_role_target_shortfalls.values())
+            if platform_role_target
+            else None
+        ),
+        "platform_role_target_shortfalls": (
+            platform_role_target_shortfalls if platform_role_target else {}
+        ),
         "run_count": len(executions),
         "real_platform_submission": False,
         "actual_submit_count": sum(int(item.get("actual_submit_count", 0)) for item in executions),
         "outcome_counts": _count_by(executions, "outcome"),
         "policy_stop_counts": _count_by(executions, "policy_stop"),
         "platform_counts": platform_counts,
+        "role_variant_counts": role_variant_counts,
+        "platform_role_counts": platform_role_counts,
         "executed_step_count": sum(int(item.get("executed_step_count", 0)) for item in executions),
         "stop_step_count": sum(int(item.get("stop_step_count", 0)) for item in executions),
         "runs": executions,
@@ -2058,11 +2111,13 @@ def write_synthetic_apply_execution(
     count: int = 100,
     include_values: bool = False,
     per_platform_target: int | None = None,
+    per_platform_role_target: int | None = None,
 ) -> dict[str, Any]:
     report = run_synthetic_apply_execution(
         count=count,
         include_values=include_values,
         per_platform_target=per_platform_target,
+        per_platform_role_target=per_platform_role_target,
     )
     json_path = Path(json_output)
     markdown_path = Path(markdown_output)
@@ -2077,16 +2132,38 @@ def run_synthetic_browser_action_execution(
     count: int = 100,
     include_values: bool = False,
     per_platform_target: int | None = None,
+    per_platform_role_target: int | None = None,
 ) -> dict[str, Any]:
     profile = build_synthetic_candidate_profile()
     executions: list[dict[str, Any]] = []
-    if per_platform_target is not None:
+    snapshots: list[dict[str, Any]] = []
+    if per_platform_role_target is not None:
+        index = 1
+        for platform in SYNTHETIC_APPLICATION_PLATFORMS:
+            for role_title in SYNTHETIC_APPLICATION_ROLE_TITLES:
+                for _ in range(max(per_platform_role_target, 0)):
+                    snapshots.append(
+                        _build_synthetic_application_snapshot(
+                            index,
+                            platform=platform,
+                            role_title=role_title,
+                        )
+                    )
+                    index += 1
+    elif per_platform_target is not None:
         run_count = max(per_platform_target, 0) * len(SYNTHETIC_APPLICATION_PLATFORMS)
+        snapshots = [
+            _build_synthetic_application_snapshot(index)
+            for index in range(1, run_count + 1)
+        ]
     else:
         run_count = max(count, 0)
+        snapshots = [
+            _build_synthetic_application_snapshot(index)
+            for index in range(1, run_count + 1)
+        ]
 
-    for index in range(1, run_count + 1):
-        snapshot = _build_synthetic_application_snapshot(index)
+    for index, snapshot in enumerate(snapshots, start=1):
         plan = build_form_fill_plan(
             snapshot,
             profile=profile,
@@ -2104,20 +2181,29 @@ def run_synthetic_browser_action_execution(
                 "index": index,
                 "company": snapshot.get("company"),
                 "job_title": snapshot.get("job_title"),
+                "role_variant": snapshot.get("role_variant") or snapshot.get("job_title"),
+                "role_family": snapshot.get("role_family"),
             }
         )
         executions.append(execution)
 
     platform_counts = _count_by(executions, "platform")
+    role_variant_counts = _count_by(executions, "role_variant")
+    platform_role_counts = _platform_role_counts(executions)
     platform_target = int(per_platform_target or 0)
+    platform_role_target = int(per_platform_role_target or 0)
     platform_target_shortfalls = {
         platform: max(0, platform_target - int(platform_counts.get(platform, 0)))
         for platform in SYNTHETIC_APPLICATION_PLATFORMS
     }
+    platform_role_target_shortfalls = _platform_role_target_shortfalls(
+        platform_role_counts,
+        platform_role_target,
+    )
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "execution": "local_synthetic_browser_action_executor",
-        "requested_count": run_count,
+        "requested_count": len(snapshots),
         "per_platform_target": platform_target,
         "platform_target_achieved": (
             all(count == 0 for count in platform_target_shortfalls.values())
@@ -2125,6 +2211,15 @@ def run_synthetic_browser_action_execution(
             else None
         ),
         "platform_target_shortfalls": platform_target_shortfalls if platform_target else {},
+        "per_platform_role_target": platform_role_target,
+        "platform_role_target_achieved": (
+            all(count == 0 for count in platform_role_target_shortfalls.values())
+            if platform_role_target
+            else None
+        ),
+        "platform_role_target_shortfalls": (
+            platform_role_target_shortfalls if platform_role_target else {}
+        ),
         "run_count": len(executions),
         "real_platform_submission": False,
         "actual_submit_count": sum(int(item.get("actual_submit_count", 0)) for item in executions),
@@ -2132,6 +2227,8 @@ def run_synthetic_browser_action_execution(
         "outcome_counts": _count_by(executions, "outcome"),
         "policy_stop_counts": _count_by(executions, "policy_stop"),
         "platform_counts": platform_counts,
+        "role_variant_counts": role_variant_counts,
+        "platform_role_counts": platform_role_counts,
         "executed_action_count": sum(int(item.get("executed_action_count", 0)) for item in executions),
         "selector_miss_count": sum(int(item.get("selector_miss_count", 0)) for item in executions),
         "stop_action_count": sum(int(item.get("stop_action_count", 0)) for item in executions),
@@ -2145,11 +2242,13 @@ def write_synthetic_browser_action_execution(
     count: int = 100,
     include_values: bool = False,
     per_platform_target: int | None = None,
+    per_platform_role_target: int | None = None,
 ) -> dict[str, Any]:
     report = run_synthetic_browser_action_execution(
         count=count,
         include_values=include_values,
         per_platform_target=per_platform_target,
+        per_platform_role_target=per_platform_role_target,
     )
     json_path = Path(json_output)
     markdown_path = Path(markdown_output)
@@ -3242,6 +3341,8 @@ def render_pre_submit_review_markdown(review: dict[str, Any]) -> str:
             f"- runs: {synthetic.get('run_count', 0)}",
             f"- per-platform target: {synthetic.get('per_platform_target', 0)}",
             f"- platform target achieved: {str(synthetic.get('platform_target_achieved')).lower()}",
+            f"- per-platform-role target: {synthetic.get('per_platform_role_target', 0)}",
+            f"- platform-role target achieved: {str(synthetic.get('platform_role_target_achieved')).lower()}",
             f"- actual submit count: {synthetic.get('actual_submit_count', 0)}",
         ]
     )
@@ -3314,6 +3415,8 @@ def render_synthetic_apply_execution_markdown(report: dict[str, Any]) -> str:
         f"Execution: {report.get('execution')}",
         f"Per-platform target: {report.get('per_platform_target', 0)}",
         f"Platform target achieved: {str(report.get('platform_target_achieved')).lower()}",
+        f"Per-platform-role target: {report.get('per_platform_role_target', 0)}",
+        f"Platform-role target achieved: {str(report.get('platform_role_target_achieved')).lower()}",
         f"Real platform submission: {str(bool(report.get('real_platform_submission'))).lower()}",
         f"Actual submit count: {report.get('actual_submit_count', 0)}",
         f"Executed steps: {report.get('executed_step_count', 0)}",
@@ -3330,6 +3433,13 @@ def render_synthetic_apply_execution_markdown(report: dict[str, Any]) -> str:
     lines.extend(["", "## Platform Counts", ""])
     for platform, count in sorted(report.get("platform_counts", {}).items()):
         lines.append(f"- {platform}: {count}")
+    lines.extend(["", "## Role Variant Counts", ""])
+    for role_variant, count in sorted(report.get("role_variant_counts", {}).items()):
+        lines.append(f"- {role_variant}: {count}")
+    if report.get("platform_role_counts"):
+        lines.extend(["", "## Platform Role Counts", ""])
+        for key, count in sorted(report.get("platform_role_counts", {}).items()):
+            lines.append(f"- {key}: {count}")
     lines.extend(["", "## First Runs", ""])
     for run in report.get("runs", [])[:20]:
         lines.append(
@@ -3358,6 +3468,8 @@ def render_synthetic_browser_action_execution_markdown(report: dict[str, Any]) -
         f"Execution: {report.get('execution')}",
         f"Per-platform target: {report.get('per_platform_target', 0)}",
         f"Platform target achieved: {str(report.get('platform_target_achieved')).lower()}",
+        f"Per-platform-role target: {report.get('per_platform_role_target', 0)}",
+        f"Platform-role target achieved: {str(report.get('platform_role_target_achieved')).lower()}",
         f"Real platform submission: {str(bool(report.get('real_platform_submission'))).lower()}",
         f"Actual submit count: {report.get('actual_submit_count', 0)}",
         f"Would submit count: {report.get('would_submit_count', 0)}",
@@ -3376,6 +3488,13 @@ def render_synthetic_browser_action_execution_markdown(report: dict[str, Any]) -
     lines.extend(["", "## Platform Counts", ""])
     for platform, count in sorted(report.get("platform_counts", {}).items()):
         lines.append(f"- {platform}: {count}")
+    lines.extend(["", "## Role Variant Counts", ""])
+    for role_variant, count in sorted(report.get("role_variant_counts", {}).items()):
+        lines.append(f"- {role_variant}: {count}")
+    if report.get("platform_role_counts"):
+        lines.extend(["", "## Platform Role Counts", ""])
+        for key, count in sorted(report.get("platform_role_counts", {}).items()):
+            lines.append(f"- {key}: {count}")
     lines.extend(["", "## First Runs", ""])
     for run in report.get("runs", [])[:20]:
         lines.append(
@@ -4964,16 +5083,17 @@ def _learning_storage_rank(storage: str) -> int:
     return order.get(storage, 99)
 
 
-def _build_synthetic_application_snapshot(index: int) -> dict[str, Any]:
-    role_titles = [
-        "Site Reliability Engineer",
-        "Platform Engineer, Kubernetes",
-        "Cloud Infrastructure Engineer",
-        "DevOps Engineer",
-        "Backend Infrastructure Engineer",
+def _build_synthetic_application_snapshot(
+    index: int,
+    platform: str | None = None,
+    role_title: str | None = None,
+) -> dict[str, Any]:
+    platform = platform or SYNTHETIC_APPLICATION_PLATFORMS[
+        (index - 1) % len(SYNTHETIC_APPLICATION_PLATFORMS)
     ]
-    platform = SYNTHETIC_APPLICATION_PLATFORMS[(index - 1) % len(SYNTHETIC_APPLICATION_PLATFORMS)]
-    title = role_titles[(index - 1) % len(role_titles)]
+    title = role_title or SYNTHETIC_APPLICATION_ROLE_TITLES[
+        (index - 1) % len(SYNTHETIC_APPLICATION_ROLE_TITLES)
+    ]
     company = f"SyntheticCo {index:03d}"
     base_url = {
         "LinkedIn": "https://www.linkedin.com/jobs/view/",
@@ -5059,6 +5179,8 @@ def _build_synthetic_application_snapshot(index: int) -> dict[str, Any]:
         "title": f"{company} application",
         "company": company,
         "job_title": title,
+        "role_variant": title,
+        "role_family": _infer_role_family(title),
         "platform": platform,
         "url": f"{base_url}{900000 + index}/",
         "page_text": "No longer accepting applications" if closed else f"Apply for {title}",
@@ -5537,6 +5659,34 @@ def _count_by(items: list[dict[str, Any]], key: str) -> dict[str, int]:
         value = str(item.get(key) or "Unknown")
         counts[value] = counts.get(value, 0) + 1
     return dict(sorted(counts.items()))
+
+
+def _platform_role_key(platform: str, role_variant: str) -> str:
+    return f"{platform} | {role_variant}"
+
+
+def _platform_role_counts(items: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        platform = str(item.get("platform") or "Unknown")
+        role_variant = str(item.get("role_variant") or item.get("job_title") or "Unknown role")
+        key = _platform_role_key(platform, role_variant)
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _platform_role_target_shortfalls(
+    counts: dict[str, int],
+    target: int,
+) -> dict[str, int]:
+    if target <= 0:
+        return {}
+    shortfalls: dict[str, int] = {}
+    for platform in SYNTHETIC_APPLICATION_PLATFORMS:
+        for role_title in SYNTHETIC_APPLICATION_ROLE_TITLES:
+            key = _platform_role_key(platform, role_title)
+            shortfalls[key] = max(0, target - int(counts.get(key, 0)))
+    return dict(sorted(shortfalls.items()))
 
 
 def _application_collection_gaps(
