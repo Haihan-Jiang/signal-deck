@@ -127,6 +127,7 @@ from job_apply_agent.core import (
     render_fake_learning_probe_markdown,
     render_fake_critical_input_probe_markdown,
     render_fake_position_rehearsal_markdown,
+    render_final_answer_intake_template_html,
     render_final_answer_intake_template_markdown,
     render_final_answer_intake_update_markdown,
     render_goal_readiness_audit_markdown,
@@ -6587,6 +6588,7 @@ class JobApplyAgentTests(unittest.TestCase):
         }
         template = build_final_answer_intake_template(unblockers)
         template_markdown = render_final_answer_intake_template_markdown(template)
+        template_html = render_final_answer_intake_template_html(template)
 
         self.assertEqual(template["answer_count"], 2)
         self.assertEqual(template["high_risk_count"], 1)
@@ -6594,6 +6596,10 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("citizenship_status", template["answers"])
         self.assertIn("Final Answer Intake Template", template_markdown)
         self.assertIn("zip_or_postal_code", template_markdown)
+        self.assertIn("Final Answer Intake", template_html)
+        self.assertIn('data-answer="zip_or_postal_code"', template_html)
+        self.assertIn('data-confirm="citizenship_status"', template_html)
+        self.assertIn("Generated JSON", template_html)
         preserved_template = build_final_answer_intake_template(
             unblockers,
             existing_intake_payload={
@@ -6657,6 +6663,7 @@ class JobApplyAgentTests(unittest.TestCase):
             root = Path(temp_dir)
             template_json = root / "template.json"
             template_md = root / "template.md"
+            template_html_path = root / "template.html"
             updates_json = root / "compact.json"
             report_json = root / "report.json"
             report_md = root / "report.md"
@@ -6665,6 +6672,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 unblockers,
                 template_json,
                 template_md,
+                template_html_path,
             )
             written_report = write_final_answer_intake_update(
                 unblockers,
@@ -6679,6 +6687,7 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(written_report["ready_for_finalize"])
             self.assertTrue(template_json.exists())
             self.assertTrue(template_md.exists())
+            self.assertTrue(template_html_path.exists())
             self.assertTrue(updates_json.exists())
             self.assertTrue(report_json.exists())
             self.assertTrue(report_md.exists())

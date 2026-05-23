@@ -184,6 +184,9 @@ DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON = (
 DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_MARKDOWN = (
     Path(__file__).with_name("outbox") / "final_answer_intake_template_latest.md"
 )
+DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_HTML = (
+    Path(__file__).with_name("outbox") / "final_answer_intake_template_latest.html"
+)
 DEFAULT_FINAL_ANSWER_INTAKE_REPORT_JSON = (
     Path(__file__).with_name("outbox") / "final_answer_intake_update_latest.json"
 )
@@ -586,6 +589,10 @@ def main() -> int:
         default=str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON),
     )
     automation_handoff_parser.add_argument(
+        "--final-answer-intake-template-html",
+        default=str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_HTML),
+    )
+    automation_handoff_parser.add_argument(
         "--final-answer-intake-report-json",
         default=str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_JSON),
     )
@@ -829,6 +836,10 @@ def main() -> int:
     final_answer_intake_parser.add_argument(
         "--template-markdown-output",
         default=str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_MARKDOWN),
+    )
+    final_answer_intake_parser.add_argument(
+        "--template-html-output",
+        default=str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_HTML),
     )
     final_answer_intake_parser.add_argument(
         "--compact-updates-output",
@@ -1508,6 +1519,10 @@ def main() -> int:
         default=str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_MARKDOWN),
     )
     export_questions_parser.add_argument(
+        "--final-answer-intake-template-html",
+        default=str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_HTML),
+    )
+    export_questions_parser.add_argument(
         "--final-answer-intake-report-json",
         default=str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_JSON),
     )
@@ -1746,6 +1761,7 @@ def main() -> int:
                     "Critical input final unblockers HTML": args.critical_input_unblockers_html,
                     "Final answer intake template": args.final_answer_intake_template_json,
                     "Final answer intake template Markdown": args.final_answer_intake_template_markdown,
+                    "Final answer intake template HTML": args.final_answer_intake_template_html,
                     "Final answer intake report": args.final_answer_intake_report_json,
                     "Final answer intake report Markdown": args.final_answer_intake_report_markdown,
                     "Post-answer pipeline": args.post_answer_pipeline_json,
@@ -2101,6 +2117,7 @@ def main() -> int:
                     "Critical input confirmed updates": str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_JSON),
                     "Critical input confirmed updates report": str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_JSON),
                     "Final answer intake template": args.final_answer_intake_template_json,
+                    "Final answer intake template HTML": args.final_answer_intake_template_html,
                     "Final answer intake report": args.final_answer_intake_report_json,
                     "Apply queue handoff": args.apply_queue_handoff_json,
                     "Apply queue autofill packet": args.apply_queue_autofill_packet_json,
@@ -2423,10 +2440,12 @@ def main() -> int:
             unblockers,
             args.template_output,
             args.template_markdown_output,
+            args.template_html_output,
             existing_intake_payload=_load_optional_json(args.template_output),
         )
         print(f"Wrote final answer intake template JSON to {args.template_output}")
         print(f"Wrote final answer intake template Markdown to {args.template_markdown_output}")
+        print(f"Wrote final answer intake template HTML to {args.template_html_output}")
         print(f"Answers required: {template.get('answer_count', 0)}")
         print(f"High risk: {template.get('high_risk_count', 0)}")
         if not args.answers:
@@ -3933,6 +3952,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             _load_optional_json(str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_JSON)) or {},
             DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON,
             DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_MARKDOWN,
+            DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_HTML,
             existing_intake_payload=_load_optional_json(str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON)),
         )
     autofill_batch = write_autofill_batch_plan(
@@ -4044,6 +4064,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                 "Critical input updates readiness": str(DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_JSON),
                 "Final answer intake template": str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON),
                 "Final answer intake template Markdown": str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_MARKDOWN),
+                "Final answer intake template HTML": str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_HTML),
                 "Final answer intake report": str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_JSON),
                 "Final answer intake report Markdown": str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_MARKDOWN),
                 "Apply queue": str(DEFAULT_APPLY_QUEUE_JSON),
@@ -4108,6 +4129,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                     "Critical input updates readiness": str(DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_JSON),
                     "Final answer intake template": str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON),
                     "Final answer intake template Markdown": str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_MARKDOWN),
+                    "Final answer intake template HTML": str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_HTML),
                     "Final answer intake report": str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_JSON),
                     "Final answer intake report Markdown": str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_MARKDOWN),
                 }

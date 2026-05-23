@@ -5061,6 +5061,7 @@ def write_final_answer_intake_template(
     unblocker_packet: dict[str, Any],
     json_output: str | Path,
     markdown_output: str | Path,
+    html_output: str | Path | None = None,
     existing_intake_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     template = build_final_answer_intake_template(
@@ -5069,10 +5070,16 @@ def write_final_answer_intake_template(
     )
     json_path = Path(json_output)
     markdown_path = Path(markdown_output)
-    for path in [json_path, markdown_path]:
+    html_path = Path(html_output) if html_output else None
+    output_paths = [json_path, markdown_path]
+    if html_path:
+        output_paths.append(html_path)
+    for path in output_paths:
         path.parent.mkdir(parents=True, exist_ok=True)
     json_path.write_text(json.dumps(template, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
     markdown_path.write_text(render_final_answer_intake_template_markdown(template), encoding="utf-8")
+    if html_path:
+        html_path.write_text(render_final_answer_intake_template_html(template), encoding="utf-8")
     return template
 
 
@@ -5132,6 +5139,186 @@ def render_final_answer_intake_template_markdown(template: dict[str, Any]) -> st
     lines.append(json.dumps({"answers": template.get("answers") or {}}, ensure_ascii=True, indent=2))
     lines.extend(["```", ""])
     return "\n".join(lines)
+
+
+def render_final_answer_intake_template_html(template: dict[str, Any]) -> str:
+    field_cards = []
+    answers = template.get("answers") if isinstance(template.get("answers"), dict) else {}
+    for row in template.get("fields") or []:
+        alias = str(row.get("alias") or "")
+        input_id = str(row.get("input_id") or "")
+        high_risk = bool(row.get("high_risk"))
+        answer_text, high_risk_confirmed = _final_answer_intake_answer_text(answers.get(alias, ""))
+        labels = "\n".join(_string_list(row.get("labels"))[:12])
+        platforms = ", ".join(_string_list(row.get("platforms")))
+        checkbox = (
+            '<label class="confirm"><input type="checkbox" data-confirm="{alias}" {checked}> '
+            "I confirm this high-risk answer is exact and truthful.</label>"
+        ).format(
+            alias=_html_escape(alias),
+            checked="checked" if high_risk_confirmed else "",
+        ) if high_risk else ""
+        field_cards.append(
+            "\n".join(
+                [
+                    '<section class="answer-card">',
+                    '<div class="answer-head">',
+                    f"<h2>{_html_escape(alias)}</h2>",
+                    f"<span>{'High risk' if high_risk else 'Standard'}</span>",
+                    "</div>",
+                    f"<p><strong>Input ID:</strong> {_html_escape(input_id)}</p>",
+                    f"<p><strong>Question:</strong> {_html_escape(row.get('question'))}</p>",
+                    f"<p><strong>Needed:</strong> {_html_escape(row.get('required_user_response'))}</p>",
+                    f"<p><strong>Why not inferred:</strong> {_html_escape(row.get('why_not_inferred'))}</p>",
+                    f"<p><strong>Platforms:</strong> {_html_escape(platforms)}</p>",
+                    f"<p><strong>Observed prompts:</strong> {_html_escape(row.get('required_count'))}</p>",
+                    f'<textarea data-answer="{_html_escape(alias)}" rows="4">{_html_escape(answer_text)}</textarea>',
+                    checkbox,
+                    f"<pre>{_html_escape(labels)}</pre>",
+                    "</section>",
+                ]
+            )
+        )
+    initial_json = json.dumps({"answers": answers}, ensure_ascii=True, indent=2)
+    script = """
+function buildPayload() {
+  const answers = {};
+  document.querySelectorAll("[data-answer]").forEach((field) => {
+    const alias = field.getAttribute("data-answer");
+    const text = field.value.trim();
+    const confirm = document.querySelector('[data-confirm="' + alias + '"]');
+    if (confirm) {
+      answers[alias] = {
+        answer: text,
+        high_risk_user_confirmed: Boolean(confirm.checked)
+      };
+    } else {
+      answers[alias] = text;
+    }
+  });
+  return {
+    source: "final_answer_intake_template",
+    answers
+  };
+}
+function refreshOutput() {
+  document.getElementById("json-output").textContent = JSON.stringify(buildPayload(), null, 2);
+}
+document.addEventListener("input", refreshOutput);
+document.addEventListener("change", refreshOutput);
+document.addEventListener("DOMContentLoaded", refreshOutput);
+"""
+    return "\n".join(
+        [
+            "<!doctype html>",
+            '<html lang="en">',
+            "<head>",
+            '<meta charset="utf-8">',
+            '<meta name="viewport" content="width=device-width, initial-scale=1">',
+            "<title>Final Answer Intake</title>",
+            "<style>",
+            _final_answer_intake_html_css(),
+            "</style>",
+            "</head>",
+            "<body>",
+            "<main>",
+            "<h1>Final Answer Intake</h1>",
+            f"<p class=\"muted\">Generated: {_html_escape(template.get('generated_at'))}</p>",
+            _html_kpis(
+                [
+                    ("Answers", template.get("answer_count", 0)),
+                    ("High risk", template.get("high_risk_count", 0)),
+                    ("Writes profile", "No"),
+                    ("Submits apps", "No"),
+                ]
+            ),
+            "<section>",
+            "<h2>Instructions</h2>",
+            f"<p>{_html_escape(template.get('instructions'))}</p>",
+            "</section>",
+            *field_cards,
+            "<section>",
+            "<h2>Generated JSON</h2>",
+            "<pre id=\"json-output\"></pre>",
+            "<h2>Initial JSON</h2>",
+            f"<pre>{_html_escape(initial_json)}</pre>",
+            "</section>",
+            "</main>",
+            f"<script>{script}</script>",
+            "</body>",
+            "</html>",
+        ]
+    )
+
+
+def _final_answer_intake_html_css() -> str:
+    return """
+body {
+  margin: 0;
+  background: #f6f7f9;
+  color: #1f2933;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+main {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 32px 18px 48px;
+}
+h1 {
+  margin: 0 0 6px;
+  font-size: 30px;
+}
+h2 {
+  margin: 0 0 10px;
+  font-size: 18px;
+}
+.muted {
+  color: #65758b;
+}
+.answer-card, section {
+  background: #ffffff;
+  border: 1px solid #d8dee8;
+  border-radius: 8px;
+  padding: 18px;
+  margin: 14px 0;
+}
+.answer-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+}
+.answer-head span {
+  background: #edf2f7;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 96px;
+  margin: 8px 0 12px;
+  padding: 10px;
+  border: 1px solid #b8c2d1;
+  border-radius: 6px;
+  font: 14px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.confirm {
+  display: block;
+  margin: 4px 0 12px;
+  font-weight: 600;
+}
+pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 10px;
+}
+"""
 
 
 def render_final_answer_intake_update_markdown(report: dict[str, Any]) -> str:

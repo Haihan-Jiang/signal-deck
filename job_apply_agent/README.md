@@ -756,9 +756,11 @@ This writes:
 ```text
 job_apply_agent/outbox/final_answer_intake_template_latest.json
 job_apply_agent/outbox/final_answer_intake_template_latest.md
+job_apply_agent/outbox/final_answer_intake_template_latest.html
 ```
 
-Fill the `answers` object in that template, then convert it into the compact
+Fill the `answers` object in that template, or use the local HTML form to build
+the same JSON shape, then convert it into the compact
 updates file used by the rest of the post-answer pipeline:
 
 ```bash
