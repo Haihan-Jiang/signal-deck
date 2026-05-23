@@ -3046,6 +3046,12 @@ def execute_browser_action_manifest_locally(
     )
     executed_actions: list[dict[str, Any]] = []
     selector_misses: list[dict[str, Any]] = []
+    synthetic_gate_answers: list[dict[str, Any]] = []
+    remaining_stop_actions = [
+        stop
+        for stop in manifest.get("stop_actions", [])
+        if isinstance(stop, dict)
+    ]
     would_submit = False
     actual_submit_count = 0
     if manifest.get("status") == "closed_skip":
@@ -3078,16 +3084,60 @@ def execute_browser_action_manifest_locally(
                     "result": f"locally_executed_{action.get('browser_action') or 'fill'}",
                 }
             )
+        if allow_local_synthetic_submit and not selector_misses:
+            remaining: list[dict[str, Any]] = []
+            for stop in remaining_stop_actions:
+                if _is_local_synthetic_fillable_stop_action(stop):
+                    action = _browser_synthetic_answer_action_for_stop_action(stop)
+                    target = _resolve_browser_action_target(action, fields)
+                    if target is None:
+                        selector_misses.append(
+                            {
+                                "field_index": action.get("field_index"),
+                                "label": action.get("label"),
+                                "browser_action": action.get("browser_action"),
+                                "selector_candidates": action.get("selector_candidates", []),
+                            }
+                        )
+                        continue
+                    value = _local_synthetic_value_for_stop_action(stop)
+                    synthetic_gate_answers.append(
+                        {
+                            "field_index": target.get("i"),
+                            "label": _field_prompt_label(target),
+                            "status": stop.get("status"),
+                            "category": stop.get("category"),
+                            "value_source": action.get("value_source"),
+                            "selector_strategy": target.get("_matched_strategy"),
+                            "selector": target.get("_matched_selector"),
+                        }
+                    )
+                    executed_actions.append(
+                        {
+                            "field_index": target.get("i"),
+                            "label": _field_prompt_label(target),
+                            "browser_action": action.get("browser_action"),
+                            "plan_action": action.get("plan_action"),
+                            "value_source": action.get("value_source"),
+                            "selector_strategy": target.get("_matched_strategy"),
+                            "selector": target.get("_matched_selector"),
+                            "result": "locally_filled_synthetic_gate_answer",
+                            "synthetic_value_kind": value.get("kind"),
+                        }
+                    )
+                else:
+                    remaining.append(stop)
+            remaining_stop_actions = remaining
         if selector_misses:
             outcome = "selector_resolution_failed"
             policy_stop = "selector_resolution"
         elif (
             allow_local_synthetic_submit
-            and _only_final_submit_stop_actions(manifest.get("stop_actions", []))
+            and _only_final_submit_stop_actions(remaining_stop_actions)
         ):
             submit_actions = [
                 _browser_submit_action_for_stop_action(stop)
-                for stop in manifest.get("stop_actions", [])
+                for stop in remaining_stop_actions
                 if isinstance(stop, dict)
             ]
             for action in submit_actions:
@@ -3123,9 +3173,9 @@ def execute_browser_action_manifest_locally(
                 outcome = "submitted_local_synthetic"
                 policy_stop = "local_synthetic_submit_allowed"
                 would_submit = True
-        elif manifest.get("stop_actions"):
+        elif remaining_stop_actions:
             outcome = "executed_to_policy_stop"
-            policy_stop = str(manifest["stop_actions"][0].get("status") or "manual_gate")
+            policy_stop = str(remaining_stop_actions[0].get("status") or "manual_gate")
         else:
             outcome = "completed_autofill_no_submit"
             policy_stop = "final_submit_not_requested"
@@ -3146,9 +3196,12 @@ def execute_browser_action_manifest_locally(
         "executed_action_count": len(executed_actions),
         "selector_miss_count": len(selector_misses),
         "stop_action_count": manifest.get("stop_action_count", 0),
+        "remaining_stop_action_count": len(remaining_stop_actions),
+        "synthetic_gate_answer_count": len(synthetic_gate_answers),
         "executed_actions": executed_actions,
+        "synthetic_gate_answers": synthetic_gate_answers,
         "selector_misses": selector_misses,
-        "stop_actions": manifest.get("stop_actions", []),
+        "stop_actions": remaining_stop_actions,
         "manifest": {
             "status": manifest.get("status"),
             "closed_reason": manifest.get("closed_reason"),
@@ -3222,6 +3275,46 @@ def _only_final_submit_stop_actions(stop_actions: Any) -> bool:
     return bool(stops) and all(
         str(stop.get("status") or "") == "final_submit_confirmation" for stop in stops
     )
+
+
+def _is_local_synthetic_fillable_stop_action(stop: dict[str, Any]) -> bool:
+    return str(stop.get("status") or "") in {
+        "missing_answer",
+        "needs_human_review",
+        "sensitive_not_stored",
+    }
+
+
+def _browser_synthetic_answer_action_for_stop_action(stop: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "field_index": stop.get("field_index"),
+        "item_type": stop.get("item_type"),
+        "browser_action": "fill_synthetic_gate_answer",
+        "plan_action": "synthetic_gate_answer",
+        "label": stop.get("label"),
+        "category": stop.get("category"),
+        "required": bool(stop.get("required")),
+        "selector_candidates": _selector_candidates_for_step(stop),
+        "value_source": "local_synthetic_fake_answer",
+        "requires_file": False,
+        "safe_to_execute": True,
+        "guard": "local synthetic forms only; never use for real employer pages",
+    }
+
+
+def _local_synthetic_value_for_stop_action(stop: dict[str, Any]) -> dict[str, str]:
+    status = str(stop.get("status") or "")
+    label = _normalize(str(stop.get("label") or ""))
+    category = str(stop.get("category") or "")
+    if status == "sensitive_not_stored":
+        return {"kind": "protected_class_fake_decline", "value": "Prefer not to say"}
+    if category == "policy_acknowledgement" or "acknowledge" in label or "privacy" in label:
+        return {"kind": "policy_acknowledgement", "value": "Yes"}
+    if "sms" in label or "whatsapp" in label or "text message" in label:
+        return {"kind": "communication_consent", "value": "No"}
+    if "hear about" in label or "heard about" in label or "source" in label:
+        return {"kind": "referral_source", "value": "LinkedIn"}
+    return {"kind": "synthetic_generic", "value": "Synthetic test answer"}
 
 
 def _browser_submit_action_for_stop_action(stop: dict[str, Any]) -> dict[str, Any]:
@@ -3474,11 +3567,13 @@ def run_synthetic_browser_action_execution(
         "executed_action_count": sum(int(item.get("executed_action_count", 0)) for item in executions),
         "selector_miss_count": sum(int(item.get("selector_miss_count", 0)) for item in executions),
         "stop_action_count": sum(int(item.get("stop_action_count", 0)) for item in executions),
+        "synthetic_gate_answer_count": sum(int(item.get("synthetic_gate_answer_count", 0)) for item in executions),
         "policy": {
             "local_synthetic_submit_only": bool(allow_local_synthetic_submit),
             "real_platform_submission": False,
             "submit_requires_only_final_submit_stop": True,
-            "closed_or_captcha_or_missing_inputs_never_submitted": True,
+            "closed_or_captcha_never_submitted": True,
+            "synthetic_only_answers_may_fill_review_or_sensitive_gates": bool(allow_local_synthetic_submit),
         },
         "runs": executions,
     }
@@ -6365,6 +6460,7 @@ def render_synthetic_browser_action_execution_markdown(report: dict[str, Any]) -
         f"Local synthetic submit count: {report.get('actual_submit_count', 0)}",
         f"Would submit count: {report.get('would_submit_count', 0)}",
         f"Executed browser actions: {report.get('executed_action_count', 0)}",
+        f"Synthetic gate answers: {report.get('synthetic_gate_answer_count', 0)}",
         f"Selector misses: {report.get('selector_miss_count', 0)}",
         f"Stop actions: {report.get('stop_action_count', 0)}",
         "",

@@ -3012,11 +3012,14 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertFalse(execution["real_platform_submission"])
         self.assertEqual(execution["executed_actions"][-1]["browser_action"], "click_submit")
 
-    def test_local_synthetic_submit_does_not_bypass_other_stop_gates(self) -> None:
+    def test_local_synthetic_submit_does_not_bypass_security_gates(self) -> None:
         snapshot = {
             "title": "Application",
             "url": "https://www.linkedin.com/jobs/view/900001/",
-            "fields": [{"i": 1, "tag": "INPUT", "type": "email", "id": "email", "label": "Email"}],
+            "fields": [
+                {"i": 1, "tag": "INPUT", "type": "email", "id": "email", "label": "Email"},
+                {"i": 2, "tag": "TEXTAREA", "name": "g-recaptcha-response", "label": "g-recaptcha-response"},
+            ],
             "buttons": [{"i": 99, "tag": "BUTTON", "text": "Submit application"}],
         }
         plan = {
@@ -3031,9 +3034,20 @@ class JobApplyAgentTests(unittest.TestCase):
                     "type": "email",
                     "id": "email",
                     "action": "fill",
-                    "status": "missing_answer",
+                    "status": "ready",
                     "label": "Email",
                     "category": "profile_identity",
+                    "value_source": "profile.email",
+                },
+                {
+                    "field_index": 2,
+                    "item_type": "field",
+                    "tag": "TEXTAREA",
+                    "name": "g-recaptcha-response",
+                    "action": "manual_security",
+                    "status": "manual_security_step",
+                    "label": "g-recaptcha-response",
+                    "category": "security_verification",
                 },
                 {
                     "field_index": 99,
@@ -3055,9 +3069,78 @@ class JobApplyAgentTests(unittest.TestCase):
         )
 
         self.assertEqual(execution["outcome"], "executed_to_policy_stop")
-        self.assertEqual(execution["policy_stop"], "missing_answer")
+        self.assertEqual(execution["policy_stop"], "manual_security_step")
         self.assertEqual(execution["actual_submit_count"], 0)
         self.assertFalse(execution["would_submit"])
+
+    def test_local_synthetic_submit_fills_fake_review_and_sensitive_gates(self) -> None:
+        snapshot = {
+            "title": "Application",
+            "url": "https://job-boards.greenhouse.io/example/jobs/1",
+            "fields": [
+                {"i": 1, "tag": "INPUT", "type": "checkbox", "label": "I acknowledge the privacy policy."},
+                {"i": 2, "tag": "SELECT", "label": "Gender"},
+                {"i": 3, "tag": "SELECT", "label": "How did you hear about this role?"},
+            ],
+            "buttons": [{"i": 99, "tag": "BUTTON", "text": "Submit application"}],
+        }
+        plan = {
+            "title": snapshot["title"],
+            "url": snapshot["url"],
+            "platform": "Greenhouse",
+            "steps": [
+                {
+                    "field_index": 1,
+                    "item_type": "field",
+                    "tag": "INPUT",
+                    "type": "checkbox",
+                    "action": "manual_review",
+                    "status": "needs_human_review",
+                    "label": "I acknowledge the privacy policy.",
+                    "category": "policy_acknowledgement",
+                },
+                {
+                    "field_index": 2,
+                    "item_type": "field",
+                    "tag": "SELECT",
+                    "action": "manual_sensitive",
+                    "status": "sensitive_not_stored",
+                    "label": "Gender",
+                    "category": "eeoc_sensitive",
+                },
+                {
+                    "field_index": 3,
+                    "item_type": "field",
+                    "tag": "SELECT",
+                    "action": "answer",
+                    "status": "missing_answer",
+                    "label": "How did you hear about this role?",
+                    "category": "referral_source",
+                },
+                {
+                    "field_index": 99,
+                    "item_type": "button",
+                    "tag": "BUTTON",
+                    "action": "submit_gate",
+                    "status": "final_submit_confirmation",
+                    "label": "Submit application",
+                    "category": "final_submit",
+                },
+            ],
+        }
+        manifest = build_browser_action_manifest(plan)
+
+        execution = execute_browser_action_manifest_locally(
+            manifest,
+            snapshot,
+            allow_local_synthetic_submit=True,
+        )
+
+        self.assertEqual(execution["outcome"], "submitted_local_synthetic")
+        self.assertEqual(execution["actual_submit_count"], 1)
+        self.assertEqual(execution["synthetic_gate_answer_count"], 3)
+        self.assertEqual(execution["remaining_stop_action_count"], 1)
+        self.assertFalse(execution["real_platform_submission"])
 
     def test_local_browser_manifest_executor_does_not_fill_closed_postings(self) -> None:
         snapshot = {
@@ -3193,16 +3276,28 @@ class JobApplyAgentTests(unittest.TestCase):
 
     def test_synthetic_browser_action_execution_can_submit_fake_local_final_gates(self) -> None:
         report = run_synthetic_browser_action_execution(
-            count=1,
+            per_platform_target=1,
             allow_local_synthetic_submit=True,
         )
 
-        self.assertEqual(report["run_count"], 1)
+        self.assertEqual(report["run_count"], 4)
         self.assertFalse(report["real_platform_submission"])
         self.assertTrue(report["local_synthetic_submit_allowed"])
-        self.assertEqual(report["actual_submit_count"], 1)
-        self.assertEqual(report["would_submit_count"], 1)
-        self.assertEqual(report["outcome_counts"]["submitted_local_synthetic"], 1)
+        self.assertEqual(report["actual_submit_count"], 4)
+        self.assertEqual(report["would_submit_count"], 4)
+        self.assertEqual(report["outcome_counts"]["submitted_local_synthetic"], 4)
+        self.assertGreater(report["synthetic_gate_answer_count"], 0)
+
+    def test_synthetic_browser_action_execution_keeps_captcha_blocked_in_submit_mode(self) -> None:
+        report = run_synthetic_browser_action_execution(
+            count=5,
+            allow_local_synthetic_submit=True,
+        )
+
+        self.assertEqual(report["run_count"], 5)
+        self.assertEqual(report["actual_submit_count"], 4)
+        self.assertEqual(report["policy_stop_counts"]["manual_security_step"], 1)
+        self.assertFalse(report["real_platform_submission"])
 
     def test_write_synthetic_browser_action_execution_outputs_reports(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
