@@ -3629,12 +3629,18 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["skipped_not_ready_position_count"], 1)
         self.assertEqual(report["would_submit_count"], 0)
         self.assertFalse(report["real_platform_submission"])
+        self.assertEqual(report["local_synthetic_submit_count"], 1)
+        self.assertTrue(report["local_synthetic_submit_achieved"])
+        self.assertEqual(report["local_synthetic_submit_selector_miss_count"], 0)
         self.assertEqual(report["positions"][0]["manifest_status"], "autofill_ready_with_supervised_gates")
+        self.assertEqual(report["positions"][0]["local_synthetic_submit_count"], 1)
+        self.assertEqual(report["positions"][0]["local_synthetic_submit_outcome"], "submitted_local_synthetic")
         self.assertEqual(report["positions"][0]["stop_action_summaries"][0]["status"], "final_submit_confirmation")
         self.assertEqual(report["selected_stop_actions"][0]["label"], "Submit application")
         self.assertEqual(report["selected_stop_action_counts"]["final_submit_confirmation | Submit application"], 1)
         self.assertIn("Autofill Batch Plan", render_autofill_batch_plan_markdown(report))
         self.assertIn("Selected Stop Actions", render_autofill_batch_plan_markdown(report))
+        self.assertIn("Local synthetic submit achieved: true", render_autofill_batch_plan_markdown(report))
         self.assertIn("Autofill Batch Plan", render_autofill_batch_plan_html(report))
         self.assertIn("Selected Stop Actions", render_autofill_batch_plan_html(report))
 
@@ -3771,6 +3777,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["selected_count"], 1)
         self.assertEqual(report["positions"][0]["position_key"], "ashby:clean:1")
         self.assertEqual(report["stop_action_count"], 1)
+        self.assertEqual(report["local_synthetic_submit_count"], 1)
         self.assertEqual(report["selected_stop_actions"][0]["status"], "final_submit_confirmation")
 
     def test_autofill_batch_prefers_clean_group_when_limit_is_tight(self) -> None:
@@ -6581,6 +6588,9 @@ class JobApplyAgentTests(unittest.TestCase):
             "selector_miss_count": 0,
             "would_submit_count": 0,
             "real_platform_submission": False,
+            "local_synthetic_submit_count": 100,
+            "local_synthetic_submit_achieved": True,
+            "local_synthetic_submit_selector_miss_count": 0,
         }
         closed_jobs = {"jobs": [{"key": "linkedin:1", "reason": "No longer accepting applications"}]}
 
@@ -6601,10 +6611,13 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertFalse(audit["can_unattended_submit_real_employers"])
         self.assertEqual(audit["blocker_summary"]["data_blocking_prompt_count"], 3)
         self.assertEqual(audit["blocker_summary"]["policy_gate_prompt_count"], 4)
+        self.assertEqual(audit["blocker_summary"]["autofill_batch_local_synthetic_submit_count"], 100)
+        self.assertTrue(audit["blocker_summary"]["autofill_batch_local_synthetic_submit_achieved"])
         self.assertEqual(audit["requirements"][0]["status"], "achieved")
         self.assertEqual(audit["top_data_blocking_prompts"][0]["coverage_status"], "needs_user_confirmation")
         self.assertIn("Goal Readiness Audit", markdown)
         self.assertIn("needs_user_answers", markdown)
+        self.assertIn("100-batch local synthetic submits: 100", markdown)
         self.assertIn("Top Data-Blocking Prompts", markdown)
         self.assertIn("Have you worked with us before?", markdown)
 
@@ -6704,6 +6717,9 @@ class JobApplyAgentTests(unittest.TestCase):
             "stop_action_count": 167,
             "selector_miss_count": 0,
             "would_submit_count": 0,
+            "local_synthetic_submit_count": 100,
+            "local_synthetic_submit_achieved": True,
+            "local_synthetic_submit_selector_miss_count": 0,
             "selected_stop_action_counts": {
                 "final_submit_confirmation | Submit application": 100,
                 "sensitive_not_stored | Disability status": 10,
@@ -6754,12 +6770,15 @@ class JobApplyAgentTests(unittest.TestCase):
 
         self.assertEqual(report["status"], "waiting_for_confirmed_answers")
         self.assertEqual(report["summary"]["autofill_selected_count"], 100)
+        self.assertEqual(report["summary"]["autofill_local_synthetic_submit_count"], 100)
+        self.assertTrue(report["summary"]["autofill_local_synthetic_submit_achieved"])
         self.assertEqual(report["summary"]["closed_registry_count"], 1)
         self.assertEqual(report["answer_impact_queue"][0]["input_id"], "answer_memory_citizenship_status_default_policy")
         self.assertEqual(report["answer_impact_queue"][0]["handoff_action"], "confirm_truthful_answer_before_persisting")
         self.assertEqual(report["selected_stop_action_summary"][0]["status"], "final_submit_confirmation")
         self.assertEqual(report["missing_profile_inputs"][0]["label"], "Website")
         self.assertIn("Application Automation Handoff", markdown)
+        self.assertIn("local synthetic submit proof: 100 submits", markdown)
         self.assertIn("100-Position Stop Actions", markdown)
         self.assertIn("GitHub URL", html)
         self.assertIn("Answer Impact Queue", html)

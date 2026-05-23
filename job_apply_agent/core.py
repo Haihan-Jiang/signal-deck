@@ -7380,6 +7380,11 @@ def build_autofill_batch_plan(
             snapshot,
             allow_local_synthetic_submit=False,
         )
+        local_submit_check = execute_browser_action_manifest_locally(
+            manifest,
+            snapshot,
+            allow_local_synthetic_submit=True,
+        )
         run = {
             "index": 0,
             "position_key": position_key,
@@ -7410,6 +7415,14 @@ def build_autofill_batch_plan(
             "local_check_policy_stop": local_check.get("policy_stop"),
             "local_check_executed_action_count": int(local_check.get("executed_action_count") or 0),
             "local_check_selector_miss_count": int(local_check.get("selector_miss_count") or 0),
+            "local_synthetic_submit_outcome": local_submit_check.get("outcome"),
+            "local_synthetic_submit_policy_stop": local_submit_check.get("policy_stop"),
+            "local_synthetic_submit_count": int(local_submit_check.get("actual_submit_count") or 0),
+            "local_synthetic_submit_selector_miss_count": int(local_submit_check.get("selector_miss_count") or 0),
+            "local_synthetic_submit_remaining_stop_count": int(
+                local_submit_check.get("remaining_stop_action_count") or 0
+            ),
+            "local_synthetic_would_submit": bool(local_submit_check.get("would_submit")),
             "would_submit": bool(manifest.get("would_submit")),
             "real_platform_submission": False,
         }
@@ -7426,6 +7439,18 @@ def build_autofill_batch_plan(
     selected_stop_actions = _autofill_batch_stop_action_rows(runs, scope="selected")
     blocked_stop_actions = _autofill_batch_stop_action_rows(blocked_candidates, scope="blocked_candidate")
     selector_miss_count = sum(int(run.get("local_check_selector_miss_count") or 0) for run in runs)
+    local_synthetic_submit_count = sum(int(run.get("local_synthetic_submit_count") or 0) for run in runs)
+    local_synthetic_selector_miss_count = sum(
+        int(run.get("local_synthetic_submit_selector_miss_count") or 0) for run in runs
+    )
+    local_synthetic_remaining_stop_count = sum(
+        int(run.get("local_synthetic_submit_remaining_stop_count") or 0) for run in runs
+    )
+    local_synthetic_submit_achieved = (
+        bool(runs)
+        and local_synthetic_submit_count == len(runs)
+        and local_synthetic_selector_miss_count == 0
+    )
     blocked_missing_count = sum(
         1 for run in blocked_candidates if run.get("manifest_status") == "blocked_missing_inputs"
     )
@@ -7447,6 +7472,13 @@ def build_autofill_batch_plan(
         "selector_miss_count": selector_miss_count,
         "real_platform_submission": False,
         "would_submit_count": sum(1 for run in runs if bool(run.get("would_submit"))),
+        "local_synthetic_submit_count": local_synthetic_submit_count,
+        "local_synthetic_would_submit_count": sum(
+            1 for run in runs if bool(run.get("local_synthetic_would_submit"))
+        ),
+        "local_synthetic_submit_achieved": local_synthetic_submit_achieved,
+        "local_synthetic_submit_selector_miss_count": local_synthetic_selector_miss_count,
+        "local_synthetic_submit_remaining_stop_count": local_synthetic_remaining_stop_count,
         "browser_action_count": sum(int(run.get("browser_action_count") or 0) for run in runs),
         "stop_action_count": sum(int(run.get("stop_action_count") or 0) for run in runs),
         "source_position_count": len(readiness.get("positions", []) or []),
@@ -7461,6 +7493,8 @@ def build_autofill_batch_plan(
         "manifest_status_counts": _count_by(runs, "manifest_status"),
         "local_outcome_counts": _count_by(runs, "local_check_outcome"),
         "local_policy_stop_counts": _count_by(runs, "local_check_policy_stop"),
+        "local_synthetic_outcome_counts": _count_by(runs, "local_synthetic_submit_outcome"),
+        "local_synthetic_policy_stop_counts": _count_by(runs, "local_synthetic_submit_policy_stop"),
         "selected_stop_action_counts": _autofill_stop_action_counts(selected_stop_actions),
         "blocked_stop_action_counts": _autofill_stop_action_counts(blocked_stop_actions),
         "selected_stop_actions": selected_stop_actions,
@@ -7483,6 +7517,8 @@ def build_autofill_batch_plan(
             "real_platform_submission": False,
             "remote_employer_final_submit_blocked": True,
             "final_submit_requires_explicit_user_confirmation": True,
+            "local_synthetic_submit_proof": True,
+            "local_synthetic_submit_only": True,
             "captcha_or_security_not_bypassed": True,
             "closed_jobs_excluded_before_batch": True,
             "include_values": bool(include_values),
@@ -7597,6 +7633,9 @@ def render_autofill_batch_plan_markdown(report: dict[str, Any]) -> str:
         f"Selector misses: {report.get('selector_miss_count', 0)}",
         f"Real platform submission: {str(bool(report.get('real_platform_submission'))).lower()}",
         f"Would submit: {report.get('would_submit_count', 0)}",
+        f"Local synthetic submits: {report.get('local_synthetic_submit_count', 0)}",
+        f"Local synthetic submit achieved: {str(bool(report.get('local_synthetic_submit_achieved'))).lower()}",
+        f"Local synthetic selector misses: {report.get('local_synthetic_submit_selector_miss_count', 0)}",
         "",
         "## Manifest Status Counts",
         "",
@@ -7621,7 +7660,7 @@ def render_autofill_batch_plan_markdown(report: dict[str, Any]) -> str:
     lines.extend(["", "## First Positions", ""])
     for run in report.get("positions", [])[:40]:
         lines.append(
-            "- {index}. {company} - {title} [{platform}; {role}; status={status}; actions={actions}; stops={stops}]".format(
+            "- {index}. {company} - {title} [{platform}; {role}; status={status}; actions={actions}; stops={stops}; synthetic_submit={submit}]".format(
                 index=run.get("index"),
                 company=run.get("company") or "Unknown company",
                 title=run.get("title") or "Unknown title",
@@ -7630,6 +7669,7 @@ def render_autofill_batch_plan_markdown(report: dict[str, Any]) -> str:
                 status=run.get("manifest_status"),
                 actions=run.get("browser_action_count", 0),
                 stops=run.get("stop_action_count", 0),
+                submit=run.get("local_synthetic_submit_count", 0),
             )
         )
         if run.get("apply_url"):
@@ -7656,6 +7696,8 @@ def render_autofill_batch_plan_html(report: dict[str, Any]) -> str:
             run.get("browser_action_count", 0),
             run.get("stop_action_count", 0),
             run.get("local_check_outcome"),
+            run.get("local_synthetic_submit_count", 0),
+            run.get("local_synthetic_submit_outcome"),
             run.get("apply_url"),
         ]
         for run in positions
@@ -7698,6 +7740,8 @@ def render_autofill_batch_plan_html(report: dict[str, Any]) -> str:
                     ("Stop actions", report.get("stop_action_count", 0)),
                     ("Selector misses", report.get("selector_miss_count", 0)),
                     ("Real submits", report.get("would_submit_count", 0)),
+                    ("Local synthetic submits", report.get("local_synthetic_submit_count", 0)),
+                    ("Synthetic submit ok", str(bool(report.get("local_synthetic_submit_achieved"))).lower()),
                 ]
             ),
             "<section><h2>Manifest Status Counts</h2>",
@@ -7724,6 +7768,8 @@ def render_autofill_batch_plan_html(report: dict[str, Any]) -> str:
                     "Actions",
                     "Stops",
                     "Local check",
+                    "Local synthetic submit",
+                    "Synthetic outcome",
                     "Apply URL",
                 ],
                 position_rows,
@@ -9007,6 +9053,13 @@ def build_goal_readiness_audit(
         or (autofill_batch.get("policy") or {}).get("real_platform_submission")
     )
     batch_would_submit = int(autofill_batch.get("would_submit_count") or 0)
+    batch_local_synthetic_submit_count = int(autofill_batch.get("local_synthetic_submit_count") or 0)
+    batch_local_synthetic_submit_achieved = bool(
+        autofill_batch.get("local_synthetic_submit_achieved")
+    )
+    batch_local_synthetic_selector_misses = int(
+        autofill_batch.get("local_synthetic_submit_selector_miss_count") or 0
+    )
     research_ready = bool(
         coverage_gate.get("real_platform_target_achieved")
         and coverage_gate.get("real_platform_role_target_achieved")
@@ -9086,6 +9139,9 @@ def build_goal_readiness_audit(
                 "selector_miss_count": batch_selector_misses,
                 "would_submit_count": batch_would_submit,
                 "real_platform_submission": batch_real_submit,
+                "local_synthetic_submit_count": batch_local_synthetic_submit_count,
+                "local_synthetic_submit_achieved": batch_local_synthetic_submit_achieved,
+                "local_synthetic_submit_selector_miss_count": batch_local_synthetic_selector_misses,
             },
         },
         {
@@ -9154,6 +9210,9 @@ def build_goal_readiness_audit(
             "autofill_batch_selected_count": batch_selected,
             "autofill_batch_allowed_count": batch_allowed,
             "autofill_batch_selector_miss_count": batch_selector_misses,
+            "autofill_batch_local_synthetic_submit_count": batch_local_synthetic_submit_count,
+            "autofill_batch_local_synthetic_submit_achieved": batch_local_synthetic_submit_achieved,
+            "autofill_batch_local_synthetic_submit_selector_miss_count": batch_local_synthetic_selector_misses,
         },
         "data_blockers": _goal_coverage_status_rows(coverage_counts, GOAL_DATA_BLOCKER_STATUSES),
         "optional_gaps": _goal_coverage_status_rows(coverage_counts, GOAL_OPTIONAL_GAP_STATUSES),
@@ -9247,6 +9306,8 @@ def render_goal_readiness_audit_markdown(audit: dict[str, Any]) -> str:
             f"- critical supervised-only inputs: {summary.get('critical_supervised_only_count', 0)}",
             f"- manual gates: {summary.get('manual_gate_count', 0)}",
             f"- closed registry entries: {summary.get('closed_registry_count', 0)}",
+            f"- 100-batch local synthetic submits: {summary.get('autofill_batch_local_synthetic_submit_count', 0)}",
+            f"- 100-batch local synthetic submit achieved: {str(bool(summary.get('autofill_batch_local_synthetic_submit_achieved'))).lower()}",
             "",
             "## Data Blockers",
             "",
@@ -9445,6 +9506,13 @@ def build_automation_handoff_report(
         "autofill_stop_action_count": int(batch.get("stop_action_count") or 0),
         "autofill_selector_miss_count": int(batch.get("selector_miss_count") or 0),
         "autofill_would_submit_count": int(batch.get("would_submit_count") or 0),
+        "autofill_local_synthetic_submit_count": int(batch.get("local_synthetic_submit_count") or 0),
+        "autofill_local_synthetic_submit_achieved": bool(
+            batch.get("local_synthetic_submit_achieved")
+        ),
+        "autofill_local_synthetic_submit_selector_miss_count": int(
+            batch.get("local_synthetic_submit_selector_miss_count") or 0
+        ),
         "selected_stop_group_count": len(selected_stop_summary),
         "blocked_stop_group_count": len(blocked_stop_summary),
         "missing_profile_input_count": len(missing_profile_inputs),
@@ -9539,6 +9607,7 @@ def render_automation_handoff_markdown(report: dict[str, Any]) -> str:
         f"- questionnaire answers: {summary.get('questionnaire_answerable_count', 0)} / {summary.get('questionnaire_question_count', 0)}",
         f"- impact if confirmed: {summary.get('combined_data_blocking_prompts_delta', 0)} data blockers, {summary.get('combined_positions_ready_for_autofill_delta', 0)} positions ready",
         f"- autofill batch: {summary.get('autofill_allowed_count', 0)} / {summary.get('autofill_selected_count', 0)} selected, selector misses {summary.get('autofill_selector_miss_count', 0)}",
+        f"- local synthetic submit proof: {summary.get('autofill_local_synthetic_submit_count', 0)} submits, achieved {str(bool(summary.get('autofill_local_synthetic_submit_achieved'))).lower()}, selector misses {summary.get('autofill_local_synthetic_submit_selector_miss_count', 0)}",
         "",
         "## Requirement Status",
         "",
@@ -9651,6 +9720,8 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
                     ("Impact positions", summary.get("combined_positions_ready_for_autofill_delta", 0)),
                     ("Autofill selected", summary.get("autofill_selected_count", 0)),
                     ("Selector misses", summary.get("autofill_selector_miss_count", 0)),
+                    ("Local synthetic submits", summary.get("autofill_local_synthetic_submit_count", 0)),
+                    ("Synthetic submit ok", str(bool(summary.get("autofill_local_synthetic_submit_achieved"))).lower()),
                 ]
             ),
             "<section><h2>Requirement Status</h2>",
