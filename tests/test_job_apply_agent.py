@@ -6590,6 +6590,21 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("citizenship_status", template["answers"])
         self.assertIn("Final Answer Intake Template", template_markdown)
         self.assertIn("zip_or_postal_code", template_markdown)
+        preserved_template = build_final_answer_intake_template(
+            unblockers,
+            existing_intake_payload={
+                "answers": {
+                    "zip_or_postal_code": "98004",
+                    "citizenship_status": {
+                        "answer": "U.S. citizen.",
+                        "high_risk_user_confirmed": True,
+                    },
+                }
+            },
+        )
+        self.assertEqual(preserved_template["answers"]["zip_or_postal_code"], "98004")
+        self.assertEqual(preserved_template["answers"]["citizenship_status"]["answer"], "U.S. citizen.")
+        self.assertTrue(preserved_template["answers"]["citizenship_status"]["high_risk_user_confirmed"])
 
         unconfirmed = build_final_answer_intake_update(
             unblockers,
@@ -8125,6 +8140,22 @@ class JobApplyAgentTests(unittest.TestCase):
                 "local_synthetic_submit_count": 100,
             },
         }
+        final_answer_intake_template = {
+            "answer_count": 6,
+            "high_risk_count": 5,
+            "fields": [
+                {
+                    "alias": "citizenship_status",
+                    "input_id": "answer_memory_citizenship_status_default_policy",
+                    "question": "What should automation answer for citizenship status questions?",
+                    "required_user_response": "Confirm the truthful reusable policy.",
+                    "high_risk": True,
+                    "required_count": 17,
+                    "platforms": ["Greenhouse", "Ashby"],
+                    "labels": ["Citizenship status"],
+                }
+            ],
+        }
         answer_memory = {"answers": [{"sample_question": "Expected compensation?", "answer": "100000+"}]}
         closed_jobs = {"jobs": [{"key": "linkedin:4415090263", "reason": "No longer accepting applications"}]}
 
@@ -8133,6 +8164,7 @@ class JobApplyAgentTests(unittest.TestCase):
             critical_input_questionnaire,
             critical_input_impact,
             autofill_batch,
+            final_answer_intake_template=final_answer_intake_template,
             answer_memory=answer_memory,
             closed_jobs=closed_jobs,
             apply_queue_handoff=apply_queue_handoff,
@@ -8152,17 +8184,21 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["summary"]["apply_queue_open_after_answers_count"], 100)
         self.assertEqual(report["summary"]["autofill_packet_browser_action_count"], 101)
         self.assertEqual(report["summary"]["autofill_packet_final_submit_stop_count"], 100)
+        self.assertEqual(report["summary"]["final_answer_intake_count"], 6)
+        self.assertEqual(report["summary"]["final_answer_intake_high_risk_count"], 5)
         self.assertTrue(report["summary"]["synthetic_unblocker_proof_complete"])
         self.assertEqual(report["summary"]["synthetic_final_unblocker_update_count"], 6)
         self.assertEqual(report["confirmed_answer_runbook"][0]["status"], "waiting_for_user")
-        self.assertIn("post-answer-pipeline --synthetic-final-answers --synthetic-rehearse-queue", report["next_commands"][0])
-        self.assertIn("post-answer-pipeline --fail-on-not-ready", report["next_commands"][1])
-        self.assertIn("post-answer-pipeline --apply --live-check", report["next_commands"][2])
-        self.assertIn("critical-input-unblockers-finalize", report["next_commands"][3])
-        self.assertIn("--approve-high-risk", report["next_commands"][4])
-        self.assertIn("critical_input_confirmed_updates_latest.json", report["next_commands"][4])
+        self.assertIn("final-answer-intake", report["next_commands"][0])
+        self.assertIn("final_answer_intake_template_latest.json", report["next_commands"][1])
+        self.assertIn("post-answer-pipeline --synthetic-final-answers --synthetic-rehearse-queue", report["next_commands"][2])
+        self.assertIn("post-answer-pipeline --fail-on-not-ready", report["next_commands"][3])
+        self.assertIn("post-answer-pipeline --apply --live-check", report["next_commands"][4])
+        self.assertIn("--approve-high-risk", report["next_commands"][5])
+        self.assertIn("critical_input_confirmed_updates_latest.json", report["next_commands"][5])
         self.assertIn("closed-preflight --jobs", " ".join(report["next_commands"]))
         self.assertEqual(report["answer_impact_queue"][0]["input_id"], "answer_memory_citizenship_status_default_policy")
+        self.assertEqual(report["final_answer_intake"][0]["alias"], "citizenship_status")
         self.assertEqual(report["answer_impact_queue"][0]["handoff_action"], "confirm_truthful_answer_before_persisting")
         self.assertEqual(report["selected_stop_action_summary"][0]["status"], "final_submit_confirmation")
         self.assertEqual(report["missing_profile_inputs"][0]["label"], "Website")
@@ -8172,9 +8208,11 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("synthetic final unblocker proof: true", markdown)
         self.assertIn("autofill packet: waiting_for_confirmed_answers", markdown)
         self.assertIn("Confirmed-Answer Runbook", markdown)
+        self.assertIn("Final-Answer Intake", markdown)
         self.assertIn("100-Position Stop Actions", markdown)
         self.assertIn("GitHub URL", html)
         self.assertIn("Confirmed-Answer Runbook", html)
+        self.assertIn("Final-Answer Intake", html)
         self.assertIn("Answer Impact Queue", html)
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -8189,6 +8227,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 json_output,
                 markdown_output,
                 html_output,
+                final_answer_intake_template=final_answer_intake_template,
                 answer_memory=answer_memory,
                 closed_jobs=closed_jobs,
                 apply_queue_handoff=apply_queue_handoff,
@@ -10450,6 +10489,25 @@ class JobApplyAgentTests(unittest.TestCase):
                 }
             ],
         }
+        final_answer_intake_template = {
+            "answer_count": 1,
+            "high_risk_count": 0,
+            "aliases": {"zip_or_postal_code": "profile_zip_or_postal_code"},
+            "fields": [
+                {
+                    "alias": "zip_or_postal_code",
+                    "input_id": "profile_zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "required_user_response": "Provide exact ZIP/postal code.",
+                    "high_risk": False,
+                    "required_count": 4,
+                    "platforms": ["Ashby"],
+                    "labels": ["Zip Code"],
+                    "why_not_inferred": "Profile has city but no exact ZIP.",
+                }
+            ],
+            "answers": {"zip_or_postal_code": ""},
+        }
         post_answer_pipeline = {
             "generated_at": "2026-05-23T00:00:00+00:00",
             "status": "waiting_for_confirmed_answers",
@@ -10677,6 +10735,7 @@ class JobApplyAgentTests(unittest.TestCase):
             critical_input_preflight=critical_input_preflight,
             critical_input_impact=critical_input_impact,
             critical_input_unblockers=critical_input_unblockers,
+            final_answer_intake_template=final_answer_intake_template,
             post_answer_pipeline=post_answer_pipeline,
             autofill_batch=autofill_batch,
             apply_queue_handoff=apply_queue_handoff,
@@ -10701,6 +10760,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Critical Input Impact", html)
         self.assertIn("Critical Input Preflight", html)
         self.assertIn("Final Answer Unblockers", html)
+        self.assertIn("Final-Answer Intake", html)
+        self.assertIn("zip_or_postal_code", html)
         self.assertIn("Post-Answer Pipeline", html)
         self.assertIn("waiting_for_answers", html)
         self.assertIn("Autofill Batch", html)
@@ -10759,6 +10820,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 critical_input_preflight=critical_input_preflight,
                 critical_input_impact=critical_input_impact,
                 critical_input_unblockers=critical_input_unblockers,
+                final_answer_intake_template=final_answer_intake_template,
                 post_answer_pipeline=post_answer_pipeline,
                 autofill_batch=autofill_batch,
                 apply_queue_handoff=apply_queue_handoff,
@@ -10780,6 +10842,8 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(result["summary"]["critical_questionnaire_question_count"], 1)
             self.assertEqual(result["summary"]["critical_impact_top_input_id"], "profile_zip_or_postal_code")
             self.assertEqual(result["summary"]["final_unblocker_count"], 1)
+            self.assertEqual(result["summary"]["final_answer_intake_count"], 1)
+            self.assertEqual(result["summary"]["final_answer_intake_high_risk_count"], 0)
             self.assertEqual(result["summary"]["post_answer_pipeline_status"], "waiting_for_confirmed_answers")
             self.assertEqual(result["summary"]["autofill_batch_selected_count"], 1)
             self.assertEqual(result["summary"]["apply_queue_handoff_status"], "waiting_for_confirmed_answers")
@@ -10807,6 +10871,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 self.assertIn("xl/worksheets/sheet42.xml", names)
                 self.assertIn("xl/worksheets/sheet43.xml", names)
                 self.assertIn("xl/worksheets/sheet44.xml", names)
+                self.assertIn("xl/worksheets/sheet45.xml", names)
                 critical_inputs = workbook.read("xl/worksheets/sheet2.xml").decode("utf-8")
                 self.assertIn("exact_prompt_answer", critical_inputs)
                 self.assertIn("user_answer", critical_inputs)
@@ -10873,6 +10938,9 @@ class JobApplyAgentTests(unittest.TestCase):
                 post_answer = workbook.read("xl/worksheets/sheet44.xml").decode("utf-8")
                 self.assertIn("waiting_for_confirmed_answers", post_answer)
                 self.assertIn("missing_unblocker_count", post_answer)
+                final_answer_intake = workbook.read("xl/worksheets/sheet45.xml").decode("utf-8")
+                self.assertIn("zip_or_postal_code", final_answer_intake)
+                self.assertIn("waiting_for_answer", final_answer_intake)
 
 
 if __name__ == "__main__":

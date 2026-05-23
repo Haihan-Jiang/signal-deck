@@ -571,6 +571,14 @@ def main() -> int:
         "--critical-input-updates-readiness-json",
         default=str(DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_JSON),
     )
+    automation_handoff_parser.add_argument(
+        "--final-answer-intake-template-json",
+        default=str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON),
+    )
+    automation_handoff_parser.add_argument(
+        "--final-answer-intake-report-json",
+        default=str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_JSON),
+    )
     automation_handoff_parser.add_argument("--autofill-batch-json", default=str(DEFAULT_AUTOFILL_BATCH_JSON))
     automation_handoff_parser.add_argument("--apply-queue-handoff-json", default=str(DEFAULT_APPLY_QUEUE_HANDOFF_JSON))
     automation_handoff_parser.add_argument(
@@ -1457,6 +1465,22 @@ def main() -> int:
         default=str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_HTML),
     )
     export_questions_parser.add_argument(
+        "--final-answer-intake-template-json",
+        default=str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON),
+    )
+    export_questions_parser.add_argument(
+        "--final-answer-intake-template-markdown",
+        default=str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_MARKDOWN),
+    )
+    export_questions_parser.add_argument(
+        "--final-answer-intake-report-json",
+        default=str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_JSON),
+    )
+    export_questions_parser.add_argument(
+        "--final-answer-intake-report-markdown",
+        default=str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_MARKDOWN),
+    )
+    export_questions_parser.add_argument(
         "--post-answer-pipeline-json",
         default=str(DEFAULT_POST_ANSWER_PIPELINE_JSON),
     )
@@ -1662,6 +1686,10 @@ def main() -> int:
                     "Critical input impact HTML": args.critical_input_impact_html,
                     "Critical input final unblockers": args.critical_input_unblockers_json,
                     "Critical input final unblockers HTML": args.critical_input_unblockers_html,
+                    "Final answer intake template": args.final_answer_intake_template_json,
+                    "Final answer intake template Markdown": args.final_answer_intake_template_markdown,
+                    "Final answer intake report": args.final_answer_intake_report_json,
+                    "Final answer intake report Markdown": args.final_answer_intake_report_markdown,
                     "Post-answer pipeline": args.post_answer_pipeline_json,
                     "Post-answer pipeline Markdown": args.post_answer_pipeline_markdown,
                 }
@@ -1676,6 +1704,8 @@ def main() -> int:
             critical_input_preflight=_load_optional_json(args.critical_input_preflight_json),
             critical_input_impact=_load_optional_json(args.critical_input_impact_json),
             critical_input_unblockers=_load_optional_json(args.critical_input_unblockers_json),
+            final_answer_intake_template=_load_optional_json(args.final_answer_intake_template_json),
+            final_answer_intake_update=_load_optional_json(args.final_answer_intake_report_json),
             post_answer_pipeline=_load_optional_json(args.post_answer_pipeline_json),
             autofill_batch=_load_optional_json(args.autofill_batch_json),
             apply_queue_handoff=_load_optional_json(args.apply_queue_handoff_json),
@@ -1977,6 +2007,8 @@ def main() -> int:
             answer_memory=_load_optional_json(args.answer_memory_json),
             closed_jobs=_load_optional_json(args.closed_jobs_json),
             critical_input_updates_readiness=_load_optional_json(args.critical_input_updates_readiness_json),
+            final_answer_intake_template=_load_optional_json(args.final_answer_intake_template_json),
+            final_answer_intake_update=_load_optional_json(args.final_answer_intake_report_json),
             apply_queue_handoff=_load_optional_json(args.apply_queue_handoff_json),
             apply_queue_autofill_packet=_load_optional_json(args.apply_queue_autofill_packet_json),
             source_artifacts=_question_export_source_artifacts(
@@ -1988,6 +2020,8 @@ def main() -> int:
                     "Autofill batch": args.autofill_batch_json,
                     "Critical input confirmed updates": str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_JSON),
                     "Critical input confirmed updates report": str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_JSON),
+                    "Final answer intake template": args.final_answer_intake_template_json,
+                    "Final answer intake report": args.final_answer_intake_report_json,
                     "Apply queue handoff": args.apply_queue_handoff_json,
                     "Apply queue autofill packet": args.apply_queue_autofill_packet_json,
                     "Answer memory": args.answer_memory_json,
@@ -2309,6 +2343,7 @@ def main() -> int:
             unblockers,
             args.template_output,
             args.template_markdown_output,
+            existing_intake_payload=_load_optional_json(args.template_output),
         )
         print(f"Wrote final answer intake template JSON to {args.template_output}")
         print(f"Wrote final answer intake template Markdown to {args.template_markdown_output}")
@@ -3752,6 +3787,13 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_MARKDOWN,
             closed_jobs=load_closed_jobs(DEFAULT_CLOSED_JOBS),
         )
+    if DEFAULT_CRITICAL_INPUT_UNBLOCKERS_JSON.exists():
+        write_final_answer_intake_template(
+            _load_optional_json(str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_JSON)) or {},
+            DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON,
+            DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_MARKDOWN,
+            existing_intake_payload=_load_optional_json(str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON)),
+        )
     autofill_batch = write_autofill_batch_plan(
         research,
         readiness,
@@ -3843,6 +3885,8 @@ def _refresh_application_automation_reports() -> dict[str, object]:
         answer_memory=_load_optional_json(str(DEFAULT_MEMORY)),
         closed_jobs=_load_optional_json(str(DEFAULT_CLOSED_JOBS)),
         critical_input_updates_readiness=_load_optional_json(str(DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_JSON)),
+        final_answer_intake_template=_load_optional_json(str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON)),
+        final_answer_intake_update=_load_optional_json(str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_JSON)),
         apply_queue_handoff=apply_queue_handoff,
         apply_queue_autofill_packet=apply_queue_autofill_packet,
         source_artifacts=_question_export_source_artifacts(
@@ -3856,6 +3900,10 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                 "Critical input confirmed updates": str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_JSON),
                 "Critical input confirmed updates report": str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_JSON),
                 "Critical input updates readiness": str(DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_JSON),
+                "Final answer intake template": str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON),
+                "Final answer intake template Markdown": str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_MARKDOWN),
+                "Final answer intake report": str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_JSON),
+                "Final answer intake report Markdown": str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_MARKDOWN),
                 "Apply queue": str(DEFAULT_APPLY_QUEUE_JSON),
                 "Apply queue HTML": str(DEFAULT_APPLY_QUEUE_HTML),
                 "Apply queue live-check jobs": str(DEFAULT_APPLY_QUEUE_LIVE_CHECK_JOBS),
@@ -3916,6 +3964,10 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                     "Synthetic unblocker proof": str(DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_JSON),
                     "Critical input full updates template": str(DEFAULT_CRITICAL_INPUT_FULL_UPDATES_JSON),
                     "Critical input updates readiness": str(DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_JSON),
+                    "Final answer intake template": str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON),
+                    "Final answer intake template Markdown": str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_MARKDOWN),
+                    "Final answer intake report": str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_JSON),
+                    "Final answer intake report Markdown": str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_MARKDOWN),
                 }
             ),
             synthetic_browser_execution=_load_optional_json(str(DEFAULT_SYNTHETIC_BROWSER_EXEC_JSON)),
@@ -3927,6 +3979,9 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             critical_input_questionnaire=_load_optional_json(str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_JSON)),
             critical_input_preflight=_load_optional_json(str(DEFAULT_CRITICAL_INPUT_PREFLIGHT_JSON)),
             critical_input_impact=_load_optional_json(str(DEFAULT_CRITICAL_INPUT_IMPACT_JSON)),
+            critical_input_unblockers=_load_optional_json(str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_JSON)),
+            final_answer_intake_template=_load_optional_json(str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON)),
+            final_answer_intake_update=_load_optional_json(str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_JSON)),
             autofill_batch=_load_optional_json(str(DEFAULT_AUTOFILL_BATCH_JSON)),
             apply_queue_handoff=apply_queue_handoff,
             automation_handoff=automation_handoff,

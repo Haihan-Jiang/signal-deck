@@ -4879,9 +4879,19 @@ FINAL_ANSWER_INTAKE_ALIASES = {
 }
 
 
-def build_final_answer_intake_template(unblocker_packet: dict[str, Any]) -> dict[str, Any]:
+def build_final_answer_intake_template(
+    unblocker_packet: dict[str, Any],
+    existing_intake_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     if not isinstance(unblocker_packet, dict):
         raise ValueError("critical input unblockers must be a JSON object")
+    existing_answers = (
+        existing_intake_payload.get("answers")
+        if isinstance(existing_intake_payload, dict) and isinstance(existing_intake_payload.get("answers"), dict)
+        else existing_intake_payload
+        if isinstance(existing_intake_payload, dict)
+        else {}
+    )
     answers: dict[str, Any] = {}
     fields: list[dict[str, Any]] = []
     aliases: dict[str, str] = {}
@@ -4894,11 +4904,15 @@ def build_final_answer_intake_template(unblocker_packet: dict[str, Any]) -> dict
         alias = _final_answer_intake_alias(input_id)
         high_risk = _synthetic_final_unblocker_is_high_risk(row)
         aliases[alias] = input_id
-        answers[alias] = (
-            {"answer": "", "high_risk_user_confirmed": False}
-            if high_risk
-            else ""
-        )
+        existing_value, _answer_key = _final_answer_intake_raw_answer(existing_answers, input_id, alias)
+        existing_answer, existing_confirmed = _final_answer_intake_answer_text(existing_value)
+        if high_risk:
+            answers[alias] = {
+                "answer": existing_answer,
+                "high_risk_user_confirmed": existing_confirmed,
+            }
+        else:
+            answers[alias] = existing_answer
         fields.append(
             {
                 "alias": alias,
@@ -5047,8 +5061,12 @@ def write_final_answer_intake_template(
     unblocker_packet: dict[str, Any],
     json_output: str | Path,
     markdown_output: str | Path,
+    existing_intake_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    template = build_final_answer_intake_template(unblocker_packet)
+    template = build_final_answer_intake_template(
+        unblocker_packet,
+        existing_intake_payload=existing_intake_payload,
+    )
     json_path = Path(json_output)
     markdown_path = Path(markdown_output)
     for path in [json_path, markdown_path]:
@@ -12926,6 +12944,8 @@ def build_automation_handoff_report(
     critical_input_impact: dict[str, Any] | None = None,
     autofill_batch: dict[str, Any] | None = None,
     critical_input_updates_readiness: dict[str, Any] | None = None,
+    final_answer_intake_template: dict[str, Any] | None = None,
+    final_answer_intake_update: dict[str, Any] | None = None,
     answer_memory: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
     source_artifacts: list[dict[str, Any]] | None = None,
@@ -12941,8 +12961,13 @@ def build_automation_handoff_report(
     queue_handoff = apply_queue_handoff or {}
     autofill_packet = apply_queue_autofill_packet or {}
     packet_summary = autofill_packet.get("summary") or {}
+    final_intake_update = final_answer_intake_update or {}
     blocker_summary = goal.get("blocker_summary") or {}
     impact_summary = impact.get("summary") or {}
+    final_answer_intake_rows = _final_answer_intake_export_rows(
+        final_answer_intake_template,
+        final_answer_intake_update,
+    )
     answer_queue = _automation_handoff_answer_queue_rows(questionnaire, impact)
     selected_stop_summary = _automation_handoff_stop_summary_rows(
         batch.get("selected_stop_action_counts") or {},
@@ -13017,6 +13042,19 @@ def build_automation_handoff_report(
         "updates_data_blocking_prompts_after": int(
             updates_readiness_summary.get("data_blocking_prompts_after") or 0
         ),
+        "final_answer_intake_count": int(
+            (final_answer_intake_template or {}).get("answer_count") or len(final_answer_intake_rows)
+        ),
+        "final_answer_intake_high_risk_count": int(
+            (final_answer_intake_template or {}).get("high_risk_count") or 0
+        ),
+        "final_answer_intake_ready_for_finalize": bool(final_intake_update.get("ready_for_finalize")),
+        "final_answer_intake_missing_count": int(
+            (final_intake_update.get("summary") or {}).get("missing_unblocker_count") or 0
+        ),
+        "final_answer_intake_unconfirmed_high_risk_count": int(
+            (final_intake_update.get("summary") or {}).get("unconfirmed_high_risk_count") or 0
+        ),
         "apply_queue_handoff_status": queue_handoff.get("status", ""),
         "apply_queue_open_ready_count": int(queue_handoff.get("open_ready_count") or 0),
         "apply_queue_open_after_answers_count": int(queue_handoff.get("open_after_answers_count") or 0),
@@ -13054,6 +13092,7 @@ def build_automation_handoff_report(
         "summary": summary,
         "requirements": _automation_handoff_requirement_rows(goal),
         "confirmed_answer_runbook": _automation_handoff_confirmed_answer_runbook(summary),
+        "final_answer_intake": final_answer_intake_rows,
         "answer_impact_queue": answer_queue,
         "selected_stop_action_summary": selected_stop_summary,
         "blocked_candidate_stop_action_summary": blocked_stop_summary,
@@ -13082,6 +13121,8 @@ def write_automation_handoff_report(
     answer_memory: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
     critical_input_updates_readiness: dict[str, Any] | None = None,
+    final_answer_intake_template: dict[str, Any] | None = None,
+    final_answer_intake_update: dict[str, Any] | None = None,
     source_artifacts: list[dict[str, Any]] | None = None,
     apply_queue_handoff: dict[str, Any] | None = None,
     apply_queue_autofill_packet: dict[str, Any] | None = None,
@@ -13092,6 +13133,8 @@ def write_automation_handoff_report(
         critical_input_impact,
         autofill_batch,
         critical_input_updates_readiness=critical_input_updates_readiness,
+        final_answer_intake_template=final_answer_intake_template,
+        final_answer_intake_update=final_answer_intake_update,
         answer_memory=answer_memory,
         closed_jobs=closed_jobs,
         source_artifacts=source_artifacts,
@@ -13134,6 +13177,7 @@ def render_automation_handoff_markdown(report: dict[str, Any]) -> str:
         f"- local synthetic submit proof: {summary.get('autofill_local_synthetic_submit_count', 0)} submits, achieved {str(bool(summary.get('autofill_local_synthetic_submit_achieved'))).lower()}, selector misses {summary.get('autofill_local_synthetic_submit_selector_miss_count', 0)}",
         f"- synthetic final unblocker proof: {str(bool(summary.get('synthetic_unblocker_proof_complete'))).lower()}, final blanks {summary.get('synthetic_final_unblocker_update_count', 0)}, prefilled drafts {summary.get('synthetic_unblocker_existing_draft_update_count', 0)}, blockers after {summary.get('synthetic_unblocker_data_blocking_prompts_after', 0)}",
         f"- updates readiness: {str(bool(summary.get('updates_ready_for_apply'))).lower()}, waiting {summary.get('updates_waiting_after_update_count', 0)}, high-risk unconfirmed {summary.get('updates_high_risk_unconfirmed_count', 0)}, blockers after {summary.get('updates_data_blocking_prompts_after', 0)}",
+        f"- final-answer intake: {summary.get('final_answer_intake_count', 0)} answers, {summary.get('final_answer_intake_high_risk_count', 0)} high-risk, ready for finalize {str(bool(summary.get('final_answer_intake_ready_for_finalize'))).lower()}",
         f"- apply queue handoff: {summary.get('apply_queue_handoff_status') or 'missing'}, open ready {summary.get('apply_queue_open_ready_count', 0)}, open after answers {summary.get('apply_queue_open_after_answers_count', 0)}, manual live checks {summary.get('apply_queue_manual_live_check_count', 0)}",
         f"- autofill packet: {summary.get('autofill_packet_status') or 'missing'}, selected {summary.get('autofill_packet_selected_count', 0)}, browser actions {summary.get('autofill_packet_browser_action_count', 0)}, final-submit stops {summary.get('autofill_packet_final_submit_stop_count', 0)}, selector misses {summary.get('autofill_packet_selector_miss_count', 0)}",
         "",
@@ -13167,6 +13211,23 @@ def render_automation_handoff_markdown(report: dict[str, Any]) -> str:
                     row.get("expected_result"),
                 ]
                 for row in report.get("confirmed_answer_runbook", [])
+            ],
+        )
+    )
+    lines.extend(["", "## Final-Answer Intake", ""])
+    lines.extend(
+        _simple_markdown_table(
+            ["Alias", "Input ID", "Status", "High risk", "Prompts", "Question"],
+            [
+                [
+                    row.get("alias"),
+                    row.get("input_id"),
+                    row.get("status"),
+                    row.get("high_risk"),
+                    row.get("required_count"),
+                    row.get("question"),
+                ]
+                for row in report.get("final_answer_intake", [])
             ],
         )
     )
@@ -13273,6 +13334,9 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
                     ("Prefilled drafts", summary.get("synthetic_unblocker_existing_draft_update_count", 0)),
                     ("Updates ready", str(bool(summary.get("updates_ready_for_apply"))).lower()),
                     ("Updates waiting", summary.get("updates_waiting_after_update_count", 0)),
+                    ("Final intake", summary.get("final_answer_intake_count", 0)),
+                    ("Intake high risk", summary.get("final_answer_intake_high_risk_count", 0)),
+                    ("Intake ready", str(bool(summary.get("final_answer_intake_ready_for_finalize"))).lower()),
                     ("Queue handoff", summary.get("apply_queue_handoff_status") or "missing"),
                     ("Open after answers", summary.get("apply_queue_open_after_answers_count", 0)),
                     ("Packet status", summary.get("autofill_packet_status") or "missing"),
@@ -13306,6 +13370,23 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
                         row.get("expected_result"),
                     ]
                     for row in report.get("confirmed_answer_runbook", [])
+                ],
+            ),
+            "</section>",
+            "<section><h2>Final-Answer Intake</h2>",
+            _html_table(
+                ["Alias", "Input ID", "Status", "High risk", "Prompts", "Question", "Required response"],
+                [
+                    [
+                        row.get("alias"),
+                        row.get("input_id"),
+                        row.get("status"),
+                        row.get("high_risk"),
+                        row.get("required_count"),
+                        row.get("question"),
+                        row.get("required_user_response"),
+                    ]
+                    for row in report.get("final_answer_intake", [])
                 ],
             ),
             "</section>",
@@ -13437,7 +13518,7 @@ def _automation_handoff_confirmed_answer_runbook(summary: dict[str, Any]) -> lis
             "step": 1,
             "name": "Confirm final answer blanks",
             "status": "waiting_for_user" if final_blanks else "ready",
-            "action": "Fill job_apply_agent/outbox/critical_input_unblockers_updates_template.json with truthful values.",
+            "action": "python3 -m job_apply_agent final-answer-intake, then fill job_apply_agent/outbox/final_answer_intake_template_latest.json with truthful values.",
             "expected_result": f"{final_blanks} final blanks become approved reusable answers.",
         },
         {
@@ -13458,7 +13539,7 @@ def _automation_handoff_confirmed_answer_runbook(summary: dict[str, Any]) -> lis
             "step": 4,
             "name": "Build full confirmed updates",
             "status": "ready_after_confirmation" if final_blanks else "ready",
-            "action": "python3 -m job_apply_agent critical-input-unblockers-finalize --fail-on-not-ready",
+            "action": "python3 -m job_apply_agent final-answer-intake --answers job_apply_agent/outbox/final_answer_intake_template_latest.json --finalize --fail-on-not-ready",
             "expected_result": "The six answers are merged with the prefilled draft updates into critical_input_confirmed_updates_latest.json.",
         },
         {
@@ -13508,10 +13589,11 @@ def _automation_handoff_confirmed_answer_runbook(summary: dict[str, Any]) -> lis
 
 def _automation_handoff_next_commands(summary: dict[str, Any]) -> list[str]:
     commands = [
+        "python3 -m job_apply_agent final-answer-intake",
+        "python3 -m job_apply_agent final-answer-intake --answers job_apply_agent/outbox/final_answer_intake_template_latest.json --finalize --fail-on-not-ready",
         "python3 -m job_apply_agent post-answer-pipeline --synthetic-final-answers --synthetic-rehearse-queue --fail-on-not-ready",
         "python3 -m job_apply_agent post-answer-pipeline --fail-on-not-ready",
         "python3 -m job_apply_agent post-answer-pipeline --apply --live-check --include-values",
-        "python3 -m job_apply_agent critical-input-unblockers-finalize --fail-on-not-ready",
         "python3 -m job_apply_agent critical-inputs-workflow --updates job_apply_agent/outbox/critical_input_confirmed_updates_latest.json --approve --approve-high-risk --apply",
         "python3 -m job_apply_agent apply-queue",
         "python3 -m job_apply_agent closed-preflight --jobs job_apply_agent/outbox/apply_queue_live_check_jobs_latest.json --live-check-limit 100 --live-check-timeout 25",
@@ -13522,7 +13604,7 @@ def _automation_handoff_next_commands(summary: dict[str, Any]) -> list[str]:
         "python3 -m job_apply_agent export-questions",
     ]
     if summary.get("updates_ready_for_apply"):
-        return commands[2:]
+        return commands[4:]
     return commands
 
 
@@ -14336,6 +14418,8 @@ def write_question_export(
     critical_input_preflight: dict[str, Any] | None = None,
     critical_input_impact: dict[str, Any] | None = None,
     critical_input_unblockers: dict[str, Any] | None = None,
+    final_answer_intake_template: dict[str, Any] | None = None,
+    final_answer_intake_update: dict[str, Any] | None = None,
     post_answer_pipeline: dict[str, Any] | None = None,
     autofill_batch: dict[str, Any] | None = None,
     apply_queue_handoff: dict[str, Any] | None = None,
@@ -14362,6 +14446,8 @@ def write_question_export(
         critical_input_preflight=critical_input_preflight,
         critical_input_impact=critical_input_impact,
         critical_input_unblockers=critical_input_unblockers,
+        final_answer_intake_template=final_answer_intake_template,
+        final_answer_intake_update=final_answer_intake_update,
         post_answer_pipeline=post_answer_pipeline,
         autofill_batch=autofill_batch,
         apply_queue_handoff=apply_queue_handoff,
@@ -14398,6 +14484,8 @@ def build_question_export(
     critical_input_preflight: dict[str, Any] | None = None,
     critical_input_impact: dict[str, Any] | None = None,
     critical_input_unblockers: dict[str, Any] | None = None,
+    final_answer_intake_template: dict[str, Any] | None = None,
+    final_answer_intake_update: dict[str, Any] | None = None,
     post_answer_pipeline: dict[str, Any] | None = None,
     autofill_batch: dict[str, Any] | None = None,
     apply_queue_handoff: dict[str, Any] | None = None,
@@ -14446,6 +14534,10 @@ def build_question_export(
     critical_preflight_rows = _critical_input_preflight_export_rows(critical_input_preflight)
     critical_impact_rows = _critical_input_impact_export_rows(critical_input_impact)
     critical_unblocker_rows = _critical_input_unblocker_export_rows(critical_input_unblockers)
+    final_answer_intake_rows = _final_answer_intake_export_rows(
+        final_answer_intake_template,
+        final_answer_intake_update,
+    )
     post_answer_pipeline_rows = _post_answer_pipeline_export_rows(post_answer_pipeline)
     autofill_batch_rows = _autofill_batch_export_rows(autofill_batch)
     autofill_batch_position_rows = _autofill_batch_position_export_rows(autofill_batch)
@@ -14670,6 +14762,15 @@ def build_question_export(
         "final_unblocker_prefilled_update_count": int(
             (critical_input_unblockers or {}).get("prefilled_update_count") or 0
         ),
+        "final_answer_intake_count": int(
+            (final_answer_intake_template or {}).get("answer_count") or len(final_answer_intake_rows)
+        ),
+        "final_answer_intake_high_risk_count": int(
+            (final_answer_intake_template or {}).get("high_risk_count") or 0
+        ),
+        "final_answer_intake_ready_for_finalize": bool(
+            (final_answer_intake_update or {}).get("ready_for_finalize")
+        ),
         "post_answer_pipeline_status": (post_answer_pipeline or {}).get("status", ""),
         "post_answer_pipeline_ready_for_workflow": bool((post_answer_pipeline or {}).get("ready_for_workflow")),
         "post_answer_pipeline_synthetic_final_answers": bool(
@@ -14728,6 +14829,7 @@ def build_question_export(
         "critical_input_preflight": critical_preflight_rows,
         "critical_input_impact": critical_impact_rows,
         "critical_input_unblockers": critical_unblocker_rows,
+        "final_answer_intake": final_answer_intake_rows,
         "post_answer_pipeline": post_answer_pipeline_rows,
         "autofill_batch": autofill_batch_rows,
         "autofill_batch_positions": autofill_batch_position_rows,
@@ -14910,6 +15012,14 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                     summary.get("critical_preflight_data_blocking_delta", 0),
                 ],
                 [
+                    "Final-answer intake",
+                    "{count} answers; {risk} high risk; ready {ready}".format(
+                        count=summary.get("final_answer_intake_count", 0),
+                        risk=summary.get("final_answer_intake_high_risk_count", 0),
+                        ready=_yes_no(summary.get("final_answer_intake_ready_for_finalize")),
+                    ),
+                ],
+                [
                     "Autofill batch selected",
                     summary.get("autofill_batch_selected_count", 0),
                 ],
@@ -15023,6 +15133,23 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                     row.get("labels"),
                 ]
                 for row in export.get("critical_input_unblockers", [])
+            ],
+        ),
+        "</section>",
+        "<section><h2>Final-Answer Intake</h2>",
+        _html_table(
+            ["Alias", "Input ID", "Status", "High risk", "Prompts", "Question", "Required response"],
+            [
+                [
+                    row.get("alias"),
+                    row.get("input_id"),
+                    row.get("status"),
+                    row.get("high_risk"),
+                    row.get("required_count"),
+                    row.get("question"),
+                    row.get("required_user_response"),
+                ]
+                for row in export.get("final_answer_intake", [])
             ],
         ),
         "</section>",
@@ -22921,6 +23048,57 @@ def _critical_input_unblocker_export_rows(
     return rows
 
 
+def _final_answer_intake_export_rows(
+    final_answer_intake_template: dict[str, Any] | None,
+    final_answer_intake_update: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    if not final_answer_intake_template and not final_answer_intake_update:
+        return []
+    update_status_by_id = {
+        str(row.get("input_id") or ""): row.get("status", "")
+        for row in (final_answer_intake_update or {}).get("fields", [])
+        if isinstance(row, dict)
+    }
+    rows: list[dict[str, Any]] = []
+    for item in (final_answer_intake_template or {}).get("fields", []):
+        if not isinstance(item, dict):
+            continue
+        input_id = str(item.get("input_id") or "")
+        rows.append(
+            {
+                "alias": item.get("alias"),
+                "input_id": input_id,
+                "status": update_status_by_id.get(input_id, "waiting_for_answer"),
+                "high_risk": item.get("high_risk"),
+                "required_count": item.get("required_count", 0),
+                "question": item.get("question"),
+                "required_user_response": item.get("required_user_response"),
+                "why_not_inferred": item.get("why_not_inferred"),
+                "platforms": ", ".join(_string_list(item.get("platforms"))),
+                "labels": "\n".join(_string_list(item.get("labels"))),
+            }
+        )
+    if not rows and final_answer_intake_update:
+        for item in final_answer_intake_update.get("fields") or []:
+            if not isinstance(item, dict):
+                continue
+            rows.append(
+                {
+                    "alias": item.get("alias"),
+                    "input_id": item.get("input_id"),
+                    "status": item.get("status"),
+                    "high_risk": item.get("high_risk"),
+                    "required_count": "",
+                    "question": "",
+                    "required_user_response": "",
+                    "why_not_inferred": "",
+                    "platforms": "",
+                    "labels": "",
+                }
+            )
+    return rows
+
+
 def _post_answer_pipeline_export_rows(
     post_answer_pipeline: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
@@ -23634,6 +23812,7 @@ def _write_question_export_xlsx(export: dict[str, Any], path: Path) -> None:
         ("Profile Snapshot", _table_rows(export.get("profile_snapshot", []))),
         ("Final Unblockers", _table_rows(export.get("critical_input_unblockers", []))),
         ("Post Answer Pipeline", _table_rows(export.get("post_answer_pipeline", []))),
+        ("Final Answer Intake", _table_rows(export.get("final_answer_intake", []))),
     ]
     sheet_names = [_safe_sheet_name(name) for name, _rows in sheets]
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
