@@ -18,7 +18,7 @@ import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 
 DEFAULT_QUESTIONS = [
@@ -5025,6 +5025,9 @@ FINAL_ANSWER_REPLY_ALIAS_SYNONYMS = {
         "export control",
         "legal eligibility",
         "background/export control",
+        "background export control",
+        "background or export control",
+        "background/export",
         "\u80cc\u666f",
         "\u80cc\u8c03",
         "\u80cc\u666f\u8c03\u67e5",
@@ -5045,8 +5048,11 @@ FINAL_ANSWER_REPLY_ALIAS_SYNONYMS = {
     ],
     "interview_recording_consent": [
         "interview recording",
+        "recording",
         "recording consent",
+        "transcription",
         "ai notetaker",
+        "notetaker",
         "interview analysis",
         "\u9762\u8bd5\u5f55\u97f3",
         "\u5f55\u97f3\u540c\u610f",
@@ -5394,6 +5400,7 @@ def build_final_answer_reply_intake(
         raise ValueError("final answer reply text must be a string")
     fields = [field for field in template.get("fields") or [] if isinstance(field, dict)]
     alias_lookup: dict[str, str] = {}
+    prefix_lookup_keys: set[str] = set()
     field_by_alias: dict[str, dict[str, Any]] = {}
     for field in fields:
         alias = str(field.get("alias") or "").strip()
@@ -5409,6 +5416,9 @@ def build_final_answer_reply_intake(
             normalized = _final_answer_reply_key(key)
             if normalized:
                 alias_lookup[normalized] = alias
+                prefix_lookup_keys.add(key)
+                prefix_lookup_keys.update(_final_answer_reply_confirmation_prefix_keys(key))
+    prefix_lookup_keys.update(FINAL_ANSWER_REPLY_GLOBAL_CONFIRM_KEYS)
 
     existing_answers = template.get("answers") if isinstance(template.get("answers"), dict) else {}
     parsed_answers: dict[str, str] = {}
@@ -5425,7 +5435,7 @@ def build_final_answer_reply_intake(
             if line:
                 ignored_lines.append(raw_line)
             continue
-        key, value = _split_final_answer_reply_line(line)
+        key, value = _split_final_answer_reply_line(line, prefix_lookup_keys)
         if not key:
             ignored_lines.append(raw_line)
             continue
@@ -5620,7 +5630,10 @@ def _final_answer_fake_value_marker(value: Any) -> str:
     return ""
 
 
-def _split_final_answer_reply_line(line: str) -> tuple[str, str]:
+def _split_final_answer_reply_line(
+    line: str,
+    known_prefix_keys: Iterable[str] | None = None,
+) -> tuple[str, str]:
     cleaned = re.sub(r"^\s*(?:[-*]\s+|\d+[.)]\s+)", "", line).strip()
     separator_positions = [
         (cleaned.find(separator), separator)
@@ -5630,7 +5643,51 @@ def _split_final_answer_reply_line(line: str) -> tuple[str, str]:
     if separator_positions:
         index, separator = min(separator_positions, key=lambda item: item[0])
         key, value = cleaned[:index], cleaned[index + len(separator) :]
+        if known_prefix_keys:
+            known_normalized_keys = {
+                _final_answer_reply_key(known_key)
+                for known_key in known_prefix_keys
+                if str(known_key or "").strip()
+            }
+            if _final_answer_reply_key(key) not in known_normalized_keys:
+                prefix_key, prefix_value = _split_final_answer_reply_prefix_line(
+                    cleaned,
+                    known_prefix_keys,
+                )
+                if prefix_key:
+                    return prefix_key, prefix_value
         return key.strip(), value.strip()
+    prefix_key, prefix_value = _split_final_answer_reply_prefix_line(
+        cleaned,
+        known_prefix_keys or [],
+    )
+    if prefix_key:
+        return prefix_key, prefix_value
+    return "", ""
+
+
+def _split_final_answer_reply_prefix_line(
+    cleaned: str,
+    known_prefix_keys: Iterable[str],
+) -> tuple[str, str]:
+    connector_pattern = (
+        r"(?:\s*(?:is|are|use|uses|using|=>|->|-|是|为|填|填写|使用)\s*|\s+)"
+    )
+    for raw_key in sorted(
+        {str(key).strip() for key in known_prefix_keys if str(key or "").strip()},
+        key=len,
+        reverse=True,
+    ):
+        pattern = (
+            r"^\s*[`\"']?"
+            + re.escape(raw_key)
+            + r"[`\"']?"
+            + connector_pattern
+            + r"(.+?)\s*$"
+        )
+        match = re.match(pattern, cleaned, flags=re.IGNORECASE)
+        if match:
+            return raw_key, match.group(1).strip()
     return "", ""
 
 
@@ -5644,6 +5701,22 @@ def _final_answer_reply_alias_lookup_keys(alias: str, input_id: str, question: s
     keys = [alias, input_id, question]
     keys.extend(FINAL_ANSWER_REPLY_ALIAS_SYNONYMS.get(alias, []))
     return [key for key in keys if str(key or "").strip()]
+
+
+def _final_answer_reply_confirmation_prefix_keys(key: str) -> list[str]:
+    text = str(key or "").strip()
+    if not text:
+        return []
+    return [
+        f"{text}_confirmed",
+        f"{text}_confirm",
+        f"{text} confirmed",
+        f"{text} confirm",
+        f"confirmed {text}",
+        f"confirm {text}",
+        f"{text}\u786e\u8ba4",
+        f"\u786e\u8ba4{text}",
+    ]
 
 
 def _final_answer_reply_global_confirm_keys() -> set[str]:
@@ -21323,6 +21396,7 @@ def render_final_answer_reply_template_text(report: dict[str, Any]) -> str:
         "# Fill the <fill> values with truthful reusable answers.",
         "# For high-risk confirmations, keep 确认 only when the answer is exact and truthful.",
         "# English : and Chinese ： separators are both accepted by final-answer-reply.",
+        "# Short label syntax is also accepted, e.g. 邮编是[ZIP_CODE] or recording Yes, I consent...",
         "# Common labels accepted: ZIP/邮编, citizenship/公民身份, background-export/背景或出口管制, work permit/工作许可, recording/面试录音同意, health/健康要求.",
         "",
     ]
@@ -21474,7 +21548,8 @@ def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
         lines.extend(["```text", reply_template, "```"])
         lines.append(
             "Parser note: confirmation values may be `yes` or `\u786e\u8ba4`; "
-            "English `:` and Chinese `\uff1a` separators are both accepted."
+            "English `:` and Chinese `\uff1a` separators are both accepted; short label syntax "
+            "such as `\u90ae\u7f16\u662f[ZIP_CODE]` is also accepted."
         )
     else:
         lines.append("- None")

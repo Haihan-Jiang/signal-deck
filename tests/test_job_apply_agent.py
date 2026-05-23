@@ -7760,6 +7760,69 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(reply_report["confirmed_high_risk_aliases"], ["health_requirement"])
         self.assertTrue(intake_report["ready_for_finalize"])
 
+    def test_final_answer_reply_accepts_short_label_syntax_without_colons(self) -> None:
+        unblockers = {
+            "unblockers": [
+                {
+                    "input_id": "profile_zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "high_risk": False,
+                    "required_count": 56,
+                },
+                {
+                    "input_id": "answer_memory_health_requirement_default_policy",
+                    "input_type": "high_risk_exact_confirmation",
+                    "question": "What health requirement answer should automation use?",
+                    "high_risk": True,
+                    "required_count": 2,
+                },
+                {
+                    "input_id": "answer_memory_background_or_export_control_default_policy",
+                    "input_type": "high_risk_exact_confirmation",
+                    "question": "What background/export-control answers should automation use?",
+                    "high_risk": True,
+                    "required_count": 31,
+                },
+                {
+                    "input_id": "answer_memory_interview_recording_consent_default_policy",
+                    "input_type": "high_risk_exact_confirmation",
+                    "question": "Should automation consent to interview recording?",
+                    "high_risk": True,
+                    "required_count": 18,
+                },
+            ]
+        }
+        template = build_final_answer_intake_template(unblockers)
+        reply_text = "\n".join(
+            [
+                "\u90ae\u7f16\u662f98004",
+                "health requirement I can comply with standard health or vaccination requirements; exceptions: none.",
+                "health requirement confirmed yes",
+                "background export control No disqualifying background, export-control, indictment, debarment, substance, firearm, felony, or legal-eligibility issues; no exceptions.",
+                "background export control confirmed yes",
+                "recording Yes, I consent to interview recording, transcription, AI notetakers, and interview analysis.",
+                "recording confirmed yes",
+            ]
+        )
+
+        reply_report = build_final_answer_reply_intake(template, reply_text)
+        intake_report = build_final_answer_intake_update(unblockers, reply_report["intake_payload"])
+        reply_markdown = render_final_answer_reply_intake_markdown(reply_report)
+
+        self.assertEqual(reply_report["answer_count"], 4)
+        self.assertEqual(reply_report["unknown_key_count"], 0)
+        self.assertEqual(reply_report["ignored_line_count"], 0)
+        self.assertEqual(
+            reply_report["confirmed_high_risk_aliases"],
+            [
+                "background_or_export_control",
+                "health_requirement",
+                "interview_recording_consent",
+            ],
+        )
+        self.assertTrue(intake_report["ready_for_finalize"])
+        self.assertNotIn("98004", reply_markdown)
+
     def test_final_answer_reply_blocks_fake_markers_for_real_apply_paths(self) -> None:
         unblockers = {
             "unblockers": [
