@@ -11497,6 +11497,9 @@ def build_apply_queue_handoff(
             and not row.get("live_open_eligible")
             and not row.get("live_closed")
         ),
+        "identity_unverified_count": sum(
+            1 for row in rows if row.get("live_status") == "live_identity_unverified"
+        ),
         "missing_check_count": sum(1 for row in rows if row.get("live_status") == "not_live_checked"),
         "error_count": sum(1 for row in rows if row.get("live_error")),
         "status_counts": _count_by(rows, "live_status"),
@@ -14977,6 +14980,11 @@ def build_goal_readiness_audit(
     preflight_closed_count = int(preflight.get("closed_count") or 0)
     preflight_uncertain_count = int(preflight.get("uncertain_count") or 0)
     preflight_error_count = int(preflight.get("error_count") or 0)
+    preflight_identity_unverified_count = int(
+        preflight.get("identity_unverified_count")
+        or (preflight.get("status_counts") or {}).get("live_identity_unverified")
+        or 0
+    )
     preflight_retry_attempts = int(preflight.get("retry_attempts") or 0)
     preflight_fetch_attempt_count = int(preflight.get("fetch_attempt_count") or 0)
     preflight_generated_at = str(preflight.get("generated_at") or "").strip()
@@ -14994,6 +15002,7 @@ def build_goal_readiness_audit(
             and preflight_open_eligible_count >= 100
             and preflight_uncertain_count == 0
             and preflight_error_count == 0
+            and preflight_identity_unverified_count == 0
             and not preflight_stale
         )
     )
@@ -15231,6 +15240,7 @@ def build_goal_readiness_audit(
                 "latest_preflight_open_eligible": preflight_open_eligible_count,
                 "latest_preflight_closed": preflight_closed_count,
                 "latest_preflight_uncertain": preflight_uncertain_count,
+                "latest_preflight_identity_unverified": preflight_identity_unverified_count,
                 "latest_preflight_errors": preflight_error_count,
                 "latest_preflight_retry_attempts": preflight_retry_attempts,
                 "latest_preflight_fetch_attempts": preflight_fetch_attempt_count,
@@ -15466,6 +15476,7 @@ def build_goal_readiness_audit(
             "latest_preflight_open_eligible_count": preflight_open_eligible_count,
             "latest_preflight_closed_count": preflight_closed_count,
             "latest_preflight_uncertain_count": preflight_uncertain_count,
+            "latest_preflight_identity_unverified_count": preflight_identity_unverified_count,
             "latest_preflight_error_count": preflight_error_count,
             "latest_preflight_retry_attempts": preflight_retry_attempts,
             "latest_preflight_fetch_attempt_count": preflight_fetch_attempt_count,
@@ -15706,6 +15717,7 @@ def render_goal_readiness_audit_markdown(audit: dict[str, Any]) -> str:
             f"live checked {summary.get('latest_preflight_live_checked_count', 0)}, "
             f"closed {summary.get('latest_preflight_closed_count', 0)}, "
             f"uncertain {summary.get('latest_preflight_uncertain_count', 0)}, "
+            f"identity unverified {summary.get('latest_preflight_identity_unverified_count', 0)}, "
             f"errors {summary.get('latest_preflight_error_count', 0)}, "
             f"retry attempts {summary.get('latest_preflight_retry_attempts', 0)}, "
             f"fetch attempts {summary.get('latest_preflight_fetch_attempt_count', 0)}, "
@@ -16082,6 +16094,7 @@ def build_automation_handoff_report(
     updates_readiness_summary = updates_readiness.get("summary") or {}
     batch = autofill_batch or {}
     queue_handoff = apply_queue_handoff or {}
+    queue_preflight = queue_handoff.get("preflight") if isinstance(queue_handoff.get("preflight"), dict) else {}
     autofill_packet = apply_queue_autofill_packet or {}
     packet_summary = autofill_packet.get("summary") or {}
     queue_refresh = apply_queue_refresh or {}
@@ -16233,6 +16246,15 @@ def build_automation_handoff_report(
         "apply_queue_open_after_answers_count": int(queue_handoff.get("open_after_answers_count") or 0),
         "apply_queue_manual_live_check_count": int(queue_handoff.get("manual_live_check_count") or 0),
         "apply_queue_closed_or_skipped_count": int(queue_handoff.get("closed_or_skipped_count") or 0),
+        "apply_queue_preflight_live_checked_count": int(queue_preflight.get("live_checked_count") or 0),
+        "apply_queue_preflight_open_eligible_count": int(queue_preflight.get("open_eligible_count") or 0),
+        "apply_queue_preflight_closed_count": int(queue_preflight.get("closed_count") or 0),
+        "apply_queue_preflight_uncertain_count": int(queue_preflight.get("uncertain_count") or 0),
+        "apply_queue_preflight_identity_unverified_count": int(
+            queue_preflight.get("identity_unverified_count") or 0
+        ),
+        "apply_queue_preflight_missing_check_count": int(queue_preflight.get("missing_check_count") or 0),
+        "apply_queue_preflight_error_count": int(queue_preflight.get("error_count") or 0),
         "apply_queue_refresh_status": queue_refresh.get("status", ""),
         "apply_queue_refresh_round_count": len(queue_refresh.get("rounds") or []),
         "apply_queue_refresh_live_open_after_answers_count": int(
@@ -16426,6 +16448,26 @@ def _automation_handoff_completion_verdict_rows(
         and local_synthetic_submits >= target
         and final_submit_stops >= target
     )
+    preflight_live_checked = int(summary.get("apply_queue_preflight_live_checked_count") or 0)
+    preflight_open_eligible = int(summary.get("apply_queue_preflight_open_eligible_count") or 0)
+    preflight_closed = int(summary.get("apply_queue_preflight_closed_count") or 0)
+    preflight_uncertain = int(summary.get("apply_queue_preflight_uncertain_count") or 0)
+    preflight_identity_unverified = int(
+        summary.get("apply_queue_preflight_identity_unverified_count") or 0
+    )
+    preflight_missing = int(summary.get("apply_queue_preflight_missing_check_count") or 0)
+    preflight_errors = int(summary.get("apply_queue_preflight_error_count") or 0)
+    preflight_ready = bool(
+        not bool(summary.get("latest_preflight_stale"))
+        and preflight_live_checked >= target
+        and preflight_open_eligible >= target
+        and preflight_closed == 0
+        and preflight_uncertain == 0
+        and preflight_identity_unverified == 0
+        and preflight_missing == 0
+        and preflight_errors == 0
+        and int(summary.get("apply_queue_manual_live_check_count") or 0) == 0
+    )
     safety_ok = bool(summary.get("submission_safety_safe")) and int(
         summary.get("submission_safety_issue_count") or 0
     ) == 0
@@ -16441,6 +16483,19 @@ def _automation_handoff_completion_verdict_rows(
                 f"final_submit_stops={final_submit_stops}"
             ),
             "next_action": "rerun position-execution-audit or fix selectors" if not technical_ready else "none",
+        },
+        {
+            "id": "live_closed_identity_preflight",
+            "status": "achieved" if preflight_ready else "needs_refresh",
+            "blocking": not preflight_ready,
+            "evidence": (
+                f"live_checked={preflight_live_checked}/{target}; open_eligible={preflight_open_eligible}; "
+                f"closed={preflight_closed}; uncertain={preflight_uncertain}; "
+                f"identity_unverified={preflight_identity_unverified}; missing_checks={preflight_missing}; "
+                f"errors={preflight_errors}; stale={str(bool(summary.get('latest_preflight_stale'))).lower()}; "
+                f"manual_live_checks={summary.get('apply_queue_manual_live_check_count', 0)}"
+            ),
+            "next_action": "rerun closed-preflight or refresh/top up queue" if not preflight_ready else "none",
         },
         {
             "id": "truthful_answer_learning",
@@ -16502,6 +16557,7 @@ def render_automation_handoff_markdown(report: dict[str, Any]) -> str:
         f"- final-answer intake: {summary.get('final_answer_intake_count', 0)} answers, {summary.get('final_answer_intake_high_risk_count', 0)} high-risk, ready for finalize {str(bool(summary.get('final_answer_intake_ready_for_finalize'))).lower()}",
         f"- final-answer blockers: missing {summary.get('final_answer_intake_missing_count', 0)}, unconfirmed high-risk {summary.get('final_answer_intake_unconfirmed_high_risk_count', 0)}, needs specificity {summary.get('final_answer_intake_needs_more_specific_count', 0)}",
         f"- apply queue handoff: {summary.get('apply_queue_handoff_status') or 'missing'}, open ready {summary.get('apply_queue_open_ready_count', 0)}, open after answers {summary.get('apply_queue_open_after_answers_count', 0)}, manual live checks {summary.get('apply_queue_manual_live_check_count', 0)}",
+        f"- apply queue preflight: checked {summary.get('apply_queue_preflight_live_checked_count', 0)}, open eligible {summary.get('apply_queue_preflight_open_eligible_count', 0)}, closed {summary.get('apply_queue_preflight_closed_count', 0)}, uncertain {summary.get('apply_queue_preflight_uncertain_count', 0)}, identity unverified {summary.get('apply_queue_preflight_identity_unverified_count', 0)}, missing checks {summary.get('apply_queue_preflight_missing_check_count', 0)}, errors {summary.get('apply_queue_preflight_error_count', 0)}",
         f"- apply queue refresh: {summary.get('apply_queue_refresh_status') or 'missing'}, rounds {summary.get('apply_queue_refresh_round_count', 0)}, live open after answers {summary.get('apply_queue_refresh_live_open_after_answers_count', 0)}, top-up required {summary.get('apply_queue_refresh_top_up_required_count', 0)}",
         f"- autofill packet: {summary.get('autofill_packet_status') or 'missing'}, selected {summary.get('autofill_packet_selected_count', 0)}, browser actions {summary.get('autofill_packet_browser_action_count', 0)}, final-submit stops {summary.get('autofill_packet_final_submit_stop_count', 0)}, selector misses {summary.get('autofill_packet_selector_miss_count', 0)}",
         f"- position execution audit: {summary.get('position_execution_status') or 'missing'}, audited {summary.get('position_execution_audited_count', 0)} / {summary.get('position_execution_target_count', 0)}, ready after answers {summary.get('position_execution_ready_after_answers_count', 0)}, selector misses {summary.get('position_execution_selector_miss_count', 0)}",
@@ -16777,6 +16833,10 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
                     ("Intake specificity", summary.get("final_answer_intake_needs_more_specific_count", 0)),
                     ("Queue handoff", summary.get("apply_queue_handoff_status") or "missing"),
                     ("Open after answers", summary.get("apply_queue_open_after_answers_count", 0)),
+                    ("Preflight checked", summary.get("apply_queue_preflight_live_checked_count", 0)),
+                    ("Preflight open", summary.get("apply_queue_preflight_open_eligible_count", 0)),
+                    ("Preflight uncertain", summary.get("apply_queue_preflight_uncertain_count", 0)),
+                    ("Identity unverified", summary.get("apply_queue_preflight_identity_unverified_count", 0)),
                     ("Queue refresh", summary.get("apply_queue_refresh_status") or "missing"),
                     ("Refresh open", summary.get("apply_queue_refresh_live_open_after_answers_count", 0)),
                     ("Top-up required", summary.get("apply_queue_refresh_top_up_required_count", 0)),
@@ -19087,6 +19147,27 @@ def build_question_export(
         ),
         "apply_queue_handoff_manual_live_check_count": int(
             (apply_queue_handoff or {}).get("manual_live_check_count") or 0
+        ),
+        "apply_queue_handoff_preflight_live_checked_count": int(
+            (((apply_queue_handoff or {}).get("preflight") or {}).get("live_checked_count")) or 0
+        ),
+        "apply_queue_handoff_preflight_open_eligible_count": int(
+            (((apply_queue_handoff or {}).get("preflight") or {}).get("open_eligible_count")) or 0
+        ),
+        "apply_queue_handoff_preflight_closed_count": int(
+            (((apply_queue_handoff or {}).get("preflight") or {}).get("closed_count")) or 0
+        ),
+        "apply_queue_handoff_preflight_uncertain_count": int(
+            (((apply_queue_handoff or {}).get("preflight") or {}).get("uncertain_count")) or 0
+        ),
+        "apply_queue_handoff_preflight_identity_unverified_count": int(
+            (((apply_queue_handoff or {}).get("preflight") or {}).get("identity_unverified_count")) or 0
+        ),
+        "apply_queue_handoff_preflight_missing_check_count": int(
+            (((apply_queue_handoff or {}).get("preflight") or {}).get("missing_check_count")) or 0
+        ),
+        "apply_queue_handoff_preflight_error_count": int(
+            (((apply_queue_handoff or {}).get("preflight") or {}).get("error_count")) or 0
         ),
         "apply_queue_refresh_status": (apply_queue_refresh or {}).get("status", ""),
         "apply_queue_refresh_round_count": len((apply_queue_refresh or {}).get("rounds") or []),
@@ -21570,6 +21651,7 @@ def render_closed_posting_preflight_markdown(report: dict[str, Any]) -> str:
         f"Newly closed: {report.get('newly_closed_count', 0)}",
         f"Open eligible: {report.get('open_eligible_count', 0)}",
         f"Uncertain: {report.get('uncertain_count', 0)}",
+        f"Identity unverified: {report.get('identity_unverified_count', 0)}",
         f"Errors: {report.get('error_count', 0)}",
         f"Retry attempts: {report.get('retry_attempts', 0)}",
         f"Fetch attempts: {report.get('fetch_attempt_count', 0)}",
@@ -21896,6 +21978,9 @@ def build_closed_posting_preflight(
     closed_checks = [check for check in checks if check.get("closed")]
     open_checks = [check for check in checks if check.get("open_eligible")]
     error_checks = [check for check in checks if check.get("status") == "check_error"]
+    identity_unverified_checks = [
+        check for check in checks if check.get("status") == "live_identity_unverified"
+    ]
     uncertain_checks = [
         check
         for check in checks
@@ -21914,6 +21999,7 @@ def build_closed_posting_preflight(
         ),
         "open_eligible_count": len(open_checks),
         "uncertain_count": len(uncertain_checks),
+        "identity_unverified_count": len(identity_unverified_checks),
         "error_count": len(error_checks),
         "retry_attempts": max(0, int(retry_attempts or 0)),
         "fetch_attempt_count": sum(int(check.get("attempt_count") or 0) for check in checks),
@@ -30153,6 +30239,41 @@ def _goal_evidence_export_rows(
         or summary.get("apply_queue_handoff_manual_live_check_count")
         or 0
     )
+    preflight_live_checked = int(
+        automation_summary.get("apply_queue_preflight_live_checked_count")
+        or summary.get("apply_queue_handoff_preflight_live_checked_count")
+        or 0
+    )
+    preflight_open_eligible = int(
+        automation_summary.get("apply_queue_preflight_open_eligible_count")
+        or summary.get("apply_queue_handoff_preflight_open_eligible_count")
+        or 0
+    )
+    preflight_closed = int(
+        automation_summary.get("apply_queue_preflight_closed_count")
+        or summary.get("apply_queue_handoff_preflight_closed_count")
+        or 0
+    )
+    preflight_uncertain = int(
+        automation_summary.get("apply_queue_preflight_uncertain_count")
+        or summary.get("apply_queue_handoff_preflight_uncertain_count")
+        or 0
+    )
+    preflight_identity_unverified = int(
+        automation_summary.get("apply_queue_preflight_identity_unverified_count")
+        or summary.get("apply_queue_handoff_preflight_identity_unverified_count")
+        or 0
+    )
+    preflight_missing = int(
+        automation_summary.get("apply_queue_preflight_missing_check_count")
+        or summary.get("apply_queue_handoff_preflight_missing_check_count")
+        or 0
+    )
+    preflight_errors = int(
+        automation_summary.get("apply_queue_preflight_error_count")
+        or summary.get("apply_queue_handoff_preflight_error_count")
+        or 0
+    )
     selected_count = int(
         automation_summary.get("autofill_packet_selected_count")
         or summary.get("autofill_batch_selected_count")
@@ -30207,13 +30328,32 @@ def _goal_evidence_export_rows(
         },
         {
             "requirement": "Exclude closed or No longer accepting postings before opening/applying",
-            "status": "achieved" if not latest_preflight_stale and manual_live_checks == 0 else "needs_refresh",
+            "status": "achieved"
+            if not latest_preflight_stale
+            and manual_live_checks == 0
+            and preflight_open_eligible >= open_after_answers
+            and preflight_uncertain == 0
+            and preflight_identity_unverified == 0
+            and preflight_missing == 0
+            and preflight_errors == 0
+            else "needs_refresh",
             "evidence": (
                 f"closed_registry={summary.get('closed_posting_count', 0)}; "
                 f"latest_preflight_stale={latest_preflight_stale}; "
-                f"manual_live_checks={manual_live_checks}; open_after_answers={open_after_answers}"
+                f"manual_live_checks={manual_live_checks}; open_after_answers={open_after_answers}; "
+                f"preflight_live_checked={preflight_live_checked}; preflight_open_eligible={preflight_open_eligible}; "
+                f"preflight_closed={preflight_closed}; preflight_uncertain={preflight_uncertain}; "
+                f"identity_unverified={preflight_identity_unverified}; missing_checks={preflight_missing}; "
+                f"errors={preflight_errors}"
             ),
-            "next_action": "rerun live closed-preflight" if latest_preflight_stale or manual_live_checks else "none",
+            "next_action": "rerun live closed-preflight"
+            if latest_preflight_stale
+            or manual_live_checks
+            or preflight_uncertain
+            or preflight_identity_unverified
+            or preflight_missing
+            or preflight_errors
+            else "none",
         },
         {
             "requirement": "Prepare selected 100-position supervised autofill queue",

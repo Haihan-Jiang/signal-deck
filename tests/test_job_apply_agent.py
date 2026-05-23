@@ -1576,6 +1576,7 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(report["newly_closed_count"], 1)
             self.assertEqual(report["open_eligible_count"], 1)
             self.assertEqual(report["uncertain_count"], 1)
+            self.assertEqual(report["identity_unverified_count"], 0)
             self.assertEqual(report["status_counts"]["closed_registry"], 1)
             self.assertEqual(report["status_counts"]["closed_live_text"], 1)
             self.assertEqual(report["status_counts"]["open_live_checked"], 1)
@@ -1621,6 +1622,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["live_checked_count"], 1)
         self.assertEqual(report["open_eligible_count"], 0)
         self.assertEqual(report["uncertain_count"], 1)
+        self.assertEqual(report["identity_unverified_count"], 1)
         self.assertEqual(report["status_counts"]["live_identity_unverified"], 1)
         check = report["checks"][0]
         self.assertEqual(check["status"], "live_identity_unverified")
@@ -1628,6 +1630,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("title_and_company", check["live_identity"]["required"])
         self.assertIn("live page did not match expected", check["reason"])
         self.assertIn("live_identity_unverified", markdown)
+        self.assertIn("Identity unverified: 1", markdown)
         self.assertIn("live page did not match expected", markdown)
 
     def test_closed_preflight_retries_transient_errors_before_marking_uncertain(self) -> None:
@@ -10350,6 +10353,7 @@ class JobApplyAgentTests(unittest.TestCase):
             "open_eligible_count": 100,
             "closed_count": 0,
             "uncertain_count": 0,
+            "identity_unverified_count": 0,
             "error_count": 0,
             "retry_attempts": 1,
             "fetch_attempt_count": 100,
@@ -10472,12 +10476,46 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(audit["requirements"][0]["status"], "achieved")
         self.assertEqual(audit["requirements"][0]["evidence"]["latest_preflight_open_eligible"], 100)
         self.assertEqual(audit["requirements"][0]["evidence"]["latest_preflight_uncertain"], 0)
+        self.assertEqual(audit["requirements"][0]["evidence"]["latest_preflight_identity_unverified"], 0)
         self.assertEqual(audit["blocker_summary"]["latest_preflight_open_eligible_count"], 100)
         self.assertEqual(audit["blocker_summary"]["latest_preflight_uncertain_count"], 0)
+        self.assertEqual(audit["blocker_summary"]["latest_preflight_identity_unverified_count"], 0)
         self.assertFalse(audit["blocker_summary"]["latest_preflight_stale"])
         self.assertIsNone(audit["blocker_summary"]["latest_preflight_age_seconds"])
         self.assertGreaterEqual(audit["requirements"][0]["evidence"]["closed_phrase_count"], 20)
         self.assertGreaterEqual(audit["requirements"][0]["evidence"]["closed_regex_count"], 7)
+        identity_mismatch_preflight = {
+            **closed_preflight,
+            "open_eligible_count": 99,
+            "uncertain_count": 0,
+            "identity_unverified_count": 1,
+        }
+        identity_mismatch_audit = build_goal_readiness_audit(
+            coverage_gate,
+            gaps,
+            readiness,
+            critical_input_status=critical_status,
+            critical_input_updates_readiness=critical_updates_readiness,
+            fake_learning_probe=fake_learning_probe,
+            fake_critical_input_probe=fake_critical,
+            fake_position_rehearsal=fake_rehearsal,
+            autofill_batch_plan=autofill_batch,
+            synthetic_unblocker_proof=synthetic_unblocker_proof,
+            post_answer_pipeline=post_answer_pipeline,
+            closed_preflight=identity_mismatch_preflight,
+            closed_jobs=closed_jobs,
+            platform_question_playbook=platform_question_playbook,
+            position_execution_audit=position_execution_audit,
+        )
+        identity_requirement = next(
+            item for item in identity_mismatch_audit["requirements"] if item["id"] == "closed_posting_filter"
+        )
+        self.assertEqual(identity_requirement["status"], "needs_live_preflight_retry")
+        self.assertEqual(identity_requirement["evidence"]["latest_preflight_identity_unverified"], 1)
+        self.assertEqual(
+            identity_mismatch_audit["blocker_summary"]["latest_preflight_identity_unverified_count"],
+            1,
+        )
         stale_closed_preflight = {**closed_preflight, "generated_at": "2000-01-01T00:00:00+00:00"}
         stale_audit = build_goal_readiness_audit(
             coverage_gate,
@@ -10593,6 +10631,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("position execution audit ready: true", markdown)
         self.assertIn("position execution audited: 100 / 100", markdown)
         self.assertIn("latest live preflight: 100 open / 100 candidates", markdown)
+        self.assertIn("identity unverified 0", markdown)
         self.assertIn("Top Data-Blocking Prompts", markdown)
         self.assertIn("Have you worked with us before?", markdown)
         self.assertIn("resume-after-answers", "\n".join(audit["next_actions"]))
@@ -10783,6 +10822,16 @@ class JobApplyAgentTests(unittest.TestCase):
             "open_after_answers_count": 100,
             "manual_live_check_count": 0,
             "closed_or_skipped_count": 0,
+            "preflight": {
+                "live_checked_count": 100,
+                "open_eligible_count": 100,
+                "closed_count": 0,
+                "uncertain_count": 0,
+                "identity_unverified_count": 0,
+                "missing_check_count": 0,
+                "error_count": 0,
+                "status_counts": {"open_live_checked": 100},
+            },
         }
         apply_queue_autofill_packet = {
             "status": "waiting_for_confirmed_answers",
@@ -10918,6 +10967,11 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertTrue(report["summary"]["individual_impact_truncated"])
         self.assertEqual(report["summary"]["closed_registry_count"], 1)
         self.assertEqual(report["summary"]["apply_queue_open_after_answers_count"], 100)
+        self.assertEqual(report["summary"]["apply_queue_preflight_live_checked_count"], 100)
+        self.assertEqual(report["summary"]["apply_queue_preflight_open_eligible_count"], 100)
+        self.assertEqual(report["summary"]["apply_queue_preflight_uncertain_count"], 0)
+        self.assertEqual(report["summary"]["apply_queue_preflight_identity_unverified_count"], 0)
+        self.assertEqual(report["summary"]["apply_queue_preflight_error_count"], 0)
         self.assertEqual(report["summary"]["apply_queue_refresh_status"], "queue_refreshed")
         self.assertEqual(report["summary"]["apply_queue_refresh_live_open_after_answers_count"], 100)
         self.assertEqual(report["summary"]["apply_queue_refresh_top_up_required_count"], 0)
@@ -10970,6 +11024,13 @@ class JobApplyAgentTests(unittest.TestCase):
             {
                 row["id"]: row["status"]
                 for row in report["completion_verdict"]
+            }["live_closed_identity_preflight"],
+            "achieved",
+        )
+        self.assertEqual(
+            {
+                row["id"]: row["status"]
+                for row in report["completion_verdict"]
             }["truthful_answer_learning"],
             "needs_user_answers",
         )
@@ -11011,6 +11072,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("local synthetic submit proof: 100 submits", markdown)
         self.assertIn("synthetic final unblocker proof: true", markdown)
         self.assertIn("apply queue refresh: queue_refreshed", markdown)
+        self.assertIn("apply queue preflight: checked 100, open eligible 100", markdown)
+        self.assertIn("live_closed_identity_preflight", markdown)
         self.assertIn("autofill packet: waiting_for_confirmed_answers", markdown)
         self.assertIn("submission safety: safe", markdown)
         self.assertIn("final-answer fake/test markers: real 0, synthetic 5", markdown)
@@ -11034,6 +11097,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("100-Position Execution Audit", markdown)
         self.assertIn("GitHub URL", html)
         self.assertIn("Queue refresh", html)
+        self.assertIn("Preflight checked", html)
+        self.assertIn("Identity unverified", html)
         self.assertIn("Safety audit", html)
         self.assertIn("Goal Completion Verdict", html)
         self.assertIn("waiting_for_truthful_user_answers", html)
@@ -14333,6 +14398,13 @@ class JobApplyAgentTests(unittest.TestCase):
                 )["status"],
                 "needs_user_answers",
             )
+            closed_evidence = next(
+                row
+                for row in result["goal_evidence"]
+                if row["requirement"] == "Exclude closed or No longer accepting postings before opening/applying"
+            )
+            self.assertEqual(closed_evidence["status"], "needs_refresh")
+            self.assertIn("preflight_uncertain=1", closed_evidence["evidence"])
             self.assertEqual(result["summary"]["critical_input_count"], 1)
             self.assertEqual(result["learning_approval_critical_inputs"][0]["input_type"], "exact_prompt_answer")
             self.assertEqual(len(result["learning_approval_tasks"]), 1)
@@ -14348,6 +14420,9 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(result["summary"]["autofill_batch_selected_count"], 1)
             self.assertEqual(result["summary"]["apply_queue_handoff_status"], "waiting_for_confirmed_answers")
             self.assertEqual(result["summary"]["apply_queue_handoff_open_after_answers_count"], 1)
+            self.assertEqual(result["summary"]["apply_queue_handoff_preflight_live_checked_count"], 2)
+            self.assertEqual(result["summary"]["apply_queue_handoff_preflight_open_eligible_count"], 1)
+            self.assertEqual(result["summary"]["apply_queue_handoff_preflight_uncertain_count"], 1)
             self.assertEqual(result["summary"]["apply_queue_refresh_status"], "queue_refreshed")
             self.assertEqual(result["summary"]["apply_queue_refresh_live_open_after_answers_count"], 1)
             self.assertEqual(result["summary"]["apply_queue_refresh_top_up_required_count"], 0)
