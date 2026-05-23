@@ -31,6 +31,7 @@ from job_apply_agent.core import (
     build_critical_input_questionnaire,
     build_critical_input_suggestion_packet,
     build_critical_input_status_report,
+    build_critical_input_unblocker_final_update,
     build_critical_input_unblocker_packet,
     build_critical_input_updates_readiness,
     build_synthetic_unblocker_proof,
@@ -110,6 +111,7 @@ from job_apply_agent.core import (
     render_critical_input_questionnaire_markdown,
     render_critical_input_suggestions_markdown,
     render_critical_input_status_markdown,
+    render_critical_input_unblocker_final_update_markdown,
     render_critical_input_unblocker_html,
     render_critical_input_unblocker_markdown,
     render_critical_input_updates_readiness_markdown,
@@ -158,6 +160,7 @@ from job_apply_agent.core import (
     write_critical_input_questionnaire,
     write_critical_input_suggestion_packet,
     write_critical_input_status_report,
+    write_critical_input_unblocker_final_update,
     write_critical_input_unblocker_packet,
     write_critical_input_updates_readiness,
     write_synthetic_unblocker_proof,
@@ -6433,6 +6436,98 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(markdown_output.exists())
             self.assertTrue(html_output.exists())
 
+    def test_critical_input_unblocker_final_update_merges_compact_answers_with_full_template(self) -> None:
+        unblockers = {
+            "unblockers": [
+                {
+                    "input_id": "profile_zip_or_postal_code",
+                    "high_risk": False,
+                },
+                {
+                    "input_id": "answer_memory_citizenship_status_default_policy",
+                    "high_risk": True,
+                },
+            ]
+        }
+        full_template = {
+            "answer_memory_employment_history_default_policy": "No prior employment unless specifically confirmed.",
+            "profile_zip_or_postal_code": "",
+            "answer_memory_citizenship_status_default_policy": {
+                "user_answer": "",
+                "approval_decision": "approved",
+                "high_risk_user_confirmed": False,
+            },
+        }
+        incomplete = {
+            "profile_zip_or_postal_code": "98004",
+            "answer_memory_citizenship_status_default_policy": {
+                "user_answer": "U.S. citizen; no restricted-country citizenship or permanent residency.",
+                "approval_decision": "approved",
+                "high_risk_user_confirmed": False,
+            },
+        }
+
+        blocked = build_critical_input_unblocker_final_update(
+            incomplete,
+            full_template,
+            unblocker_packet=unblockers,
+        )
+        self.assertFalse(blocked["ready_for_workflow"])
+        self.assertEqual(blocked["summary"]["merged_update_count"], 3)
+        self.assertEqual(blocked["missing_unblocker_ids"], [])
+        self.assertEqual(
+            blocked["unconfirmed_high_risk_ids"],
+            ["answer_memory_citizenship_status_default_policy"],
+        )
+        self.assertEqual(
+            blocked["merged_updates"]["answer_memory_employment_history_default_policy"],
+            "No prior employment unless specifically confirmed.",
+        )
+
+        complete = json.loads(json.dumps(incomplete))
+        complete["answer_memory_citizenship_status_default_policy"]["high_risk_user_confirmed"] = True
+        ready = build_critical_input_unblocker_final_update(
+            complete,
+            full_template,
+            unblocker_packet=unblockers,
+        )
+        markdown = render_critical_input_unblocker_final_update_markdown(ready)
+
+        self.assertTrue(ready["ready_for_workflow"])
+        self.assertEqual(ready["summary"]["missing_unblocker_count"], 0)
+        self.assertEqual(ready["summary"]["unconfirmed_high_risk_count"], 0)
+        self.assertIn("critical_input_confirmed_updates_latest.json", ready["workflow_command"])
+        self.assertIn("Ready for workflow: true", markdown)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            compact_path = root / "compact.json"
+            full_path = root / "full.json"
+            unblockers_path = root / "unblockers.json"
+            updates_output = root / "confirmed.json"
+            json_output = root / "report.json"
+            markdown_output = root / "report.md"
+            compact_path.write_text(json.dumps(complete), encoding="utf-8")
+            full_path.write_text(json.dumps(full_template), encoding="utf-8")
+            unblockers_path.write_text(json.dumps(unblockers), encoding="utf-8")
+
+            written = write_critical_input_unblocker_final_update(
+                compact_path,
+                full_path,
+                unblockers_path,
+                updates_output,
+                json_output,
+                markdown_output,
+            )
+
+            self.assertTrue(written["ready_for_workflow"])
+            self.assertTrue(updates_output.exists())
+            self.assertTrue(json_output.exists())
+            self.assertTrue(markdown_output.exists())
+            confirmed_updates = json.loads(updates_output.read_text(encoding="utf-8"))
+            self.assertIn("answer_memory_employment_history_default_policy", confirmed_updates)
+            self.assertEqual(confirmed_updates["profile_zip_or_postal_code"], "98004")
+
     def test_critical_input_updates_readiness_blocks_blanks_and_unconfirmed_high_risk(self) -> None:
         learning_tasks = {
             "tasks": [
@@ -7871,7 +7966,9 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertTrue(report["summary"]["synthetic_unblocker_proof_complete"])
         self.assertEqual(report["summary"]["synthetic_final_unblocker_update_count"], 6)
         self.assertEqual(report["confirmed_answer_runbook"][0]["status"], "waiting_for_user")
-        self.assertIn("--approve-high-risk", report["next_commands"][0])
+        self.assertIn("critical-input-unblockers-finalize", report["next_commands"][0])
+        self.assertIn("--approve-high-risk", report["next_commands"][1])
+        self.assertIn("critical_input_confirmed_updates_latest.json", report["next_commands"][1])
         self.assertIn("closed-preflight --jobs", " ".join(report["next_commands"]))
         self.assertEqual(report["answer_impact_queue"][0]["input_id"], "answer_memory_citizenship_status_default_policy")
         self.assertEqual(report["answer_impact_queue"][0]["handoff_action"], "confirm_truthful_answer_before_persisting")

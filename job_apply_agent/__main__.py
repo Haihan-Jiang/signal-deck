@@ -47,6 +47,7 @@ from .core import (
     write_critical_input_impact_report,
     write_critical_input_preflight,
     write_critical_input_questionnaire,
+    write_critical_input_unblocker_final_update,
     write_critical_input_unblocker_packet,
     write_critical_input_updates_readiness,
     write_form_fill_plan,
@@ -159,6 +160,15 @@ DEFAULT_CRITICAL_INPUT_UNBLOCKERS_UPDATES_JSON = (
 )
 DEFAULT_CRITICAL_INPUT_FULL_UPDATES_JSON = (
     Path(__file__).with_name("outbox") / "critical_input_full_updates_template.json"
+)
+DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_JSON = (
+    Path(__file__).with_name("outbox") / "critical_input_confirmed_updates_latest.json"
+)
+DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_JSON = (
+    Path(__file__).with_name("outbox") / "critical_input_confirmed_updates_report_latest.json"
+)
+DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_MARKDOWN = (
+    Path(__file__).with_name("outbox") / "critical_input_confirmed_updates_report_latest.md"
 )
 DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_JSON = Path(__file__).with_name("outbox") / "synthetic_unblocker_proof_latest.json"
 DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_MARKDOWN = (
@@ -648,6 +658,40 @@ def main() -> int:
         default=str(DEFAULT_CRITICAL_INPUT_FULL_UPDATES_JSON),
     )
 
+    critical_inputs_unblockers_finalize_parser = subparsers.add_parser(
+        "critical-input-unblockers-finalize",
+        help="merge the six confirmed unblocker answers into the full one-shot critical-input updates file",
+    )
+    critical_inputs_unblockers_finalize_parser.add_argument(
+        "--compact-updates",
+        default=str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_UPDATES_JSON),
+    )
+    critical_inputs_unblockers_finalize_parser.add_argument(
+        "--full-template",
+        default=str(DEFAULT_CRITICAL_INPUT_FULL_UPDATES_JSON),
+    )
+    critical_inputs_unblockers_finalize_parser.add_argument(
+        "--unblockers",
+        default=str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_JSON),
+    )
+    critical_inputs_unblockers_finalize_parser.add_argument(
+        "--updates-output",
+        default=str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_JSON),
+    )
+    critical_inputs_unblockers_finalize_parser.add_argument(
+        "--json-output",
+        default=str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_JSON),
+    )
+    critical_inputs_unblockers_finalize_parser.add_argument(
+        "--markdown-output",
+        default=str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_MARKDOWN),
+    )
+    critical_inputs_unblockers_finalize_parser.add_argument(
+        "--fail-on-not-ready",
+        action="store_true",
+        help="exit non-zero when any final answer is blank, unconfirmed, or unknown",
+    )
+
     critical_inputs_update_parser = subparsers.add_parser(
         "critical-inputs-update",
         help="merge a compact JSON answer map into the critical input answer file",
@@ -1099,6 +1143,14 @@ def main() -> int:
         default=str(DEFAULT_CRITICAL_INPUT_FULL_UPDATES_JSON),
     )
     export_questions_parser.add_argument(
+        "--critical-input-confirmed-updates-json",
+        default=str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_JSON),
+    )
+    export_questions_parser.add_argument(
+        "--critical-input-confirmed-updates-report-json",
+        default=str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_JSON),
+    )
+    export_questions_parser.add_argument(
         "--critical-input-updates-readiness-json",
         default=str(DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_JSON),
     )
@@ -1333,6 +1385,8 @@ def main() -> int:
                     "Fake position rehearsal": args.fake_position_rehearsal_json,
                     "Synthetic unblocker proof": args.synthetic_unblocker_proof_json,
                     "Critical input full updates template": args.critical_input_full_updates_json,
+                    "Critical input confirmed updates": args.critical_input_confirmed_updates_json,
+                    "Critical input confirmed updates report": args.critical_input_confirmed_updates_report_json,
                     "Critical input updates readiness": args.critical_input_updates_readiness_json,
                     "Learning approval pack": args.learning_approval_pack_json,
                     "Answer memory": args.answer_memory_json,
@@ -1677,6 +1731,8 @@ def main() -> int:
                     "Critical input impact": args.critical_input_impact_json,
                     "Critical input updates readiness": args.critical_input_updates_readiness_json,
                     "Autofill batch": args.autofill_batch_json,
+                    "Critical input confirmed updates": str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_JSON),
+                    "Critical input confirmed updates report": str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_JSON),
                     "Apply queue handoff": args.apply_queue_handoff_json,
                     "Apply queue autofill packet": args.apply_queue_autofill_packet_json,
                     "Answer memory": args.answer_memory_json,
@@ -1958,6 +2014,35 @@ def main() -> int:
         print(f"Inputs: {packet.get('input_count', 0)}")
         print(f"High risk: {packet.get('high_risk_count', 0)}")
         print(f"Full update entries: {packet.get('full_update_count', 0)}")
+        return 0
+
+    if args.command == "critical-input-unblockers-finalize":
+        for label, path_value in [
+            ("compact updates", args.compact_updates),
+            ("full updates template", args.full_template),
+            ("critical input unblockers", args.unblockers),
+        ]:
+            if not Path(path_value).exists():
+                raise FileNotFoundError(f"{label} not found: {path_value}")
+        report = write_critical_input_unblocker_final_update(
+            args.compact_updates,
+            args.full_template,
+            args.unblockers,
+            args.updates_output,
+            args.json_output,
+            args.markdown_output,
+        )
+        summary = report.get("summary") or {}
+        print(f"Wrote confirmed updates JSON to {args.updates_output}")
+        print(f"Wrote confirmed updates report JSON to {args.json_output}")
+        print(f"Wrote confirmed updates report Markdown to {args.markdown_output}")
+        print(f"Ready for workflow: {str(bool(report.get('ready_for_workflow'))).lower()}")
+        print(f"Merged updates: {summary.get('merged_update_count', 0)}")
+        print(f"Missing unblockers: {summary.get('missing_unblocker_count', 0)}")
+        print(f"High-risk confirmations missing: {summary.get('unconfirmed_high_risk_count', 0)}")
+        print(f"Unknown compact updates: {summary.get('unknown_compact_update_count', 0)}")
+        if args.fail_on_not_ready and not report.get("ready_for_workflow"):
+            return 2
         return 0
 
     if args.command == "critical-inputs-update":
@@ -2719,6 +2804,14 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             json.dumps(unblockers.get("full_updates_template", {}), ensure_ascii=True, indent=2) + "\n",
             encoding="utf-8",
         )
+        write_critical_input_unblocker_final_update(
+            DEFAULT_CRITICAL_INPUT_UNBLOCKERS_UPDATES_JSON,
+            DEFAULT_CRITICAL_INPUT_FULL_UPDATES_JSON,
+            DEFAULT_CRITICAL_INPUT_UNBLOCKERS_JSON,
+            DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_JSON,
+            DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_JSON,
+            DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_MARKDOWN,
+        )
         write_critical_input_updates_readiness(
             DEFAULT_LEARNING_APPROVAL_PACK_JSON,
             DEFAULT_CRITICAL_INPUT_ANSWERS_JSON,
@@ -2830,6 +2923,8 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                 "Autofill batch": str(DEFAULT_AUTOFILL_BATCH_JSON),
                 "Synthetic unblocker proof": str(DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_JSON),
                 "Critical input full updates template": str(DEFAULT_CRITICAL_INPUT_FULL_UPDATES_JSON),
+                "Critical input confirmed updates": str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_JSON),
+                "Critical input confirmed updates report": str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_JSON),
                 "Critical input updates readiness": str(DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_JSON),
                 "Apply queue": str(DEFAULT_APPLY_QUEUE_JSON),
                 "Apply queue HTML": str(DEFAULT_APPLY_QUEUE_HTML),

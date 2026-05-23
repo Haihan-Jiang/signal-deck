@@ -738,7 +738,10 @@ The audit keeps two answer counts separate: the raw current profile/memory
 blockers, and the smaller final-answer count after applying the prepared draft
 updates. When `synthetic-unblocker-proof` is complete, the next action points
 to `critical_input_unblockers_updates_template.json`, which is the compact file
-for the remaining exact answers.
+for the remaining exact answers. After filling it, run
+`critical-input-unblockers-finalize` to build
+`critical_input_confirmed_updates_latest.json`, the full one-shot updates file
+used by `critical-inputs-workflow`.
 
 The audit separates achieved evidence, remaining user-answer blockers, and
 supervised-only gates such as CAPTCHA/security, protected-class answers, and
@@ -760,10 +763,11 @@ job_apply_agent/outbox/automation_handoff_latest.html
 
 The handoff combines the goal audit, compact answer blockers, apply-queue
 handoff, and autofill packet into one checklist. Its confirmed-answer runbook
-starts with `critical_input_unblockers_updates_template.json`, reruns live
-closed-posting checks before opening pages, rebuilds the 100-position autofill
-packet with values only after the answers are approved, and keeps final submit
-as a supervised stop.
+starts with `critical_input_unblockers_updates_template.json`, uses
+`critical-input-unblockers-finalize` to merge those six answers into the full
+one-shot updates file, reruns live closed-posting checks before opening pages,
+rebuilds the 100-position autofill packet with values only after the answers
+are approved, and keeps final submit as a supervised stop.
 
 For a captured Ashby or Greenhouse form snapshot, generate an offline fill plan:
 

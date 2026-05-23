@@ -4724,19 +4724,17 @@ def build_critical_input_unblocker_packet(
         "prefilled_update_count": prefilled_update_count,
         "missing_exact_update_count": len(rows),
         "instructions": (
-            "Fill only these remaining exact values, then run critical-inputs-workflow with "
-            "the full updates JSON if you want one-shot approval of existing drafts plus the "
-            "final values. High-risk values require high_risk_user_confirmed=true and "
-            "--approve-high-risk. This artifact does not write profile or answer memory and "
-            "does not submit applications."
+            "Fill only these remaining exact values, then run critical-input-unblockers-finalize "
+            "to merge them with the full one-shot updates JSON. High-risk values require "
+            "high_risk_user_confirmed=true and --approve-high-risk. This artifact does not "
+            "write profile or answer memory and does not submit applications."
         ),
         "workflow_command": (
             "python3 -m job_apply_agent critical-inputs-workflow "
             "--updates <full_confirmed_answers.json> --approve --approve-high-risk --apply"
         ),
         "compact_workflow_command": (
-            "python3 -m job_apply_agent critical-inputs-workflow "
-            "--updates <confirmed_unblockers_only.json> --approve --approve-high-risk --apply"
+            "python3 -m job_apply_agent critical-input-unblockers-finalize --fail-on-not-ready"
         ),
         "unblockers": rows,
         "compact_updates_template": compact_updates_template,
@@ -4771,6 +4769,178 @@ def write_critical_input_unblocker_packet(
     markdown_path.write_text(render_critical_input_unblocker_markdown(packet), encoding="utf-8")
     html_path.write_text(render_critical_input_unblocker_html(packet), encoding="utf-8")
     return packet
+
+
+def build_critical_input_unblocker_final_update(
+    compact_updates: dict[str, Any],
+    full_updates_template: dict[str, Any],
+    unblocker_packet: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if not isinstance(compact_updates, dict):
+        raise ValueError("compact updates must be a JSON object")
+    if not isinstance(full_updates_template, dict):
+        raise ValueError("full updates template must be a JSON object")
+    packet = unblocker_packet or {}
+    unblocker_ids = [
+        str(row.get("input_id") or "")
+        for row in packet.get("unblockers", [])
+        if isinstance(row, dict) and str(row.get("input_id") or "")
+    ]
+    high_risk_ids = {
+        str(row.get("input_id") or "")
+        for row in packet.get("unblockers", [])
+        if isinstance(row, dict) and row.get("high_risk") and str(row.get("input_id") or "")
+    }
+    expected_ids = set(unblocker_ids) or set(full_updates_template)
+    merged_updates = dict(full_updates_template)
+    unknown_compact_ids: list[str] = []
+    missing_ids: list[str] = []
+    unconfirmed_high_risk_ids: list[str] = []
+    for input_id, value in compact_updates.items():
+        if expected_ids and input_id not in expected_ids and input_id not in full_updates_template:
+            unknown_compact_ids.append(str(input_id))
+        merged_updates[str(input_id)] = value
+    for input_id in unblocker_ids:
+        value = merged_updates.get(input_id)
+        if _critical_update_value_is_blank(value):
+            missing_ids.append(input_id)
+        if input_id in high_risk_ids and not _critical_update_high_risk_confirmed(value):
+            unconfirmed_high_risk_ids.append(input_id)
+    ready_for_workflow = bool(
+        not missing_ids
+        and not unconfirmed_high_risk_ids
+        and not unknown_compact_ids
+        and len(merged_updates) >= len(full_updates_template)
+    )
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "critical_input_unblocker_final_update",
+        "ready_for_workflow": ready_for_workflow,
+        "writes_profile_or_memory": False,
+        "submits_real_applications": False,
+        "summary": {
+            "compact_update_count": len(compact_updates),
+            "full_template_count": len(full_updates_template),
+            "merged_update_count": len(merged_updates),
+            "unblocker_count": len(unblocker_ids),
+            "missing_unblocker_count": len(missing_ids),
+            "unconfirmed_high_risk_count": len(unconfirmed_high_risk_ids),
+            "unknown_compact_update_count": len(unknown_compact_ids),
+        },
+        "missing_unblocker_ids": missing_ids,
+        "unconfirmed_high_risk_ids": unconfirmed_high_risk_ids,
+        "unknown_compact_update_ids": unknown_compact_ids,
+        "merged_updates": merged_updates,
+        "workflow_command": (
+            "python3 -m job_apply_agent critical-inputs-workflow "
+            "--updates job_apply_agent/outbox/critical_input_confirmed_updates_latest.json "
+            "--approve --approve-high-risk --apply"
+        ),
+        "policy": {
+            "preserves_prefilled_draft_updates": True,
+            "requires_high_risk_confirmation": True,
+            "final_submit_remains_supervised": True,
+        },
+    }
+
+
+def write_critical_input_unblocker_final_update(
+    compact_updates_path: str | Path,
+    full_updates_template_path: str | Path,
+    unblockers_path: str | Path,
+    updates_output: str | Path,
+    json_output: str | Path,
+    markdown_output: str | Path,
+) -> dict[str, Any]:
+    compact_updates = _read_json_file(Path(compact_updates_path))
+    full_template = _read_json_file(Path(full_updates_template_path))
+    unblockers = _read_json_file(Path(unblockers_path))
+    if not isinstance(compact_updates, dict):
+        raise ValueError(f"compact updates must be a JSON object: {compact_updates_path}")
+    if not isinstance(full_template, dict):
+        raise ValueError(f"full updates template must be a JSON object: {full_updates_template_path}")
+    if not isinstance(unblockers, dict):
+        raise ValueError(f"unblockers must be a JSON object: {unblockers_path}")
+    report = build_critical_input_unblocker_final_update(
+        compact_updates,
+        full_template,
+        unblocker_packet=unblockers,
+    )
+    report["source_paths"] = {
+        "compact_updates": str(compact_updates_path),
+        "full_updates_template": str(full_updates_template_path),
+        "unblockers": str(unblockers_path),
+    }
+    report["outputs"] = {
+        "updates": str(updates_output),
+        "json": str(json_output),
+        "markdown": str(markdown_output),
+    }
+    updates_path = Path(updates_output)
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    for path in [updates_path, json_path, markdown_path]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    updates_path.write_text(
+        json.dumps(report.get("merged_updates") or {}, ensure_ascii=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(render_critical_input_unblocker_final_update_markdown(report), encoding="utf-8")
+    return report
+
+
+def render_critical_input_unblocker_final_update_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    lines = [
+        "# Critical Input Confirmed Updates",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        f"Ready for workflow: {str(bool(report.get('ready_for_workflow'))).lower()}",
+        "Writes profile or memory: false",
+        "Submits real applications: false",
+        "",
+        "## Summary",
+        "",
+        f"- compact updates: {summary.get('compact_update_count', 0)}",
+        f"- full template entries: {summary.get('full_template_count', 0)}",
+        f"- merged updates: {summary.get('merged_update_count', 0)}",
+        f"- final unblockers: {summary.get('unblocker_count', 0)}",
+        f"- missing unblockers: {summary.get('missing_unblocker_count', 0)}",
+        f"- unconfirmed high-risk answers: {summary.get('unconfirmed_high_risk_count', 0)}",
+        f"- unknown compact updates: {summary.get('unknown_compact_update_count', 0)}",
+        "",
+        "## Blocking IDs",
+        "",
+    ]
+    blocking_rows = [
+        ["missing", input_id] for input_id in report.get("missing_unblocker_ids") or []
+    ] + [
+        ["high_risk_unconfirmed", input_id]
+        for input_id in report.get("unconfirmed_high_risk_ids") or []
+    ] + [
+        ["unknown", input_id] for input_id in report.get("unknown_compact_update_ids") or []
+    ]
+    lines.extend(_simple_markdown_table(["Type", "Input ID"], blocking_rows))
+    lines.extend(
+        [
+            "",
+            "## Workflow Command",
+            "",
+            f"`{report.get('workflow_command')}`",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _critical_update_value_is_blank(value: Any) -> bool:
+    if isinstance(value, dict):
+        return not str(value.get("user_answer") or "").strip()
+    return not str(value or "").strip()
+
+
+def _critical_update_high_risk_confirmed(value: Any) -> bool:
+    return bool(isinstance(value, dict) and value.get("high_risk_user_confirmed") is True)
 
 
 def build_synthetic_unblocker_proof(
@@ -5080,6 +5250,10 @@ def render_critical_input_unblocker_markdown(packet: dict[str, Any]) -> str:
         "",
         f"`{packet.get('workflow_command')}`",
         "",
+        "Finalize compact answers first:",
+        "",
+        f"`{packet.get('compact_workflow_command')}`",
+        "",
         "## Unblockers",
         "",
     ]
@@ -5257,6 +5431,7 @@ document.addEventListener("DOMContentLoaded", () => {
             ),
             "<section>",
             "<h2>One-shot Command</h2>",
+            f"<pre>{_html_escape(packet.get('compact_workflow_command'))}</pre>",
             f"<pre>{_html_escape(packet.get('workflow_command'))}</pre>",
             "</section>",
             "".join(cards),
@@ -12140,7 +12315,7 @@ def _goal_next_actions(
         if unblocker_proof_complete:
             blank_count = final_answer_waiting_count or critical_waiting_count
             actions.append(
-                f"Fill the {blank_count} blanks in job_apply_agent/outbox/critical_input_unblockers_updates_template.json, then run critical-inputs-workflow with --approve --approve-high-risk --apply."
+                f"Fill the {blank_count} blanks in job_apply_agent/outbox/critical_input_unblockers_updates_template.json, run critical-input-unblockers-finalize, then run critical-inputs-workflow with the confirmed updates file."
             )
         else:
             actions.append(
@@ -12676,41 +12851,48 @@ def _automation_handoff_confirmed_answer_runbook(summary: dict[str, Any]) -> lis
         },
         {
             "step": 2,
-            "name": "Apply approved answers",
+            "name": "Build full confirmed updates",
             "status": "ready_after_confirmation" if final_blanks else "ready",
-            "action": "python3 -m job_apply_agent critical-inputs-workflow --updates job_apply_agent/outbox/critical_input_unblockers_updates_template.json --approve --approve-high-risk --apply",
-            "expected_result": "Profile and answer memory are updated, then reports are refreshed.",
+            "action": "python3 -m job_apply_agent critical-input-unblockers-finalize --fail-on-not-ready",
+            "expected_result": "The six answers are merged with the prefilled draft updates into critical_input_confirmed_updates_latest.json.",
         },
         {
             "step": 3,
+            "name": "Apply approved answers",
+            "status": "ready_after_confirmation" if final_blanks else "ready",
+            "action": "python3 -m job_apply_agent critical-inputs-workflow --updates job_apply_agent/outbox/critical_input_confirmed_updates_latest.json --approve --approve-high-risk --apply",
+            "expected_result": "Profile and answer memory are updated, then reports are refreshed.",
+        },
+        {
+            "step": 4,
             "name": "Refresh 100-position queue",
             "status": "ready_after_answers",
             "action": "python3 -m job_apply_agent apply-queue",
             "expected_result": "A fresh live-check job payload is written for the 100-position queue.",
         },
         {
-            "step": 4,
+            "step": 5,
             "name": "Recheck live postings",
             "status": "ready_after_answers",
             "action": "python3 -m job_apply_agent closed-preflight --jobs job_apply_agent/outbox/apply_queue_live_check_jobs_latest.json --live-check-limit 100 --live-check-timeout 25",
             "expected_result": "Pages that now say No longer accepting applications are persisted and excluded.",
         },
         {
-            "step": 5,
+            "step": 6,
             "name": "Build open-page handoff",
             "status": "ready_after_answers" if manual_live_checks == 0 else "manual_live_check_needed",
             "action": "python3 -m job_apply_agent apply-queue-handoff",
             "expected_result": f"{open_after_answers} open-after-answer rows become open-ready after answers and live checks.",
         },
         {
-            "step": 6,
+            "step": 7,
             "name": "Build supervised autofill packet",
             "status": "ready_after_answers" if packet_selector_misses == 0 else "fix_selectors",
             "action": "python3 -m job_apply_agent apply-queue-autofill-packet --include-values",
             "expected_result": f"{packet_selected} selected rows, {packet_submit_stops} final-submit stops, 0 selector misses.",
         },
         {
-            "step": 7,
+            "step": 8,
             "name": "Open verified pages",
             "status": "supervised_only",
             "action": "python3 -m job_apply_agent apply-queue-handoff --open-browser --open-limit 100",
@@ -12721,7 +12903,8 @@ def _automation_handoff_confirmed_answer_runbook(summary: dict[str, Any]) -> lis
 
 def _automation_handoff_next_commands(summary: dict[str, Any]) -> list[str]:
     commands = [
-        "python3 -m job_apply_agent critical-inputs-workflow --updates job_apply_agent/outbox/critical_input_unblockers_updates_template.json --approve --approve-high-risk --apply",
+        "python3 -m job_apply_agent critical-input-unblockers-finalize --fail-on-not-ready",
+        "python3 -m job_apply_agent critical-inputs-workflow --updates job_apply_agent/outbox/critical_input_confirmed_updates_latest.json --approve --approve-high-risk --apply",
         "python3 -m job_apply_agent apply-queue",
         "python3 -m job_apply_agent closed-preflight --jobs job_apply_agent/outbox/apply_queue_live_check_jobs_latest.json --live-check-limit 100 --live-check-timeout 25",
         "python3 -m job_apply_agent apply-queue-handoff",
