@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import argparse
+import subprocess
+import sys
 import tempfile
 import unittest
 import urllib.error
@@ -7079,6 +7081,80 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(reply_json.exists())
             self.assertTrue(reply_md.exists())
             self.assertNotIn("98004", reply_md.read_text(encoding="utf-8"))
+
+            template_path = root / "template.json"
+            unblockers_path = root / "unblockers.json"
+            reply_path = root / "reply.txt"
+            intake_payload_json = root / "intake_payload.json"
+            full_template_json = root / "full_template.json"
+            confirmed_updates_json = root / "confirmed_updates.json"
+            confirmed_report_json = root / "confirmed_report.json"
+            confirmed_report_md = root / "confirmed_report.md"
+            post_answer_json = root / "post_answer.json"
+            post_answer_md = root / "post_answer.md"
+            template_path.write_text(json.dumps(template, ensure_ascii=True, indent=2), encoding="utf-8")
+            unblockers_path.write_text(json.dumps(unblockers, ensure_ascii=True, indent=2), encoding="utf-8")
+            reply_path.write_text(reply_text, encoding="utf-8")
+            full_template_json.write_text(
+                json.dumps(
+                    {str(row["input_id"]): "" for row in unblockers["unblockers"]},
+                    ensure_ascii=True,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            cli_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "job_apply_agent",
+                    "final-answer-reply",
+                    "--template",
+                    str(template_path),
+                    "--unblockers",
+                    str(unblockers_path),
+                    "--reply-file",
+                    str(reply_path),
+                    "--json-output",
+                    str(root / "cli_reply.json"),
+                    "--markdown-output",
+                    str(root / "cli_reply.md"),
+                    "--intake-output",
+                    str(intake_payload_json),
+                    "--compact-updates-output",
+                    str(root / "cli_compact.json"),
+                    "--final-answer-intake-report-json",
+                    str(root / "cli_intake_report.json"),
+                    "--final-answer-intake-report-markdown",
+                    str(root / "cli_intake_report.md"),
+                    "--full-template",
+                    str(full_template_json),
+                    "--confirmed-updates-output",
+                    str(confirmed_updates_json),
+                    "--confirmed-report-json-output",
+                    str(confirmed_report_json),
+                    "--confirmed-report-markdown-output",
+                    str(confirmed_report_md),
+                    "--run-post-answer-pipeline",
+                    "--post-answer-json-output",
+                    str(post_answer_json),
+                    "--post-answer-markdown-output",
+                    str(post_answer_md),
+                    "--fail-on-not-ready",
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(cli_result.returncode, 0, cli_result.stderr)
+            intake_payload = json.loads(intake_payload_json.read_text(encoding="utf-8"))
+            post_answer_report = json.loads(post_answer_json.read_text(encoding="utf-8"))
+            self.assertIn("answers", intake_payload)
+            self.assertEqual(post_answer_report["status"], "ready_for_apply")
+            self.assertTrue(post_answer_report["ready_for_workflow"])
+            self.assertFalse(post_answer_report["apply_requested"])
+            self.assertIn("Wrote final answer intake payload JSON", cli_result.stdout)
 
     def test_final_answer_intake_server_post_answer_flags_are_guarded(self) -> None:
         base_args = {

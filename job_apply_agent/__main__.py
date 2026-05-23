@@ -218,6 +218,9 @@ DEFAULT_FINAL_ANSWER_REPLY_JSON = (
 DEFAULT_FINAL_ANSWER_REPLY_MARKDOWN = (
     Path(__file__).with_name("outbox") / "final_answer_reply_intake_latest.md"
 )
+DEFAULT_FINAL_ANSWER_REPLY_PAYLOAD_JSON = (
+    Path(__file__).with_name("outbox") / "final_answer_reply_payload_latest.json"
+)
 DEFAULT_POST_ANSWER_SYNTHETIC_COMPACT_UPDATES_JSON = (
     Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_unblockers_updates_latest.json"
 )
@@ -1074,6 +1077,7 @@ def main() -> int:
     final_answer_reply_parser.add_argument("--reply-file", default=None)
     final_answer_reply_parser.add_argument("--json-output", default=str(DEFAULT_FINAL_ANSWER_REPLY_JSON))
     final_answer_reply_parser.add_argument("--markdown-output", default=str(DEFAULT_FINAL_ANSWER_REPLY_MARKDOWN))
+    final_answer_reply_parser.add_argument("--intake-output", default=str(DEFAULT_FINAL_ANSWER_REPLY_PAYLOAD_JSON))
     final_answer_reply_parser.add_argument(
         "--compact-updates-output",
         default=str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_UPDATES_JSON),
@@ -1101,6 +1105,24 @@ def main() -> int:
     )
     final_answer_reply_parser.add_argument("--confirm-high-risk", action="store_true")
     final_answer_reply_parser.add_argument("--finalize", action="store_true")
+    final_answer_reply_parser.add_argument(
+        "--run-post-answer-pipeline",
+        action="store_true",
+        help="after parsing and validation, run post-answer-pipeline using the parsed intake payload",
+    )
+    final_answer_reply_parser.add_argument("--post-answer-apply", action="store_true")
+    final_answer_reply_parser.add_argument("--post-answer-live-check", action="store_true")
+    final_answer_reply_parser.add_argument("--post-answer-live-check-limit", type=int, default=100)
+    final_answer_reply_parser.add_argument("--post-answer-live-check-timeout", type=float, default=25.0)
+    final_answer_reply_parser.add_argument("--post-answer-include-values", action="store_true")
+    final_answer_reply_parser.add_argument("--post-answer-open-browser", action="store_true")
+    final_answer_reply_parser.add_argument("--post-answer-open-limit", type=int, default=100)
+    final_answer_reply_parser.add_argument("--review-log", default=str(DEFAULT_REVIEW_LOG))
+    final_answer_reply_parser.add_argument("--post-answer-json-output", default=str(DEFAULT_POST_ANSWER_PIPELINE_JSON))
+    final_answer_reply_parser.add_argument(
+        "--post-answer-markdown-output",
+        default=str(DEFAULT_POST_ANSWER_PIPELINE_MARKDOWN),
+    )
     final_answer_reply_parser.add_argument("--fail-on-not-ready", action="store_true")
 
     post_answer_pipeline_parser = subparsers.add_parser(
@@ -2843,6 +2865,7 @@ def main() -> int:
     if args.command == "final-answer-reply":
         if bool(args.reply_text) == bool(args.reply_file):
             raise ValueError("provide exactly one of --reply-text or --reply-file")
+        _validate_final_answer_intake_server_post_answer_args(args)
         template_path = Path(args.template)
         if not template_path.exists():
             raise FileNotFoundError(f"final answer intake template not found: {args.template}")
@@ -2869,6 +2892,13 @@ def main() -> int:
         if not unblockers_path.exists():
             raise FileNotFoundError(f"critical input unblockers not found: {args.unblockers}")
         intake_payload = report.get("intake_payload") if isinstance(report.get("intake_payload"), dict) else {}
+        intake_output_path = Path(args.intake_output)
+        intake_output_path.parent.mkdir(parents=True, exist_ok=True)
+        intake_output_path.write_text(
+            json.dumps(intake_payload, ensure_ascii=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        print(f"Wrote final answer intake payload JSON to {args.intake_output}")
         intake_report = write_final_answer_intake_update(
             json.loads(unblockers_path.read_text(encoding="utf-8")),
             intake_payload,
@@ -2907,10 +2937,45 @@ def main() -> int:
             )
             if args.fail_on_not_ready and not final_report.get("ready_for_workflow"):
                 return 2
+        parser_has_errors = bool(
+            int(report.get("unknown_key_count") or 0)
+            or int(report.get("duplicate_key_count") or 0)
+        )
+        if args.run_post_answer_pipeline:
+            if not intake_report.get("ready_for_finalize") or parser_has_errors:
+                print("Post-answer pipeline skipped: final answer reply is not ready.")
+                if args.fail_on_not_ready:
+                    return 2
+                return 0
+            pipeline_args = argparse.Namespace(
+                compact_updates=args.compact_updates_output,
+                full_template=args.full_template,
+                unblockers=args.unblockers,
+                confirmed_updates_output=args.confirmed_updates_output,
+                confirmed_report_json_output=args.confirmed_report_json_output,
+                confirmed_report_markdown_output=args.confirmed_report_markdown_output,
+                final_answer_intake_json=args.intake_output,
+                final_answer_intake_report_json=args.final_answer_intake_report_json,
+                final_answer_intake_report_markdown=args.final_answer_intake_report_markdown,
+                confirm_high_risk=args.confirm_high_risk,
+                synthetic_final_answers=False,
+                synthetic_rehearse_queue=False,
+                apply=args.post_answer_apply,
+                live_check=args.post_answer_live_check,
+                live_check_limit=args.post_answer_live_check_limit,
+                live_check_timeout=args.post_answer_live_check_timeout,
+                include_values=args.post_answer_include_values,
+                open_browser=args.post_answer_open_browser,
+                open_limit=args.post_answer_open_limit,
+                review_log=args.review_log,
+                json_output=args.post_answer_json_output,
+                markdown_output=args.post_answer_markdown_output,
+                fail_on_not_ready=args.fail_on_not_ready,
+            )
+            return _run_post_answer_pipeline(pipeline_args)
         if args.fail_on_not_ready and (
             not intake_report.get("ready_for_finalize")
-            or int(report.get("unknown_key_count") or 0)
-            or int(report.get("duplicate_key_count") or 0)
+            or parser_has_errors
         ):
             return 2
         return 0
