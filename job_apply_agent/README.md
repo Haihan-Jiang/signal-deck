@@ -734,6 +734,12 @@ job_apply_agent/outbox/goal_readiness_audit_latest.json
 job_apply_agent/outbox/goal_readiness_audit_latest.md
 ```
 
+The audit keeps two answer counts separate: the raw current profile/memory
+blockers, and the smaller final-answer count after applying the prepared draft
+updates. When `synthetic-unblocker-proof` is complete, the next action points
+to `critical_input_unblockers_updates_template.json`, which is the compact file
+for the remaining exact answers.
+
 The audit separates achieved evidence, remaining user-answer blockers, and
 supervised-only gates such as CAPTCHA/security, protected-class answers, and
 real employer final submit.

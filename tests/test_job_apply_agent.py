@@ -7595,6 +7595,17 @@ class JobApplyAgentTests(unittest.TestCase):
             "readiness_counts": {"autofill_ready": 20, "closed_skip": 1, "needs_learning": 2},
         }
         critical_status = {"summary": {"waiting_count": 2, "supervised_only_count": 1}}
+        critical_updates_readiness = {
+            "summary": {
+                "update_entry_count": 12,
+                "waiting_after_update_count": 2,
+                "ready_after_update_count": 10,
+                "data_blocking_prompts_after": 1,
+                "unknown_updates": 0,
+                "high_risk_unconfirmed_count": 0,
+            },
+            "waiting_rows": [{"input_id": "zip"}, {"input_id": "citizenship"}],
+        }
         fake_critical = {
             "ready_to_apply_count": 10,
             "waiting_count": 0,
@@ -7637,6 +7648,7 @@ class JobApplyAgentTests(unittest.TestCase):
             gaps,
             readiness,
             critical_input_status=critical_status,
+            critical_input_updates_readiness=critical_updates_readiness,
             fake_critical_input_probe=fake_critical,
             fake_position_rehearsal=fake_rehearsal,
             autofill_batch_plan=autofill_batch,
@@ -7649,6 +7661,9 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertFalse(audit["goal_complete"])
         self.assertFalse(audit["can_unattended_submit_real_employers"])
         self.assertEqual(audit["blocker_summary"]["data_blocking_prompt_count"], 3)
+        self.assertEqual(audit["blocker_summary"]["draft_data_blocking_prompt_count_after_updates"], 1)
+        self.assertEqual(audit["blocker_summary"]["final_answer_waiting_count_after_drafts"], 2)
+        self.assertEqual(audit["blocker_summary"]["critical_update_entry_count"], 12)
         self.assertEqual(audit["blocker_summary"]["policy_gate_prompt_count"], 4)
         self.assertEqual(audit["blocker_summary"]["autofill_batch_local_synthetic_submit_count"], 100)
         self.assertTrue(audit["blocker_summary"]["autofill_batch_local_synthetic_submit_achieved"])
@@ -7659,6 +7674,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Goal Readiness Audit", markdown)
         self.assertIn("needs_user_answers", markdown)
         self.assertIn("100-batch local synthetic submits: 100", markdown)
+        self.assertIn("final answer blanks after prepared drafts: 2", markdown)
         self.assertIn("synthetic final unblocker proof complete: true", markdown)
         self.assertIn("Top Data-Blocking Prompts", markdown)
         self.assertIn("Have you worked with us before?", markdown)
@@ -7673,6 +7689,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 json_output,
                 markdown_output,
                 critical_input_status=critical_status,
+                critical_input_updates_readiness=critical_updates_readiness,
                 fake_critical_input_probe=fake_critical,
                 fake_position_rehearsal=fake_rehearsal,
                 autofill_batch_plan=autofill_batch,

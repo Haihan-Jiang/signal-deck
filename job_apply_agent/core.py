@@ -11629,6 +11629,7 @@ def build_goal_readiness_audit(
     gaps: dict[str, Any],
     readiness: dict[str, Any],
     critical_input_status: dict[str, Any] | None = None,
+    critical_input_updates_readiness: dict[str, Any] | None = None,
     fake_critical_input_probe: dict[str, Any] | None = None,
     fake_position_rehearsal: dict[str, Any] | None = None,
     autofill_batch_plan: dict[str, Any] | None = None,
@@ -11637,6 +11638,8 @@ def build_goal_readiness_audit(
 ) -> dict[str, Any]:
     coverage_counts = gaps.get("coverage_counts") or {}
     critical_summary = (critical_input_status or {}).get("summary") or {}
+    update_readiness = critical_input_updates_readiness or {}
+    update_readiness_summary = update_readiness.get("summary") or {}
     fake_critical = fake_critical_input_probe or {}
     fake_rehearsal = fake_position_rehearsal or {}
     autofill_batch = autofill_batch_plan or {}
@@ -11650,6 +11653,20 @@ def build_goal_readiness_audit(
     policy_gate_prompt_count = _coverage_status_total(coverage_counts, GOAL_POLICY_GATE_STATUSES)
     critical_waiting_count = int(critical_summary.get("waiting_count") or 0)
     critical_supervised_only_count = int(critical_summary.get("supervised_only_count") or 0)
+    final_answer_waiting_count = int(
+        update_readiness_summary.get("waiting_after_update_count")
+        or len(update_readiness.get("waiting_rows") or [])
+        or 0
+    )
+    final_answer_ready_count = int(update_readiness_summary.get("ready_after_update_count") or 0)
+    draft_update_entry_count = int(update_readiness_summary.get("update_entry_count") or 0)
+    draft_unknown_update_count = int(update_readiness_summary.get("unknown_updates") or 0)
+    draft_high_risk_unconfirmed_count = int(update_readiness_summary.get("high_risk_unconfirmed_count") or 0)
+    draft_data_blockers_after = int(
+        update_readiness_summary.get("data_blocking_prompts_after")
+        or (update_readiness.get("remaining_data_blocker_counts") or {}).get("total")
+        or 0
+    )
     fake_critical_ready = int(fake_critical.get("ready_to_apply_count") or 0)
     fake_critical_waiting = int(fake_critical.get("waiting_count") or 0)
     fake_critical_submits_real = bool(
@@ -11804,6 +11821,10 @@ def build_goal_readiness_audit(
             "evidence": {
                 "data_blocking_prompt_count": data_blocker_count,
                 "critical_waiting_count": critical_waiting_count,
+                "draft_update_entry_count": draft_update_entry_count,
+                "draft_ready_after_update_count": final_answer_ready_count,
+                "final_answer_waiting_count": final_answer_waiting_count,
+                "draft_data_blocking_prompts_after": draft_data_blockers_after,
                 "critical_supervised_only_count": critical_supervised_only_count,
                 "fake_critical_ready_count": fake_critical_ready,
                 "fake_critical_waiting_count": fake_critical_waiting,
@@ -11844,9 +11865,15 @@ def build_goal_readiness_audit(
         "missing_requirement_count": len(missing_requirements),
         "blocker_summary": {
             "data_blocking_prompt_count": data_blocker_count,
+            "draft_data_blocking_prompt_count_after_updates": draft_data_blockers_after,
             "optional_gap_count": optional_gap_count,
             "policy_gate_prompt_count": policy_gate_prompt_count,
             "critical_waiting_count": critical_waiting_count,
+            "final_answer_waiting_count_after_drafts": final_answer_waiting_count,
+            "critical_update_entry_count": draft_update_entry_count,
+            "critical_updates_ready_after_count": final_answer_ready_count,
+            "critical_updates_unknown_count": draft_unknown_update_count,
+            "critical_updates_high_risk_unconfirmed_count": draft_high_risk_unconfirmed_count,
             "critical_supervised_only_count": critical_supervised_only_count,
             "manual_gate_count": int(readiness.get("manual_gate_count") or 0),
             "closed_registry_count": closed_count,
@@ -11887,6 +11914,7 @@ def build_goal_readiness_audit(
             fake_critical_ready=fake_critical_ready,
             fake_critical_submits_real=fake_critical_submits_real,
             unblocker_proof_complete=unblocker_proof_complete,
+            final_answer_waiting_count=final_answer_waiting_count,
         ),
     }
 
@@ -11898,6 +11926,7 @@ def write_goal_readiness_audit(
     json_output: str | Path,
     markdown_output: str | Path,
     critical_input_status: dict[str, Any] | None = None,
+    critical_input_updates_readiness: dict[str, Any] | None = None,
     fake_critical_input_probe: dict[str, Any] | None = None,
     fake_position_rehearsal: dict[str, Any] | None = None,
     autofill_batch_plan: dict[str, Any] | None = None,
@@ -11909,6 +11938,7 @@ def write_goal_readiness_audit(
         gaps,
         readiness,
         critical_input_status=critical_input_status,
+        critical_input_updates_readiness=critical_input_updates_readiness,
         fake_critical_input_probe=fake_critical_input_probe,
         fake_position_rehearsal=fake_position_rehearsal,
         autofill_batch_plan=autofill_batch_plan,
@@ -11956,9 +11986,12 @@ def render_goal_readiness_audit_markdown(audit: dict[str, Any]) -> str:
             "## Blocker Summary",
             "",
             f"- data-blocking prompts: {summary.get('data_blocking_prompt_count', 0)}",
+            f"- draft data-blocking prompts after updates: {summary.get('draft_data_blocking_prompt_count_after_updates', 0)}",
             f"- optional gaps: {summary.get('optional_gap_count', 0)}",
             f"- policy/manual prompt gates: {summary.get('policy_gate_prompt_count', 0)}",
             f"- critical inputs waiting: {summary.get('critical_waiting_count', 0)}",
+            f"- final answer blanks after prepared drafts: {summary.get('final_answer_waiting_count_after_drafts', 0)}",
+            f"- critical input draft updates: {summary.get('critical_update_entry_count', 0)}",
             f"- critical supervised-only inputs: {summary.get('critical_supervised_only_count', 0)}",
             f"- manual gates: {summary.get('manual_gate_count', 0)}",
             f"- closed registry entries: {summary.get('closed_registry_count', 0)}",
@@ -12096,6 +12129,7 @@ def _goal_next_actions(
     fake_critical_ready: int,
     fake_critical_submits_real: bool,
     unblocker_proof_complete: bool,
+    final_answer_waiting_count: int = 0,
 ) -> list[str]:
     actions: list[str] = []
     if not research_ready:
@@ -12104,8 +12138,9 @@ def _goal_next_actions(
         actions.append("Run synthetic-browser-exec and fake-position-rehearsal until selector misses are zero and eligible fake submits pass locally.")
     if critical_waiting_count:
         if unblocker_proof_complete:
+            blank_count = final_answer_waiting_count or critical_waiting_count
             actions.append(
-                "Fill the six blanks in job_apply_agent/outbox/critical_input_full_updates_template.json, then run critical-inputs-workflow with --approve --approve-high-risk --apply."
+                f"Fill the {blank_count} blanks in job_apply_agent/outbox/critical_input_unblockers_updates_template.json, then run critical-inputs-workflow with --approve --approve-high-risk --apply."
             )
         else:
             actions.append(

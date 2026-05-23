@@ -1172,6 +1172,10 @@ def main() -> int:
     goal_audit_parser.add_argument("--readiness-json", default=str(DEFAULT_READINESS_JSON))
     goal_audit_parser.add_argument("--critical-input-status-json", default=str(DEFAULT_CRITICAL_INPUT_STATUS_JSON))
     goal_audit_parser.add_argument(
+        "--critical-input-updates-readiness-json",
+        default=str(DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_JSON),
+    )
+    goal_audit_parser.add_argument(
         "--fake-critical-input-probe-json",
         default=str(DEFAULT_FAKE_CRITICAL_INPUT_PROBE_JSON),
     )
@@ -1384,6 +1388,7 @@ def main() -> int:
             args.json_output,
             args.markdown_output,
             critical_input_status=_load_optional_json(args.critical_input_status_json),
+            critical_input_updates_readiness=_load_optional_json(args.critical_input_updates_readiness_json),
             fake_critical_input_probe=_load_optional_json(args.fake_critical_input_probe_json),
             fake_position_rehearsal=_load_optional_json(args.fake_position_rehearsal_json),
             autofill_batch_plan=_load_optional_json(args.autofill_batch_json),
@@ -1394,6 +1399,12 @@ def main() -> int:
         print(f"Wrote goal audit Markdown to {args.markdown_output}")
         print(f"Status: {audit.get('status')}")
         print(f"Missing requirements: {audit.get('missing_requirement_count', 0)}")
+        summary = audit.get("blocker_summary") or {}
+        print(f"Final answer blanks after drafts: {summary.get('final_answer_waiting_count_after_drafts', 0)}")
+        print(
+            "Draft data blockers after updates: "
+            f"{summary.get('draft_data_blocking_prompt_count_after_updates', 0)}"
+        )
         print(f"Goal complete: {str(bool(audit.get('goal_complete'))).lower()}")
         return 0
 
@@ -2738,6 +2749,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
         DEFAULT_GOAL_AUDIT_JSON,
         DEFAULT_GOAL_AUDIT_MARKDOWN,
         critical_input_status=critical_status,
+        critical_input_updates_readiness=_load_optional_json(str(DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_JSON)),
         fake_critical_input_probe=_load_optional_json(str(DEFAULT_FAKE_CRITICAL_INPUT_PROBE_JSON)),
         fake_position_rehearsal=_load_optional_json(str(DEFAULT_FAKE_POSITION_REHEARSAL_JSON)),
         autofill_batch_plan=_load_optional_json(str(DEFAULT_AUTOFILL_BATCH_JSON)),
