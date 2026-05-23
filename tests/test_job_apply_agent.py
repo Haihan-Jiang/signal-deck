@@ -981,6 +981,23 @@ class JobApplyAgentTests(unittest.TestCase):
                 "final_answer_waiting_high_risk_count_after_drafts": 5,
             },
         }
+        final_reply = {
+            "fake_marker_count": 1,
+            "synthetic_values_allowed": False,
+            "policy": {
+                "blocks_fake_or_synthetic_values_for_real_apply": True,
+                "writes_profile_or_memory": False,
+                "submits_real_applications": False,
+            },
+        }
+        synthetic_final_reply = {
+            "fake_marker_count": 5,
+            "synthetic_values_allowed": True,
+            "policy": {
+                "writes_profile_or_memory": False,
+                "submits_real_applications": False,
+            },
+        }
 
         audit = build_submission_safety_audit(
             fake_position_rehearsal=fake_rehearsal,
@@ -989,17 +1006,30 @@ class JobApplyAgentTests(unittest.TestCase):
             browser_review_queue_audit=browser_audit,
             pre_submit_review=pre_submit,
             goal_readiness_audit=goal_audit,
+            final_answer_reply_intake=final_reply,
+            synthetic_final_answer_reply_intake=synthetic_final_reply,
         )
         markdown = render_submission_safety_audit_markdown(audit)
 
         self.assertTrue(audit["safe"])
         self.assertEqual(audit["issue_count"], 0)
+        self.assertIn(
+            "final_answer_reply_fake_markers_blocked_for_real_apply",
+            [row["id"] for row in audit["checks"]],
+        )
+        self.assertIn(
+            "final_answer_synthetic_reply_local_only",
+            [row["id"] for row in audit["checks"]],
+        )
         self.assertEqual(audit["summary"]["fake_position_local_synthetic_submit_count"], 1589)
         self.assertEqual(audit["summary"]["apply_packet_final_submit_stop_count"], 100)
+        self.assertEqual(audit["summary"]["final_answer_reply_fake_marker_count"], 1)
+        self.assertEqual(audit["summary"]["synthetic_final_answer_reply_fake_marker_count"], 5)
         self.assertIn("goal_needs_user_answers", [row["id"] for row in audit["warnings"]])
         self.assertIn("Submission Safety Audit", markdown)
         self.assertIn("fake data local only", markdown)
         self.assertIn("real employer final submit", markdown)
+        self.assertIn("real final-answer fake/test markers", markdown)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             json_output = Path(temp_dir) / "submission_safety.json"
@@ -1013,6 +1043,8 @@ class JobApplyAgentTests(unittest.TestCase):
                 browser_review_queue_audit=browser_audit,
                 pre_submit_review=pre_submit,
                 goal_readiness_audit=goal_audit,
+                final_answer_reply_intake=final_reply,
+                synthetic_final_answer_reply_intake=synthetic_final_reply,
             )
             self.assertTrue(written["safe"])
             self.assertTrue(json_output.exists())
@@ -1051,12 +1083,21 @@ class JobApplyAgentTests(unittest.TestCase):
                 "safe": True,
                 "real_platform_submission_true_count": 0,
             },
+            final_answer_reply_intake={
+                "fake_marker_count": 1,
+                "synthetic_values_allowed": True,
+                "policy": {"blocks_fake_or_synthetic_values_for_real_apply": False},
+            },
         )
 
         self.assertFalse(audit["safe"])
         self.assertGreaterEqual(audit["issue_count"], 1)
         self.assertIn("apply_queue_no_unattended_real_submit", [row["id"] for row in audit["issues"]])
         self.assertIn("apply_queue_final_submit_stop_coverage", [row["id"] for row in audit["issues"]])
+        self.assertIn(
+            "final_answer_reply_fake_markers_blocked_for_real_apply",
+            [row["id"] for row in audit["issues"]],
+        )
 
     def test_open_browser_skips_closed_jobs(self) -> None:
         submissions = [
@@ -7718,6 +7759,108 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(reply_report["unknown_key_count"], 0)
         self.assertEqual(reply_report["confirmed_high_risk_aliases"], ["health_requirement"])
         self.assertTrue(intake_report["ready_for_finalize"])
+
+    def test_final_answer_reply_blocks_fake_markers_for_real_apply_paths(self) -> None:
+        unblockers = {
+            "unblockers": [
+                {
+                    "input_id": "profile_zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "high_risk": False,
+                    "required_count": 56,
+                },
+                {
+                    "input_id": "answer_memory_health_requirement_default_policy",
+                    "question": "What health requirement answer should automation use?",
+                    "high_risk": True,
+                    "required_count": 2,
+                },
+            ]
+        }
+        template = build_final_answer_intake_template(unblockers)
+        reply_text = "\n".join(
+            [
+                "zip_or_postal_code: 99999",
+                "health_requirement: FAKE LOCAL TEST ONLY - can comply with standard health or vaccination requirements; exceptions: none.",
+                "health_requirement_confirmed: yes",
+            ]
+        )
+
+        reply_report = build_final_answer_reply_intake(template, reply_text)
+        reply_markdown = render_final_answer_reply_intake_markdown(reply_report)
+        synthetic_reply_report = build_final_answer_reply_intake(
+            template,
+            reply_text,
+            allow_synthetic_values=True,
+        )
+
+        self.assertEqual(reply_report["answer_count"], 2)
+        self.assertEqual(reply_report["fake_marker_count"], 1)
+        self.assertEqual(reply_report["fake_marker_aliases"], ["health_requirement"])
+        self.assertFalse(reply_report["synthetic_values_allowed"])
+        self.assertIn("Fake/Test Value Markers", reply_markdown)
+        self.assertIn("health_requirement", reply_markdown)
+        self.assertNotIn("FAKE LOCAL TEST ONLY", reply_markdown)
+        self.assertEqual(synthetic_reply_report["fake_marker_count"], 1)
+        self.assertTrue(synthetic_reply_report["synthetic_values_allowed"])
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            template_path = root / "template.json"
+            unblockers_path = root / "unblockers.json"
+            reply_path = root / "reply.txt"
+            template_path.write_text(json.dumps(template, ensure_ascii=True, indent=2), encoding="utf-8")
+            unblockers_path.write_text(json.dumps(unblockers, ensure_ascii=True, indent=2), encoding="utf-8")
+            reply_path.write_text(reply_text, encoding="utf-8")
+
+            blocked = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "job_apply_agent",
+                    "final-answer-reply",
+                    "--template",
+                    str(template_path),
+                    "--unblockers",
+                    str(unblockers_path),
+                    "--reply-file",
+                    str(reply_path),
+                    "--validate-only",
+                    "--fail-on-not-ready",
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(blocked.returncode, 2)
+            self.assertIn("Fake/test markers: 1", blocked.stdout)
+            self.assertIn("Fake/test marker aliases: health_requirement", blocked.stdout)
+            self.assertNotIn("FAKE LOCAL TEST ONLY", blocked.stdout)
+
+            synthetic_allowed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "job_apply_agent",
+                    "final-answer-reply",
+                    "--template",
+                    str(template_path),
+                    "--unblockers",
+                    str(unblockers_path),
+                    "--reply-file",
+                    str(reply_path),
+                    "--synthetic-rehearse-queue",
+                    "--validate-only",
+                    "--fail-on-not-ready",
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(synthetic_allowed.returncode, 0, synthetic_allowed.stderr)
+            self.assertIn("Fake/test markers: 1", synthetic_allowed.stdout)
 
     def test_final_answer_reply_accepts_chinese_labels_and_common_short_labels(self) -> None:
         unblockers = {

@@ -1979,6 +1979,14 @@ def main() -> int:
         default=str(DEFAULT_PRE_SUBMIT_REVIEW_JSON),
     )
     submission_safety_audit_parser.add_argument("--goal-audit-json", default=str(DEFAULT_GOAL_AUDIT_JSON))
+    submission_safety_audit_parser.add_argument(
+        "--final-answer-reply-json",
+        default=str(DEFAULT_FINAL_ANSWER_REPLY_JSON),
+    )
+    submission_safety_audit_parser.add_argument(
+        "--synthetic-final-answer-reply-json",
+        default=str(DEFAULT_FINAL_ANSWER_REPLY_SYNTHETIC_JSON),
+    )
     submission_safety_audit_parser.add_argument("--json-output", default=str(DEFAULT_SUBMISSION_SAFETY_AUDIT_JSON))
     submission_safety_audit_parser.add_argument(
         "--markdown-output",
@@ -2308,6 +2316,8 @@ def main() -> int:
             browser_review_queue_audit=_load_optional_json(args.browser_review_queue_audit_json),
             pre_submit_review=_load_optional_json(args.pre_submit_review_json),
             goal_readiness_audit=_load_optional_json(args.goal_audit_json),
+            final_answer_reply_intake=_load_optional_json(args.final_answer_reply_json),
+            synthetic_final_answer_reply_intake=_load_optional_json(args.synthetic_final_answer_reply_json),
         )
         summary = audit.get("summary") or {}
         print(f"Wrote submission safety audit JSON to {args.json_output}")
@@ -3238,6 +3248,7 @@ def main() -> int:
                 template_payload,
                 str(reply_text or ""),
                 confirm_high_risk=args.confirm_high_risk,
+                allow_synthetic_values=synthetic_reply_rehearsal,
             )
             intake_payload = report.get("intake_payload") if isinstance(report.get("intake_payload"), dict) else {}
             intake_report = build_final_answer_intake_update(
@@ -3250,15 +3261,21 @@ def main() -> int:
             print(f"Parsed answers: {report.get('answer_count', 0)}")
             print(f"Unknown keys: {report.get('unknown_key_count', 0)}")
             print(f"Duplicate keys: {report.get('duplicate_key_count', 0)}")
+            print(f"Fake/test markers: {report.get('fake_marker_count', 0)}")
             print(f"Ready for finalize: {str(bool(intake_report.get('ready_for_finalize'))).lower()}")
             print(f"Missing unblockers: {intake_summary.get('missing_unblocker_count', 0)}")
             print(f"High-risk confirmations missing: {intake_summary.get('unconfirmed_high_risk_count', 0)}")
             print(f"Needs more specificity: {intake_summary.get('needs_more_specific_answer_count', 0)}")
             print(f"Unknown answers: {intake_summary.get('unknown_answer_count', 0)}")
+            _print_final_answer_reply_problem_aliases(report)
             _print_final_answer_intake_problem_aliases(intake_report)
             parser_has_errors = bool(
                 int(report.get("unknown_key_count") or 0)
                 or int(report.get("duplicate_key_count") or 0)
+                or (
+                    int(report.get("fake_marker_count") or 0)
+                    and not synthetic_reply_rehearsal
+                )
             )
             if args.fail_on_not_ready and (not intake_report.get("ready_for_finalize") or parser_has_errors):
                 return 2
@@ -3269,12 +3286,14 @@ def main() -> int:
             reply_json_output,
             reply_markdown_output,
             confirm_high_risk=args.confirm_high_risk,
+            allow_synthetic_values=synthetic_reply_rehearsal,
         )
         print(f"Wrote final answer reply intake JSON to {reply_json_output}")
         print(f"Wrote final answer reply intake Markdown to {reply_markdown_output}")
         print(f"Parsed answers: {report.get('answer_count', 0)}")
         print(f"Unknown keys: {report.get('unknown_key_count', 0)}")
         print(f"Duplicate keys: {report.get('duplicate_key_count', 0)}")
+        print(f"Fake/test markers: {report.get('fake_marker_count', 0)}")
         intake_payload = report.get("intake_payload") if isinstance(report.get("intake_payload"), dict) else {}
         intake_output_path = Path(intake_output)
         intake_output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3299,6 +3318,7 @@ def main() -> int:
         print(f"High-risk confirmations missing: {intake_summary.get('unconfirmed_high_risk_count', 0)}")
         print(f"Needs more specificity: {intake_summary.get('needs_more_specific_answer_count', 0)}")
         print(f"Unknown answers: {intake_summary.get('unknown_answer_count', 0)}")
+        _print_final_answer_reply_problem_aliases(report)
         _print_final_answer_intake_problem_aliases(intake_report)
         if args.finalize:
             final_report = write_critical_input_unblocker_final_update(
@@ -3325,6 +3345,10 @@ def main() -> int:
         parser_has_errors = bool(
             int(report.get("unknown_key_count") or 0)
             or int(report.get("duplicate_key_count") or 0)
+            or (
+                int(report.get("fake_marker_count") or 0)
+                and not synthetic_reply_rehearsal
+            )
         )
         if synthetic_reply_rehearsal:
             if not intake_report.get("ready_for_finalize") or parser_has_errors:
@@ -4811,6 +4835,16 @@ def _print_final_answer_intake_problem_aliases(report: dict) -> None:
     ]
     if unknown_ids:
         print(f"Unknown answer keys: {', '.join(unknown_ids[:12])}")
+
+
+def _print_final_answer_reply_problem_aliases(report: dict) -> None:
+    fake_aliases = [
+        str(alias).strip()
+        for alias in report.get("fake_marker_aliases") or []
+        if str(alias).strip()
+    ]
+    if fake_aliases:
+        print(f"Fake/test marker aliases: {', '.join(fake_aliases[:12])}")
 
 
 def _load_jobs_payload(path: Path) -> list[dict]:

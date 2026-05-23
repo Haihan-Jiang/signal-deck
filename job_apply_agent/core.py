@@ -5160,6 +5160,18 @@ FINAL_ANSWER_INTAKE_PLACEHOLDER_ANSWERS = {
 }
 
 
+FINAL_ANSWER_FAKE_VALUE_PATTERNS = [
+    ("fake", re.compile(r"\bfake\b")),
+    ("synthetic", re.compile(r"\bsynthetic\b")),
+    ("dummy", re.compile(r"\bdummy\b")),
+    ("test only", re.compile(r"\btest only\b")),
+    ("local test", re.compile(r"\blocal test\b")),
+    ("not real", re.compile(r"\bnot real\b")),
+    ("for testing", re.compile(r"\bfor testing\b")),
+    ("placeholder", re.compile(r"\bplaceholder\b")),
+]
+
+
 def build_final_answer_intake_template(
     unblocker_packet: dict[str, Any],
     existing_intake_payload: dict[str, Any] | None = None,
@@ -5374,6 +5386,7 @@ def build_final_answer_reply_intake(
     reply_text: str,
     *,
     confirm_high_risk: bool = False,
+    allow_synthetic_values: bool = False,
 ) -> dict[str, Any]:
     if not isinstance(template, dict):
         raise ValueError("final answer intake template must be a JSON object")
@@ -5435,6 +5448,7 @@ def build_final_answer_reply_intake(
         parsed_answers[alias] = value.strip()
         parsed_line_count += 1
 
+    fake_marker_rows = _final_answer_reply_fake_marker_rows(parsed_answers)
     answers: dict[str, Any] = {}
     for alias, field in field_by_alias.items():
         raw_existing, _answer_key = _final_answer_intake_raw_answer(
@@ -5475,10 +5489,14 @@ def build_final_answer_reply_intake(
         "answer_count": len(parsed_answers),
         "unknown_key_count": len(unknown_keys),
         "duplicate_key_count": len(duplicate_keys),
+        "fake_marker_count": len(fake_marker_rows),
         "ignored_line_count": len(ignored_lines),
         "global_confirm_high_risk": global_confirm_high_risk,
+        "synthetic_values_allowed": bool(allow_synthetic_values),
         "unknown_keys": unknown_keys,
         "duplicate_keys": duplicate_keys,
+        "fake_marker_aliases": [row["alias"] for row in fake_marker_rows],
+        "fake_marker_rows": fake_marker_rows,
         "ignored_lines": ignored_lines[:50],
         "parsed_aliases": sorted(parsed_answers),
         "confirmed_high_risk_aliases": sorted(
@@ -5492,6 +5510,8 @@ def build_final_answer_reply_intake(
             "writes_profile_or_memory": False,
             "submits_real_applications": False,
             "markdown_redacts_answer_text": True,
+            "blocks_fake_or_synthetic_values_for_real_apply": not bool(allow_synthetic_values),
+            "synthetic_value_markers_allowed": bool(allow_synthetic_values),
         },
     }
 
@@ -5503,11 +5523,13 @@ def write_final_answer_reply_intake(
     markdown_output: str | Path,
     *,
     confirm_high_risk: bool = False,
+    allow_synthetic_values: bool = False,
 ) -> dict[str, Any]:
     report = build_final_answer_reply_intake(
         template,
         reply_text,
         confirm_high_risk=confirm_high_risk,
+        allow_synthetic_values=allow_synthetic_values,
     )
     json_path = Path(json_output)
     markdown_path = Path(markdown_output)
@@ -5527,8 +5549,10 @@ def render_final_answer_reply_intake_markdown(report: dict[str, Any]) -> str:
         f"Parsed answers: {report.get('answer_count', 0)}",
         f"Unknown keys: {report.get('unknown_key_count', 0)}",
         f"Duplicate keys: {report.get('duplicate_key_count', 0)}",
+        f"Fake/test markers: {report.get('fake_marker_count', 0)}",
         f"Ignored lines: {report.get('ignored_line_count', 0)}",
         f"Global high-risk confirmation: {str(bool(report.get('global_confirm_high_risk'))).lower()}",
+        f"Synthetic value markers allowed: {str(bool(report.get('synthetic_values_allowed'))).lower()}",
         "",
         "## Parsed Aliases",
         "",
@@ -5552,6 +5576,15 @@ def render_final_answer_reply_intake_markdown(report: dict[str, Any]) -> str:
             lines.append(f"- {_markdown_cell(key)}")
     else:
         lines.append("- None")
+    lines.extend(["", "## Fake/Test Value Markers", ""])
+    fake_rows = report.get("fake_marker_rows") or []
+    if fake_rows:
+        for row in fake_rows:
+            if not isinstance(row, dict):
+                continue
+            lines.append(f"- {row.get('alias')} ({row.get('marker')})")
+    else:
+        lines.append("- None")
     lines.extend(
         [
             "",
@@ -5559,10 +5592,32 @@ def render_final_answer_reply_intake_markdown(report: dict[str, Any]) -> str:
             "",
             "- Markdown intentionally redacts answer text.",
             "- JSON output contains the parsed answer payload for local validation.",
+            "- Real apply paths reject fake/test/synthetic value markers.",
             "- This parser does not write profile or answer memory and does not submit applications.",
         ]
     )
     return "\n".join(lines) + "\n"
+
+
+def _final_answer_reply_fake_marker_rows(parsed_answers: dict[str, str]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for alias, answer in sorted(parsed_answers.items()):
+        marker = _final_answer_fake_value_marker(answer)
+        if marker:
+            rows.append({"alias": alias, "marker": marker})
+    return rows
+
+
+def _final_answer_fake_value_marker(value: Any) -> str:
+    normalized = re.sub(r"\s+", " ", str(value or "").strip().lower())
+    if not normalized:
+        return ""
+    if normalized in FINAL_ANSWER_INTAKE_PLACEHOLDER_ANSWERS:
+        return "placeholder"
+    for marker, pattern in FINAL_ANSWER_FAKE_VALUE_PATTERNS:
+        if pattern.search(normalized):
+            return marker
+    return ""
 
 
 def _split_final_answer_reply_line(line: str) -> tuple[str, str]:
@@ -21804,6 +21859,8 @@ def build_submission_safety_audit(
     browser_review_queue_audit: dict[str, Any] | None = None,
     pre_submit_review: dict[str, Any] | None = None,
     goal_readiness_audit: dict[str, Any] | None = None,
+    final_answer_reply_intake: dict[str, Any] | None = None,
+    synthetic_final_answer_reply_intake: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     issues: list[dict[str, Any]] = []
@@ -21843,6 +21900,8 @@ def build_submission_safety_audit(
     for name, artifact in [
         ("pre_submit_review", pre_submit_review),
         ("goal_readiness_audit", goal_readiness_audit),
+        ("final_answer_reply_intake", final_answer_reply_intake),
+        ("synthetic_final_answer_reply_intake", synthetic_final_answer_reply_intake),
     ]:
         if not isinstance(artifact, dict) or not artifact:
             add_warning(f"{name}_missing", f"optional artifact missing: {name}")
@@ -21916,6 +21975,58 @@ def build_submission_safety_audit(
             ),
         },
         "synthetic post-answer path is allowed to touch real profile/browser/submission side effects",
+    )
+
+    final_reply = final_answer_reply_intake if isinstance(final_answer_reply_intake, dict) else {}
+    final_reply_policy = final_reply.get("policy") if isinstance(final_reply.get("policy"), dict) else {}
+    final_reply_fake_markers = _submission_safety_int(final_reply.get("fake_marker_count"))
+    final_reply_synthetic_allowed = bool(final_reply.get("synthetic_values_allowed"))
+    final_reply_blocks_fake = bool(final_reply_policy.get("blocks_fake_or_synthetic_values_for_real_apply", True))
+    final_reply_bad = final_reply_fake_markers > 0 and (
+        final_reply_synthetic_allowed or not final_reply_blocks_fake
+    )
+    add_check(
+        "final_answer_reply_fake_markers_blocked_for_real_apply",
+        "real final-answer reply intake blocks fake/test/synthetic value markers before apply",
+        not final_reply_bad,
+        {
+            "present": bool(final_reply),
+            "fake_marker_count": final_reply_fake_markers,
+            "synthetic_values_allowed": final_reply_synthetic_allowed,
+            "blocks_fake_or_synthetic_values_for_real_apply": final_reply_blocks_fake,
+            "writes_profile_or_memory": bool(final_reply_policy.get("writes_profile_or_memory")),
+            "submits_real_applications": bool(final_reply_policy.get("submits_real_applications")),
+        },
+        "real final-answer reply intake allows fake/test/synthetic values",
+    )
+
+    synthetic_reply = (
+        synthetic_final_answer_reply_intake
+        if isinstance(synthetic_final_answer_reply_intake, dict)
+        else {}
+    )
+    synthetic_reply_policy = synthetic_reply.get("policy") if isinstance(synthetic_reply.get("policy"), dict) else {}
+    synthetic_reply_fake_markers = _submission_safety_int(synthetic_reply.get("fake_marker_count"))
+    synthetic_reply_bad = any(
+        [
+            bool(synthetic_reply_policy.get("writes_profile_or_memory")),
+            bool(synthetic_reply_policy.get("submits_real_applications")),
+            synthetic_reply_fake_markers > 0
+            and not bool(synthetic_reply.get("synthetic_values_allowed")),
+        ]
+    )
+    add_check(
+        "final_answer_synthetic_reply_local_only",
+        "synthetic final-answer reply may contain fake markers only when it stays local and non-submitting",
+        not synthetic_reply_bad,
+        {
+            "present": bool(synthetic_reply),
+            "fake_marker_count": synthetic_reply_fake_markers,
+            "synthetic_values_allowed": bool(synthetic_reply.get("synthetic_values_allowed")),
+            "writes_profile_or_memory": bool(synthetic_reply_policy.get("writes_profile_or_memory")),
+            "submits_real_applications": bool(synthetic_reply_policy.get("submits_real_applications")),
+        },
+        "synthetic final-answer reply can affect real profile data or submissions",
     )
 
     packet = apply_queue_autofill_packet if isinstance(apply_queue_autofill_packet, dict) else {}
@@ -22069,6 +22180,8 @@ def build_submission_safety_audit(
             "pre_submit_actual_submit_count": _submission_safety_int(pre_submit.get("actual_submit_count")),
             "goal_status": goal.get("status"),
             "final_answer_waiting_count_after_drafts": final_answer_waiting_count,
+            "final_answer_reply_fake_marker_count": final_reply_fake_markers,
+            "synthetic_final_answer_reply_fake_marker_count": synthetic_reply_fake_markers,
         },
         "checks": checks,
         "issues": issues,
@@ -22092,6 +22205,8 @@ def write_submission_safety_audit(
     browser_review_queue_audit: dict[str, Any] | None = None,
     pre_submit_review: dict[str, Any] | None = None,
     goal_readiness_audit: dict[str, Any] | None = None,
+    final_answer_reply_intake: dict[str, Any] | None = None,
+    synthetic_final_answer_reply_intake: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     audit = build_submission_safety_audit(
         fake_position_rehearsal=fake_position_rehearsal,
@@ -22100,6 +22215,8 @@ def write_submission_safety_audit(
         browser_review_queue_audit=browser_review_queue_audit,
         pre_submit_review=pre_submit_review,
         goal_readiness_audit=goal_readiness_audit,
+        final_answer_reply_intake=final_answer_reply_intake,
+        synthetic_final_answer_reply_intake=synthetic_final_answer_reply_intake,
     )
     json_path = Path(json_output)
     markdown_path = Path(markdown_output)
@@ -22138,6 +22255,8 @@ def render_submission_safety_audit_markdown(audit: dict[str, Any]) -> str:
         f"- pre-submit actual submits: {summary.get('pre_submit_actual_submit_count', 0)}",
         f"- goal status: {summary.get('goal_status') or 'missing'}",
         f"- final-answer blanks after drafts: {summary.get('final_answer_waiting_count_after_drafts', 0)}",
+        f"- real final-answer fake/test markers: {summary.get('final_answer_reply_fake_marker_count', 0)}",
+        f"- synthetic final-answer fake/test markers: {summary.get('synthetic_final_answer_reply_fake_marker_count', 0)}",
         "",
         "## Checks",
         "",
