@@ -331,6 +331,8 @@ def main() -> int:
         help="write a reusable answer/material template from readiness blockers",
     )
     learning_template_parser.add_argument("--readiness-json", default=str(DEFAULT_READINESS_JSON))
+    learning_template_parser.add_argument("--profile", default=str(DEFAULT_PERSONAL_PROFILE))
+    learning_template_parser.add_argument("--memory", default=str(DEFAULT_MEMORY))
     learning_template_parser.add_argument("--json-output", default=str(DEFAULT_LEARNING_TASKS_JSON))
     learning_template_parser.add_argument("--markdown-output", default=str(DEFAULT_LEARNING_TASKS_MARKDOWN))
 
@@ -867,10 +869,14 @@ def main() -> int:
         if not readiness_path.exists():
             raise FileNotFoundError(f"readiness report not found: {args.readiness_json}")
         readiness = json.loads(readiness_path.read_text(encoding="utf-8"))
+        profile = load_profile(args.profile) if Path(args.profile).exists() else None
+        memory = _load_optional_json(args.memory)
         template = write_learning_task_template(
             readiness,
             args.json_output,
             args.markdown_output,
+            profile=profile,
+            answer_memory=memory,
         )
         print(f"Wrote learning task JSON to {args.json_output}")
         print(f"Wrote learning task Markdown to {args.markdown_output}")

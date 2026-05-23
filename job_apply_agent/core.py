@@ -648,6 +648,15 @@ def _find_category_default_policy(
         "do_not_store_sensitive",
     } or category == "final_submit":
         return None
+    return _find_category_default_policy_for_category(answer_memory, category)
+
+
+def _find_category_default_policy_for_category(
+    answer_memory: dict[str, Any] | None,
+    category: str,
+) -> AnswerMemoryMatch | None:
+    if not answer_memory or category not in _CATEGORY_DEFAULT_POLICY_CATEGORIES:
+        return None
     best_entry: dict[str, Any] | None = None
     best_count = -1
     for entry in answer_memory.get("answers", []):
@@ -3727,13 +3736,18 @@ def write_synthetic_browser_action_execution(
     return report
 
 
-def build_learning_task_template(readiness_report: dict[str, Any]) -> dict[str, Any]:
+def build_learning_task_template(
+    readiness_report: dict[str, Any],
+    profile: CandidateProfile | None = None,
+    answer_memory: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     tasks: list[dict[str, Any]] = []
     for task in readiness_report.get("minimal_learning_tasks", []):
         if not isinstance(task, dict):
             continue
         storage = str(task.get("recommended_storage") or "")
         group_key = str(task.get("group_key") or "")
+        suggestion = _learning_task_answer_suggestion(task, profile, answer_memory)
         tasks.append(
             {
                 "group_key": group_key,
@@ -3741,6 +3755,7 @@ def build_learning_task_template(readiness_report: dict[str, Any]) -> dict[str, 
                 "recommended_storage": storage,
                 "answer_scope": _learning_task_answer_scope(group_key, storage),
                 "automation_behavior": _learning_task_automation_behavior(group_key, storage),
+                **suggestion,
                 "labels": task.get("labels", []),
                 "platforms": task.get("platforms", []),
                 "approved": False,
@@ -3765,8 +3780,10 @@ def write_learning_task_template(
     readiness_report: dict[str, Any],
     json_output: str | Path,
     markdown_output: str | Path,
+    profile: CandidateProfile | None = None,
+    answer_memory: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    template = build_learning_task_template(readiness_report)
+    template = build_learning_task_template(readiness_report, profile=profile, answer_memory=answer_memory)
     json_path = Path(json_output)
     markdown_path = Path(markdown_output)
     json_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3899,6 +3916,18 @@ def render_learning_task_template_markdown(template: dict[str, Any]) -> str:
             lines.append(f"  scope: {task.get('answer_scope')}")
         if task.get("automation_behavior"):
             lines.append(f"  automation: {task.get('automation_behavior')}")
+        if task.get("suggested_answer"):
+            lines.append(f"  suggested: {task.get('suggested_answer')}")
+        if task.get("suggested_answer_source"):
+            lines.append(
+                "  suggestion: {source}; confidence={confidence}; risk={risk}".format(
+                    source=task.get("suggested_answer_source"),
+                    confidence=task.get("suggestion_confidence"),
+                    risk=task.get("approval_risk"),
+                )
+            )
+        if task.get("approval_note"):
+            lines.append(f"  note: {task.get('approval_note')}")
         if task.get("platforms"):
             lines.append(f"  platforms: {', '.join(str(item) for item in task.get('platforms', []))}")
         if task.get("labels"):
@@ -5365,6 +5394,11 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                 "Related prompts",
                 "Persist allowed",
                 "Automation behavior",
+                "Suggested answer",
+                "Suggestion source",
+                "Confidence",
+                "Approval risk",
+                "Approval note",
                 "Answer",
             ],
             [
@@ -5376,6 +5410,11 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                     row.get("related_prompt_count"),
                     _yes_no(row.get("persist_allowed")),
                     row.get("automation_behavior"),
+                    row.get("suggested_answer"),
+                    row.get("suggested_answer_source"),
+                    row.get("suggestion_confidence"),
+                    row.get("approval_risk"),
+                    row.get("approval_note"),
                     row.get("answer"),
                 ]
                 for row in export.get("user_questions", [])
@@ -8748,6 +8787,236 @@ def _learning_task_automation_behavior(group_key: str, storage: str) -> str:
     return "Do not automate without supervised review."
 
 
+def _learning_task_answer_suggestion(
+    task: dict[str, Any],
+    profile: CandidateProfile | None,
+    answer_memory: dict[str, Any] | None,
+) -> dict[str, Any]:
+    storage = str(task.get("recommended_storage") or "")
+    group_key = str(task.get("group_key") or "")
+    question = str(task.get("question") or "")
+    labels = [str(label) for label in _string_list(task.get("labels")) if str(label).strip()]
+
+    base = {
+        "suggested_answer": "",
+        "suggested_answer_source": "needs_user",
+        "suggestion_confidence": "none",
+        "approval_risk": "needs_review",
+        "approval_required": True,
+        "approval_note": "No safe reusable suggestion; user should answer this task.",
+    }
+
+    if storage == "profile":
+        profile_answer = _suggest_profile_learning_answer(group_key, profile)
+        if profile_answer:
+            return {
+                **base,
+                "suggested_answer": profile_answer,
+                "suggested_answer_source": "profile",
+                "suggestion_confidence": "high",
+                "approval_risk": "low",
+                "approval_note": "Existing profile value can be reused after review.",
+            }
+        return {
+            **base,
+            "approval_note": "Profile field is missing; add the value before approving.",
+        }
+
+    if storage == "local_material":
+        profile_answer = _suggest_profile_learning_answer(group_key, profile)
+        if profile_answer:
+            return {
+                **base,
+                "suggested_answer": profile_answer,
+                "suggested_answer_source": "profile.question_answers",
+                "suggestion_confidence": "high",
+                "approval_risk": "low",
+                "approval_note": "Existing local material path can be reused after review.",
+            }
+        return {
+            **base,
+            "approval_note": "Local file path is missing; choose the approved resume/material path.",
+        }
+
+    if storage == "resume_facts":
+        fact_answer = _suggest_resume_fact_learning_answer(group_key, profile)
+        if fact_answer:
+            return {
+                **base,
+                "suggested_answer": fact_answer,
+                "suggested_answer_source": "profile.resume_facts",
+                "suggestion_confidence": "medium",
+                "approval_risk": "medium",
+                "approval_note": "Resume fact exists, but verify it is appropriate for repeated form answers.",
+            }
+        return {
+            **base,
+            "approval_note": "Resume fact is missing or should not be inferred.",
+        }
+
+    if storage == "answer_memory":
+        category = _category_default_policy_from_group_key(group_key)
+        if category:
+            category_match = _find_category_default_policy_for_category(answer_memory, category)
+            if category_match:
+                return {
+                    **base,
+                    "suggested_answer": category_match.answer,
+                    "suggested_answer_source": category_match.source,
+                    "suggestion_confidence": (
+                        "high" if category_match.confidence >= 0.85 else "medium"
+                    ),
+                    "approval_risk": "low",
+                    "approval_note": "Existing category default policy matches this task.",
+                }
+            return _category_default_policy_suggestion(category, base, profile)
+
+        for label in [*labels, question]:
+            learned = find_learned_answer(answer_memory, label) if answer_memory else None
+            if learned:
+                return {
+                    **base,
+                    "suggested_answer": learned.answer,
+                    "suggested_answer_source": learned.source,
+                    "suggestion_confidence": "high" if learned.confidence >= 0.85 else "medium",
+                    "approval_risk": "low",
+                    "approval_note": "Existing approved answer memory matches this task.",
+                }
+            direct = _direct_answer(profile, _normalize(label)) if profile else None
+            if direct:
+                return {
+                    **base,
+                    "suggested_answer": direct,
+                    "suggested_answer_source": "profile.question_answers",
+                    "suggestion_confidence": "medium",
+                    "approval_risk": "medium",
+                    "approval_note": "Profile preference suggests an answer; verify before approval.",
+                }
+
+    return base
+
+
+def _suggest_profile_learning_answer(
+    group_key: str,
+    profile: CandidateProfile | None,
+) -> str:
+    if not profile:
+        return ""
+    if group_key == "profile:profile_links":
+        return profile.question_answers.get("linkedin_profile", "")
+    if group_key == "profile:zip_or_postal_code":
+        return profile.question_answers.get("zip_code", "") or profile.question_answers.get("postal_code", "")
+    if group_key == "local_material:resume_file":
+        for key in ["resume_path", "resume_file", "resume_pdf"]:
+            if profile.question_answers.get(key):
+                return profile.question_answers[key]
+    return ""
+
+
+def _suggest_resume_fact_learning_answer(
+    group_key: str,
+    profile: CandidateProfile | None,
+) -> str:
+    if not profile:
+        return ""
+    if group_key == "resume_facts:education_grading":
+        return profile.resume_facts.get("gpa") or profile.resume_facts.get("grading_system", "")
+    return ""
+
+
+def _category_default_policy_suggestion(
+    category: str,
+    base: dict[str, Any],
+    profile: CandidateProfile | None,
+) -> dict[str, Any]:
+    suggestions = {
+        "employment_history": (
+            "No, unless a specific employer, contractor, application, or interview exception has been confirmed.",
+            "medium",
+            "medium",
+            "Use only after confirming prior-employer and prior-application history exceptions.",
+        ),
+        "conflict_of_interest": (
+            "No, unless a specific relationship, referral, non-compete, outside employment, or conflict has been confirmed.",
+            "medium",
+            "medium",
+            "Use only after confirming relationship and conflict exceptions.",
+        ),
+        "security_clearance": (
+            "No active security clearance unless specifically confirmed.",
+            "medium",
+            "medium",
+            "Do not claim a clearance without explicit evidence.",
+        ),
+        "location_constraint": (
+            _location_policy_suggestion(profile),
+            "medium",
+            "low",
+            "Matches current relocation/onsite preference; still review city-specific requirements.",
+        ),
+        "device_policy": (
+            "Yes, if the device or BYOD policy is reasonable and reviewed before submit.",
+            "low",
+            "medium",
+            "Review employer device terms before real submission.",
+        ),
+        "government_employment": (
+            "No current or prior government, military, or UN employment unless specifically confirmed.",
+            "medium",
+            "medium",
+            "Use only after confirming government or military employment history.",
+        ),
+        "language_ability": (
+            "English only unless another language proficiency is explicitly confirmed.",
+            "medium",
+            "low",
+            "English proficiency is present; do not claim other languages without confirmation.",
+        ),
+        "professional_license": (
+            "No professional or medical license unless specifically confirmed.",
+            "medium",
+            "medium",
+            "Do not claim regulated licenses without explicit evidence.",
+        ),
+        "schedule_constraint": (
+            "Available to start in about two months; review fixed schedule, internship schedule, or unusual-hours requirements before submit.",
+            "medium",
+            "medium",
+            "Uses the current start-date preference, but unusual schedules need review.",
+        ),
+    }
+    high_risk_notes = {
+        "background_or_export_control": "Legal/background/export-control questions need exact user confirmation; do not infer.",
+        "citizenship_status": "Citizenship, U.S.-person, and permanent-resident questions need exact user confirmation; do not infer.",
+        "country_work_permit": "Country-specific right-to-work questions need exact user confirmation; do not infer.",
+        "health_requirement": "Health or vaccination requirement questions need exact user confirmation; do not infer.",
+        "interview_recording_consent": "Interview recording, transcription, and AI notetaker consent should be explicitly approved before reuse.",
+    }
+    if category in suggestions:
+        answer, confidence, risk, note = suggestions[category]
+        return {
+            **base,
+            "suggested_answer": answer,
+            "suggested_answer_source": "category_default_policy_template",
+            "suggestion_confidence": confidence,
+            "approval_risk": risk,
+            "approval_note": note,
+        }
+    if category in high_risk_notes:
+        return {
+            **base,
+            "suggested_answer_source": "requires_exact_user_confirmation",
+            "suggestion_confidence": "none",
+            "approval_risk": "high",
+            "approval_note": high_risk_notes[category],
+        }
+    return base
+
+
+def _location_policy_suggestion(profile: CandidateProfile | None) -> str:
+    return "Open to remote, hybrid, onsite, travel, and relocation for the right role; review city-specific requirements before submit."
+
+
 def _minimal_learning_question(item: dict[str, Any]) -> str:
     category = str(item.get("category") or "")
     storage = str(item.get("recommended_storage") or "")
@@ -11252,6 +11521,12 @@ def _learning_task_export_row(task: dict[str, Any]) -> dict[str, Any]:
         "required_count": task.get("required_count", 0),
         "approved": bool(task.get("approved")),
         "answer": task.get("answer", ""),
+        "suggested_answer": task.get("suggested_answer", ""),
+        "suggested_answer_source": task.get("suggested_answer_source", ""),
+        "suggestion_confidence": task.get("suggestion_confidence", ""),
+        "approval_risk": task.get("approval_risk", ""),
+        "approval_required": bool(task.get("approval_required", True)),
+        "approval_note": task.get("approval_note", ""),
         "persist_allowed": task.get("persist_allowed", True),
         "notes": task.get("notes", ""),
     }

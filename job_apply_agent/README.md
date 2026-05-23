@@ -375,6 +375,9 @@ conflict-of-interest questions. These defaults can prefill future same-category
 prompts with different wording, but the real browser flow still keeps a human
 review gate before final submit. CAPTCHA/security checks, protected-class
 self-identification, and final submit are never converted into category defaults.
+The template also includes `suggested_answer`, `suggested_answer_source`,
+`suggestion_confidence`, and `approval_risk` fields so you can review proposed
+defaults without treating them as approved answers.
 
 For a captured Ashby or Greenhouse form snapshot, generate an offline fill plan:
 

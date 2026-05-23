@@ -2306,6 +2306,86 @@ class JobApplyAgentTests(unittest.TestCase):
             "keep human review",
             template_tasks["answer_memory:employment_history:default_policy"]["automation_behavior"],
         )
+        self.assertEqual(
+            template_tasks["answer_memory:employment_history:default_policy"]["suggested_answer_source"],
+            "category_default_policy_template",
+        )
+        self.assertIn(
+            "unless a specific employer",
+            template_tasks["answer_memory:employment_history:default_policy"]["suggested_answer"],
+        )
+
+    def test_learning_task_template_suggests_from_profile_and_memory(self) -> None:
+        readiness = {
+            "minimal_learning_tasks": [
+                {
+                    "group_key": "local_material:resume_file",
+                    "question": "Which approved resume file should automation upload?",
+                    "recommended_storage": "local_material",
+                    "labels": ["Resume"],
+                    "platforms": ["Ashby"],
+                },
+                {
+                    "group_key": "answer_memory:needs_user_confirmation:expected compensation",
+                    "question": "What is your expected compensation?",
+                    "recommended_storage": "answer_memory",
+                    "labels": ["What is your expected compensation?"],
+                    "platforms": ["Greenhouse"],
+                },
+                {
+                    "group_key": "answer_memory:citizenship_status:default_policy",
+                    "question": "What citizenship answers should automation use?",
+                    "recommended_storage": "answer_memory",
+                    "labels": ["Are you a U.S. citizen?"],
+                    "platforms": ["Greenhouse"],
+                },
+            ]
+        }
+        memory = {
+            "answers": [
+                {
+                    "normalized_question": "what expected compensation",
+                    "sample_question": "What is your expected compensation?",
+                    "answer": "$100,000+",
+                    "approved_count": 1,
+                    "source": "test",
+                }
+            ]
+        }
+        profile = CandidateProfile(
+            name=self.profile.name,
+            email=self.profile.email,
+            phone=self.profile.phone,
+            location=self.profile.location,
+            target_titles=self.profile.target_titles,
+            target_locations=self.profile.target_locations,
+            remote_ok=self.profile.remote_ok,
+            keywords=self.profile.keywords,
+            blocklist=self.profile.blocklist,
+            min_score=self.profile.min_score,
+            resume_facts=self.profile.resume_facts,
+            question_answers={**self.profile.question_answers, "resume_path": "/tmp/resume.pdf"},
+        )
+
+        template = build_learning_task_template(readiness, profile=profile, answer_memory=memory)
+        tasks = {task["group_key"]: task for task in template["tasks"]}
+
+        self.assertEqual(
+            tasks["local_material:resume_file"]["suggested_answer"],
+            "/tmp/resume.pdf",
+        )
+        self.assertEqual(
+            tasks["answer_memory:needs_user_confirmation:expected compensation"]["suggested_answer"],
+            "$100,000+",
+        )
+        self.assertEqual(
+            tasks["answer_memory:citizenship_status:default_policy"]["suggested_answer_source"],
+            "requires_exact_user_confirmation",
+        )
+        self.assertEqual(
+            tasks["answer_memory:citizenship_status:default_policy"]["approval_risk"],
+            "high",
+        )
 
     def test_write_position_readiness_report_outputs_json_and_markdown(self) -> None:
         research = {
