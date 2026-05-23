@@ -4879,6 +4879,29 @@ FINAL_ANSWER_INTAKE_ALIASES = {
 }
 
 
+FINAL_ANSWER_INTAKE_FORMAT_HINTS = {
+    "zip_or_postal_code": "Enter the exact ZIP or postal code automation should reuse for profile and remote-work fields.",
+    "citizenship_status": (
+        "Use explicit yes/no clauses for U.S. citizen, U.S. person or permanent resident, and restricted-country "
+        "citizenship or permanent residency."
+    ),
+    "background_or_export_control": (
+        "State the truthful default for legal eligibility, background check, export-control, debarment, indictment, "
+        "felony, firearm, substance, and similar prompts; list any exceptions."
+    ),
+    "country_work_permit": (
+        "State which countries you can legally work in without extra sponsorship or permit work; list country-specific "
+        "exceptions instead of using a broad yes."
+    ),
+    "interview_recording_consent": (
+        "State yes or no for interview recording, transcription, AI notetakers, and interview analysis; list exceptions."
+    ),
+    "health_requirement": (
+        "State the truthful answer for client-site health, vaccination, or in-person requirement prompts; list exceptions."
+    ),
+}
+
+
 def build_final_answer_intake_template(
     unblocker_packet: dict[str, Any],
     existing_intake_payload: dict[str, Any] | None = None,
@@ -4924,6 +4947,7 @@ def build_final_answer_intake_template(
                 "platforms": row.get("platforms") or [],
                 "labels": row.get("labels") or [],
                 "why_not_inferred": row.get("why_not_inferred"),
+                "answer_format_hint": _final_answer_intake_answer_format_hint(alias, high_risk),
             }
         )
     return {
@@ -5221,10 +5245,16 @@ def render_final_answer_intake_template_markdown(template: dict[str, Any]) -> st
             "yes" if row.get("high_risk") else "no",
             row.get("required_count", 0),
             row.get("question"),
+            row.get("answer_format_hint"),
         ]
         for row in template.get("fields") or []
     ]
-    lines.extend(_simple_markdown_table(["Alias", "Input ID", "High risk", "Prompts", "Question"], rows))
+    lines.extend(
+        _simple_markdown_table(
+            ["Alias", "Input ID", "High risk", "Prompts", "Question", "Answer format hint"],
+            rows,
+        )
+    )
     lines.extend(["", "## Answers JSON", "", "```json"])
     lines.append(json.dumps({"answers": template.get("answers") or {}}, ensure_ascii=True, indent=2))
     lines.extend(["```", ""])
@@ -5245,6 +5275,7 @@ def render_final_answer_intake_template_html(
         answer_text, high_risk_confirmed = _final_answer_intake_answer_text(answers.get(alias, ""))
         labels = "\n".join(_string_list(row.get("labels"))[:12])
         platforms = ", ".join(_string_list(row.get("platforms")))
+        format_hint = str(row.get("answer_format_hint") or "")
         checkbox = (
             '<label class="confirm"><input type="checkbox" data-confirm="{alias}" {checked}> '
             "I confirm this high-risk answer is exact and truthful.</label>"
@@ -5264,9 +5295,14 @@ def render_final_answer_intake_template_html(
                     f"<p><strong>Question:</strong> {_html_escape(row.get('question'))}</p>",
                     f"<p><strong>Needed:</strong> {_html_escape(row.get('required_user_response'))}</p>",
                     f"<p><strong>Why not inferred:</strong> {_html_escape(row.get('why_not_inferred'))}</p>",
+                    f"<p><strong>Answer format hint:</strong> {_html_escape(format_hint)}</p>",
                     f"<p><strong>Platforms:</strong> {_html_escape(platforms)}</p>",
                     f"<p><strong>Observed prompts:</strong> {_html_escape(row.get('required_count'))}</p>",
-                    f'<textarea data-answer="{_html_escape(alias)}" rows="4">{_html_escape(answer_text)}</textarea>',
+                    (
+                        f'<textarea data-answer="{_html_escape(alias)}" '
+                        f'data-high-risk="{str(high_risk).lower()}" rows="4" '
+                        f'placeholder="{_html_escape(format_hint)}">{_html_escape(answer_text)}</textarea>'
+                    ),
                     checkbox,
                     f"<pre>{_html_escape(labels)}</pre>",
                     "</section>",
@@ -5301,8 +5337,35 @@ function buildPayload() {
     answers
   };
 }
+function fieldStates() {
+  const states = [];
+  document.querySelectorAll("[data-answer]").forEach((field) => {
+    const alias = field.getAttribute("data-answer");
+    const text = field.value.trim();
+    const confirm = document.querySelector('[data-confirm="' + alias + '"]');
+    states.push({
+      alias,
+      text,
+      highRisk: field.getAttribute("data-high-risk") === "true",
+      confirmed: confirm ? Boolean(confirm.checked) : true
+    });
+  });
+  return states;
+}
 function refreshOutput() {
-  document.getElementById("json-output").textContent = JSON.stringify(buildPayload(), null, 2);
+  const payload = buildPayload();
+  document.getElementById("json-output").textContent = JSON.stringify(payload, null, 2);
+  const states = fieldStates();
+  const missing = states.filter((state) => !state.text).length;
+  const unconfirmed = states.filter((state) => state.highRisk && state.text && !state.confirmed).length;
+  const summary = document.getElementById("readiness-summary");
+  if (missing === 0 && unconfirmed === 0) {
+    summary.textContent = "All answers and high-risk confirmations are present. Save to validate locally.";
+    summary.className = "ready";
+  } else {
+    summary.textContent = missing + " answer(s) missing; " + unconfirmed + " high-risk confirmation(s) missing.";
+    summary.className = "warning";
+  }
 }
 async function copyPayload() {
   const text = JSON.stringify(buildPayload(), null, 2);
@@ -5374,6 +5437,7 @@ document.addEventListener("DOMContentLoaded", () => {
             "<section>",
             "<h2>Instructions</h2>",
             f"<p>{_html_escape(template.get('instructions'))}</p>",
+            '<p id="readiness-summary" class="warning"></p>',
             "</section>",
             *field_cards,
             "<section>",
@@ -5420,6 +5484,19 @@ h2 {
 }
 .muted {
   color: #65758b;
+}
+.warning, .ready {
+  border-radius: 6px;
+  font-weight: 700;
+  padding: 10px 12px;
+}
+.warning {
+  background: #fff7ed;
+  color: #9a3412;
+}
+.ready {
+  background: #ecfdf3;
+  color: #166534;
 }
 .answer-card, section {
   background: #ffffff;
@@ -5533,6 +5610,15 @@ def _final_answer_intake_alias(input_id: str) -> str:
     if alias.startswith("profile_"):
         alias = alias[len("profile_") :]
     return alias
+
+
+def _final_answer_intake_answer_format_hint(alias: str, high_risk: bool) -> str:
+    hint = FINAL_ANSWER_INTAKE_FORMAT_HINTS.get(alias)
+    if hint:
+        return hint
+    if high_risk:
+        return "Provide the exact truthful answer and list exceptions; high-risk fields also need explicit confirmation."
+    return "Provide the exact stable value automation should reuse for matching prompts."
 
 
 def _final_answer_intake_raw_answer(
