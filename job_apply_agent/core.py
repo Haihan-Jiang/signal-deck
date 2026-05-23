@@ -21115,6 +21115,25 @@ def write_final_answer_blocker_report(
     return report
 
 
+def attach_final_answer_blocker_notification_result(
+    report: dict[str, Any],
+    notification_result: dict[str, Any],
+) -> dict[str, Any]:
+    updated = json.loads(json.dumps(report))
+    updated["telegram_notification"] = {
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "ok": bool(notification_result.get("ok")),
+        "skipped": bool(notification_result.get("skipped")),
+        "reason": str(notification_result.get("reason") or ""),
+        "chat_count": int(notification_result.get("chat_count") or 0),
+        "env_path": str(notification_result.get("env_path") or ""),
+        "message_stored": False,
+        "answer_text_stored": False,
+        "token_stored": False,
+    }
+    return updated
+
+
 def render_final_answer_reply_template_text(report: dict[str, Any]) -> str:
     lines = [
         "# Final answer reply template",
@@ -21222,6 +21241,23 @@ def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
                 lines.append("  - No prompt examples captured")
     else:
         lines.append("- None")
+    notification = report.get("telegram_notification") if isinstance(report.get("telegram_notification"), dict) else {}
+    if notification:
+        lines.extend(
+            [
+                "",
+                "## Telegram Notification",
+                "",
+                f"- recorded at: {notification.get('recorded_at', '')}",
+                f"- ok: {str(bool(notification.get('ok'))).lower()}",
+                f"- skipped: {str(bool(notification.get('skipped'))).lower()}",
+                f"- reason: {notification.get('reason', '')}",
+                f"- chat count: {notification.get('chat_count', 0)}",
+                "- message stored: false",
+                "- answer text stored: false",
+                "- token stored: false",
+            ]
+        )
     automation = report.get("automation_after_answers") or {}
     validation = automation.get("intake_validation") if isinstance(automation.get("intake_validation"), dict) else {}
     lines.extend(

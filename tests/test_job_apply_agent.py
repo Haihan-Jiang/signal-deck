@@ -15,6 +15,7 @@ from job_apply_agent.core import (
     CandidateProfile,
     DEFAULT_QUESTIONS,
     add_synthetic_answers_for_blockers,
+    attach_final_answer_blocker_notification_result,
     apply_critical_input_answers,
     apply_learning_task_answers,
     build_answer_gap_report,
@@ -7438,6 +7439,8 @@ class JobApplyAgentTests(unittest.TestCase):
                 env_path=env_path,
                 dry_run=True,
             )
+            notified = attach_final_answer_blocker_notification_result(written, notify_result)
+            notified_markdown = render_final_answer_blocker_report_markdown(notified)
             self.assertTrue(json_output.exists())
             self.assertTrue(markdown_output.exists())
             self.assertTrue(reply_template_output.exists())
@@ -7448,6 +7451,17 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(notify_result["ok"])
             self.assertTrue(notify_result["skipped"])
             self.assertNotIn("Sensitive citizenship answer phrase 12345", notify_result["message"])
+            self.assertIn("telegram_notification", notified)
+            self.assertTrue(notified["telegram_notification"]["ok"])
+            self.assertTrue(notified["telegram_notification"]["skipped"])
+            self.assertFalse(notified["telegram_notification"]["message_stored"])
+            self.assertFalse(notified["telegram_notification"]["answer_text_stored"])
+            self.assertFalse(notified["telegram_notification"]["token_stored"])
+            self.assertNotIn("message", notified["telegram_notification"])
+            self.assertIn("Telegram Notification", notified_markdown)
+            self.assertIn("answer text stored: false", notified_markdown)
+            self.assertNotIn("Sensitive citizenship answer phrase 12345", json.dumps(notified))
+            self.assertNotIn("Sensitive citizenship answer phrase 12345", notified_markdown)
 
     def test_final_answer_reply_text_builds_ready_intake_without_markdown_answer_text(self) -> None:
         unblockers = {

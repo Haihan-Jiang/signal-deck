@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .core import (
     add_synthetic_answers_for_blockers,
+    attach_final_answer_blocker_notification_result,
     apply_critical_input_answers,
     apply_learning_task_answers,
     build_answer_gap_report,
@@ -32,6 +33,7 @@ from .core import (
     notify_telegram_for_submissions,
     open_apply_urls_in_browser,
     record_closed_job,
+    render_final_answer_blocker_report_markdown,
     render_critical_input_answer_workflow_markdown,
     render_final_answer_intake_template_html,
     refresh_closed_jobs_from_live_pages,
@@ -3081,6 +3083,15 @@ def main() -> int:
                 env_path=args.telegram_env,
                 dry_run=args.telegram_dry_run,
                 max_items=args.limit,
+            )
+            report = attach_final_answer_blocker_notification_result(report, result)
+            Path(args.json_output).write_text(
+                json.dumps(report, ensure_ascii=True, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            Path(args.markdown_output).write_text(
+                render_final_answer_blocker_report_markdown(report),
+                encoding="utf-8",
             )
             if result.get("skipped"):
                 print(f"Telegram notification skipped: {result.get('reason')}")
