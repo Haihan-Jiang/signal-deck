@@ -929,6 +929,13 @@ value-bearing supervised autofill packet:
 python3 -m job_apply_agent post-answer-pipeline --apply --live-check --include-values
 ```
 
+For a daily or post-answer queue maintenance pass that can replace closed rows
+before opening pages, run:
+
+```bash
+python3 -m job_apply_agent refresh-apply-queue --max-rounds 2 --live-check-limit 100 --include-values
+```
+
 Add `--open-browser` only when you want it to open the verified pages; real
 final submit remains a supervised stop.
 
