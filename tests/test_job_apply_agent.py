@@ -3840,6 +3840,53 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["policy_stop_counts"]["local_synthetic_submit_allowed"], 1)
         self.assertIn("Fake Position Rehearsal", render_fake_position_rehearsal_markdown(report))
 
+    def test_fake_position_rehearsal_can_target_platform_role_pairs(self) -> None:
+        positions = []
+        items = []
+        for platform in ["LinkedIn", "Ashby"]:
+            for role_family, title in [
+                ("Site Reliability", "Site Reliability Engineer"),
+                ("Software Backend", "Backend Software Engineer"),
+            ]:
+                key = f"{platform.lower()}:{role_family.lower().replace(' ', '-')}"
+                positions.append(
+                    {
+                        "position_key": key,
+                        "platform": platform,
+                        "company": f"{platform} Co",
+                        "title": title,
+                        "role_family": role_family,
+                        "apply_url": f"https://example.com/{key}",
+                    }
+                )
+                items.append(
+                    {
+                        "position_key": key,
+                        "label": "Email",
+                        "category": "profile_identity",
+                        "automation_action": "auto_fill_from_profile",
+                        "required": True,
+                        "platform": platform,
+                    }
+                )
+        research = {"positions": positions, "items": items}
+
+        report = build_fake_position_rehearsal(
+            research,
+            {"task_count": 0, "tasks": []},
+            limit=1,
+            allow_local_synthetic_submit=True,
+            per_platform_role_target=1,
+            target_platforms=["LinkedIn", "Ashby"],
+            target_role_families=["Site Reliability", "Software Backend"],
+        )
+
+        self.assertEqual(report["requested_count"], 4)
+        self.assertEqual(report["run_count"], 4)
+        self.assertTrue(report["platform_role_target_achieved"])
+        self.assertEqual(report["platform_role_target_shortfalls"]["Ashby::Site Reliability"], 0)
+        self.assertEqual(report["actual_submit_count"], 4)
+
     def test_write_fake_position_rehearsal_outputs_reports(self) -> None:
         research = {
             "positions": [

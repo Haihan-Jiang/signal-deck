@@ -373,6 +373,12 @@ def main() -> int:
     fake_position_rehearsal_parser.add_argument("--learning-tasks-json", default=str(DEFAULT_LEARNING_TASKS_JSON))
     fake_position_rehearsal_parser.add_argument("--closed-jobs", default=str(DEFAULT_CLOSED_JOBS))
     fake_position_rehearsal_parser.add_argument("--limit", type=int, default=100)
+    fake_position_rehearsal_parser.add_argument(
+        "--per-platform-role-target",
+        type=int,
+        default=None,
+        help="run this many observed positions for each target platform and role-family pair",
+    )
     fake_position_rehearsal_parser.add_argument("--include-values", action="store_true")
     fake_position_rehearsal_parser.add_argument(
         "--allow-local-synthetic-submit",
@@ -973,10 +979,13 @@ def main() -> int:
             closed_jobs=load_closed_jobs(args.closed_jobs),
             include_values=args.include_values,
             allow_local_synthetic_submit=args.allow_local_synthetic_submit,
+            per_platform_role_target=args.per_platform_role_target,
         )
         print(f"Wrote fake position rehearsal JSON to {args.json_output}")
         print(f"Wrote fake position rehearsal Markdown to {args.markdown_output}")
         print(f"Runs: {report.get('run_count', 0)} / {report.get('requested_count', 0)}")
+        print(f"Per-platform-role target: {report.get('per_platform_role_target', 0)}")
+        print(f"Platform-role target achieved: {str(bool(report.get('platform_role_target_achieved'))).lower()}")
         print(f"Local synthetic submits: {report.get('actual_submit_count', 0)}")
         print(f"Eligible submit achieved: {str(bool(report.get('eligible_submit_achieved'))).lower()}")
         print(f"Pre-synthetic missing inputs: {report.get('pre_synthetic_missing_input_count', 0)}")

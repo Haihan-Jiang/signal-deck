@@ -2540,7 +2540,11 @@ def build_form_fill_plan(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "title": snapshot.get("title"),
         "url": snapshot.get("url"),
-        "platform": infer_platform_from_url(str(snapshot.get("url") or "")) or _infer_platform_from_path(Path("snapshot.json")),
+        "platform": (
+            snapshot.get("platform")
+            or infer_platform_from_url(str(snapshot.get("url") or ""))
+            or _infer_platform_from_path(Path("snapshot.json"))
+        ),
         "include_values": include_values,
         "step_count": len(steps),
         "blocking_step_count": len(blocking_steps),
@@ -4082,6 +4086,9 @@ def build_fake_position_rehearsal(
     closed_jobs: dict[str, Any] | None = None,
     include_values: bool = False,
     allow_local_synthetic_submit: bool = False,
+    per_platform_role_target: int | None = None,
+    target_platforms: list[str] | None = None,
+    target_role_families: list[str] | None = None,
 ) -> dict[str, Any]:
     fake_profile, profile_updates = _fake_profile_for_learning_tasks(learning_tasks)
     fake_memory, answer_summary = _fake_answer_memory_for_learning_tasks(learning_tasks)
@@ -4091,6 +4098,9 @@ def build_fake_position_rehearsal(
         items_by_position,
         limit=limit,
         closed_jobs=closed_jobs,
+        per_platform_role_target=per_platform_role_target,
+        target_platforms=target_platforms,
+        target_role_families=target_role_families,
     )
 
     executions: list[dict[str, Any]] = []
@@ -4142,6 +4152,9 @@ def build_fake_position_rehearsal(
     role_variant_counts = _count_by(executions, "role_variant")
     role_family_counts = _count_by(executions, "role_family")
     platform_role_family_counts = _platform_role_family_counts(executions)
+    platform_role_target = int(per_platform_role_target or 0)
+    target_platforms = selection.get("target_platforms", [])
+    target_role_families = selection.get("target_role_families", [])
     actual_submit_count = sum(int(item.get("actual_submit_count", 0)) for item in executions)
     selector_miss_count = sum(int(item.get("selector_miss_count", 0)) for item in executions)
     pre_missing_count = sum(int(item.get("pre_synthetic_missing_input_count", 0)) for item in executions)
@@ -4169,7 +4182,16 @@ def build_fake_position_rehearsal(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source": "fake_position_rehearsal",
         "execution": "observed_prompt_local_browser_manifest_executor",
-        "requested_count": max(int(limit), 0),
+        "requested_count": int(selection.get("requested_count") or max(int(limit), 0)),
+        "per_platform_role_target": platform_role_target,
+        "platform_role_target_achieved": (
+            all(count == 0 for count in (selection.get("platform_role_target_shortfalls") or {}).values())
+            if platform_role_target
+            else None
+        ),
+        "platform_role_target_shortfalls": selection.get("platform_role_target_shortfalls", {}),
+        "target_platforms": target_platforms,
+        "target_role_families": target_role_families,
         "run_count": len(executions),
         "real_platform_submission": False,
         "local_synthetic_submit_allowed": bool(allow_local_synthetic_submit),
@@ -4238,6 +4260,9 @@ def write_fake_position_rehearsal(
     closed_jobs: dict[str, Any] | None = None,
     include_values: bool = False,
     allow_local_synthetic_submit: bool = False,
+    per_platform_role_target: int | None = None,
+    target_platforms: list[str] | None = None,
+    target_role_families: list[str] | None = None,
 ) -> dict[str, Any]:
     report = build_fake_position_rehearsal(
         research,
@@ -4246,6 +4271,9 @@ def write_fake_position_rehearsal(
         closed_jobs=closed_jobs,
         include_values=include_values,
         allow_local_synthetic_submit=allow_local_synthetic_submit,
+        per_platform_role_target=per_platform_role_target,
+        target_platforms=target_platforms,
+        target_role_families=target_role_families,
     )
     json_path = Path(json_output)
     markdown_path = Path(markdown_output)
@@ -4263,6 +4291,8 @@ def render_fake_position_rehearsal_markdown(report: dict[str, Any]) -> str:
         f"Generated: {report.get('generated_at')}",
         f"Runs: {report.get('run_count', 0)} / {report.get('requested_count', 0)}",
         f"Execution: {report.get('execution')}",
+        f"Per-platform-role target: {report.get('per_platform_role_target', 0)}",
+        f"Platform-role target achieved: {str(report.get('platform_role_target_achieved')).lower()}",
         f"Real platform submission: {str(bool(report.get('real_platform_submission'))).lower()}",
         f"Local synthetic submit allowed: {str(bool(report.get('local_synthetic_submit_allowed'))).lower()}",
         f"Local synthetic submit count: {report.get('actual_submit_count', 0)}",
@@ -4293,6 +4323,13 @@ def render_fake_position_rehearsal_markdown(report: dict[str, Any]) -> str:
         lines.extend(["", "## Platform Role Family Counts", ""])
         for key, count in sorted((report.get("platform_role_family_counts") or {}).items()):
             lines.append(f"- {key}: {count}")
+    if report.get("platform_role_target_shortfalls"):
+        lines.extend(["", "## Platform Role Target Shortfalls", ""])
+        for key, count in sorted((report.get("platform_role_target_shortfalls") or {}).items()):
+            if int(count or 0):
+                lines.append(f"- {key}: {count}")
+        if all(int(count or 0) == 0 for count in (report.get("platform_role_target_shortfalls") or {}).values()):
+            lines.append("- None")
     if report.get("unexpected_runs"):
         lines.extend(["", "## Unexpected Runs", ""])
         for run in report.get("unexpected_runs", [])[:20]:
@@ -4521,6 +4558,9 @@ def _select_fake_rehearsal_positions(
     items_by_position: dict[str, list[dict[str, Any]]],
     limit: int,
     closed_jobs: dict[str, Any] | None,
+    per_platform_role_target: int | None = None,
+    target_platforms: list[str] | None = None,
+    target_role_families: list[str] | None = None,
 ) -> dict[str, Any]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     excluded_closed: list[dict[str, Any]] = []
@@ -4547,19 +4587,48 @@ def _select_fake_rehearsal_positions(
         grouped.setdefault(group_key, []).append(position)
 
     selected: list[dict[str, Any]] = []
-    group_keys = sorted(grouped)
-    target = max(int(limit), 0)
-    while len(selected) < target and any(grouped.get(key) for key in group_keys):
-        for key in group_keys:
-            if len(selected) >= target:
-                break
-            if grouped.get(key):
-                selected.append(grouped[key].pop(0))
+    platform_role_shortfalls: dict[str, int] = {}
+    requested_count = max(int(limit), 0)
+    normalized_target_platforms: list[str] = []
+    normalized_target_role_families: list[str] = []
+    if per_platform_role_target is not None:
+        target = max(int(per_platform_role_target), 0)
+        normalized_target_platforms = [
+            str(platform)
+            for platform in (target_platforms or list(SYNTHETIC_APPLICATION_PLATFORMS))
+            if str(platform).strip()
+        ]
+        normalized_target_role_families = [
+            str(role_family)
+            for role_family in (target_role_families or _default_target_role_families())
+            if str(role_family).strip()
+        ]
+        requested_count = target * len(normalized_target_platforms) * len(normalized_target_role_families)
+        for platform in normalized_target_platforms:
+            for role_family in normalized_target_role_families:
+                group_key = f"{platform}::{role_family}"
+                available = grouped.get(group_key, [])
+                selected.extend(available[:target])
+                platform_role_shortfalls[group_key] = max(0, target - len(available[:target]))
+    else:
+        group_keys = sorted(grouped)
+        target = requested_count
+        while len(selected) < target and any(grouped.get(key) for key in group_keys):
+            for key in group_keys:
+                if len(selected) >= target:
+                    break
+                if grouped.get(key):
+                    selected.append(grouped[key].pop(0))
 
     return {
         "selected_positions": selected,
         "excluded_closed_positions": excluded_closed,
         "skipped_no_prompt_positions": skipped_no_prompt,
+        "requested_count": requested_count,
+        "per_platform_role_target": int(per_platform_role_target or 0),
+        "target_platforms": normalized_target_platforms,
+        "target_role_families": normalized_target_role_families,
+        "platform_role_target_shortfalls": dict(sorted(platform_role_shortfalls.items())),
     }
 
 
@@ -4839,6 +4908,7 @@ def build_synthetic_candidate_profile() -> CandidateProfile:
             "communication_consent": "Yes, recruiting teams may contact me by SMS or WhatsApp.",
             "policy_acknowledgement": "Yes, I acknowledge.",
             "english_level": "Professional working proficiency in English.",
+            "middle_name": "Quinn",
             "linkedin_profile": "https://www.linkedin.com/in/fake-synthetic-candidate/",
             "github_profile": "https://github.com/fake-synthetic-candidate",
             "portfolio": "https://fake-synthetic-candidate.example.com",
@@ -6095,6 +6165,9 @@ def build_question_export(
         "fake_position_rehearsal_runs": int(
             (fake_position_rehearsal or {}).get("run_count") or 0
         ),
+        "fake_position_platform_role_target_achieved": bool(
+            (fake_position_rehearsal or {}).get("platform_role_target_achieved")
+        ),
         "fake_position_rehearsal_submit_count": int(
             (fake_position_rehearsal or {}).get("actual_submit_count") or 0
         ),
@@ -6212,6 +6285,10 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                 [
                     "Fake observed-position submit achieved",
                     _yes_no(summary.get("fake_position_rehearsal_submit_achieved")),
+                ],
+                [
+                    "Fake observed-position platform-role target achieved",
+                    _yes_no(summary.get("fake_position_platform_role_target_achieved")),
                 ],
                 ["Local synthetic submit count", summary.get("local_synthetic_submit_count", 0)],
                 [
@@ -12343,6 +12420,8 @@ def _fake_position_rehearsal_export_rows(fake_position_rehearsal: dict[str, Any]
         "execution": fake_position_rehearsal.get("execution"),
         "requested_count": fake_position_rehearsal.get("requested_count"),
         "run_count": fake_position_rehearsal.get("run_count"),
+        "per_platform_role_target": fake_position_rehearsal.get("per_platform_role_target"),
+        "platform_role_target_achieved": fake_position_rehearsal.get("platform_role_target_achieved"),
         "real_platform_submission": fake_position_rehearsal.get("real_platform_submission"),
         "local_synthetic_submit_allowed": fake_position_rehearsal.get("local_synthetic_submit_allowed"),
         "actual_submit_count": fake_position_rehearsal.get("actual_submit_count"),
@@ -12369,6 +12448,8 @@ def _fake_position_rehearsal_export_rows(fake_position_rehearsal: dict[str, Any]
     ]:
         for key, value in sorted(values.items()):
             rows.append({"metric": f"{prefix}:{key}", "value": value})
+    for key, value in sorted((fake_position_rehearsal.get("platform_role_target_shortfalls") or {}).items()):
+        rows.append({"metric": f"platform_role_shortfall:{key}", "value": value})
     return rows
 
 
