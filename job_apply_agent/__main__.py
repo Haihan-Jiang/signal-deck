@@ -37,6 +37,7 @@ from .core import (
     write_collection_plan,
     write_form_fill_plan,
     write_fake_learning_probe,
+    write_fake_position_rehearsal,
     write_learning_task_template,
     write_pre_submit_review,
     write_question_export,
@@ -78,6 +79,8 @@ DEFAULT_LEARNING_TASKS_JSON = Path(__file__).with_name("outbox") / "learning_tas
 DEFAULT_LEARNING_TASKS_MARKDOWN = Path(__file__).with_name("outbox") / "learning_tasks_latest.md"
 DEFAULT_FAKE_LEARNING_PROBE_JSON = Path(__file__).with_name("outbox") / "fake_learning_probe_latest.json"
 DEFAULT_FAKE_LEARNING_PROBE_MARKDOWN = Path(__file__).with_name("outbox") / "fake_learning_probe_latest.md"
+DEFAULT_FAKE_POSITION_REHEARSAL_JSON = Path(__file__).with_name("outbox") / "fake_position_rehearsal_latest.json"
+DEFAULT_FAKE_POSITION_REHEARSAL_MARKDOWN = Path(__file__).with_name("outbox") / "fake_position_rehearsal_latest.md"
 DEFAULT_SYNTHETIC_JSON = Path(__file__).with_name("outbox") / "synthetic_100_run_latest.json"
 DEFAULT_SYNTHETIC_MARKDOWN = Path(__file__).with_name("outbox") / "synthetic_100_run_latest.md"
 DEFAULT_SYNTHETIC_EXEC_JSON = Path(__file__).with_name("outbox") / "synthetic_apply_execution_latest.json"
@@ -362,6 +365,23 @@ def main() -> int:
     fake_learning_probe_parser.add_argument("--json-output", default=str(DEFAULT_FAKE_LEARNING_PROBE_JSON))
     fake_learning_probe_parser.add_argument("--markdown-output", default=str(DEFAULT_FAKE_LEARNING_PROBE_MARKDOWN))
 
+    fake_position_rehearsal_parser = subparsers.add_parser(
+        "fake-position-rehearsal",
+        help="run observed-position fake form rehearsals locally without real submissions",
+    )
+    fake_position_rehearsal_parser.add_argument("--research-json", default=str(DEFAULT_RESEARCH_JSON))
+    fake_position_rehearsal_parser.add_argument("--learning-tasks-json", default=str(DEFAULT_LEARNING_TASKS_JSON))
+    fake_position_rehearsal_parser.add_argument("--closed-jobs", default=str(DEFAULT_CLOSED_JOBS))
+    fake_position_rehearsal_parser.add_argument("--limit", type=int, default=100)
+    fake_position_rehearsal_parser.add_argument("--include-values", action="store_true")
+    fake_position_rehearsal_parser.add_argument(
+        "--allow-local-synthetic-submit",
+        action="store_true",
+        help="click final submit only inside local fake forms when all other gates are clear",
+    )
+    fake_position_rehearsal_parser.add_argument("--json-output", default=str(DEFAULT_FAKE_POSITION_REHEARSAL_JSON))
+    fake_position_rehearsal_parser.add_argument("--markdown-output", default=str(DEFAULT_FAKE_POSITION_REHEARSAL_MARKDOWN))
+
     synthetic_parser = subparsers.add_parser(
         "synthetic-run",
         help="run offline fake-candidate application simulations without real submissions",
@@ -524,6 +544,7 @@ def main() -> int:
         default=str(DEFAULT_SYNTHETIC_BROWSER_EXEC_JSON),
     )
     export_questions_parser.add_argument("--fake-learning-probe-json", default=str(DEFAULT_FAKE_LEARNING_PROBE_JSON))
+    export_questions_parser.add_argument("--fake-position-rehearsal-json", default=str(DEFAULT_FAKE_POSITION_REHEARSAL_JSON))
     export_questions_parser.add_argument("--answer-memory-json", default=str(DEFAULT_MEMORY))
     export_questions_parser.add_argument("--closed-jobs-json", default=str(DEFAULT_CLOSED_JOBS))
     export_questions_parser.add_argument("--xlsx-output", default=str(DEFAULT_QUESTION_EXPORT_XLSX))
@@ -660,12 +681,14 @@ def main() -> int:
                     "Learning tasks": args.learning_tasks_json,
                     "Synthetic browser execution": args.synthetic_browser_exec_json,
                     "Fake learning probe": args.fake_learning_probe_json,
+                    "Fake position rehearsal": args.fake_position_rehearsal_json,
                     "Answer memory": args.answer_memory_json,
                     "Closed postings": args.closed_jobs_json,
                 }
             ),
             synthetic_browser_execution=_load_optional_json(args.synthetic_browser_exec_json),
             fake_learning_probe=_load_optional_json(args.fake_learning_probe_json),
+            fake_position_rehearsal=_load_optional_json(args.fake_position_rehearsal_json),
             answer_memory=_load_optional_json(args.answer_memory_json),
             closed_jobs=_load_optional_json(args.closed_jobs_json),
         )
@@ -932,6 +955,32 @@ def main() -> int:
         print(f"Fake answered tasks: {report.get('fake_answered_task_count', 0)}")
         print(f"Remaining learning blockers: {report.get('remaining_learning_blocker_count', 0)}")
         print(f"Remaining manual gates: {report.get('remaining_manual_gate_count', 0)}")
+        return 0
+
+    if args.command == "fake-position-rehearsal":
+        research_path = Path(args.research_json)
+        tasks_path = Path(args.learning_tasks_json)
+        if not research_path.exists():
+            raise FileNotFoundError(f"research report not found: {args.research_json}")
+        if not tasks_path.exists():
+            raise FileNotFoundError(f"learning tasks not found: {args.learning_tasks_json}")
+        report = write_fake_position_rehearsal(
+            json.loads(research_path.read_text(encoding="utf-8")),
+            json.loads(tasks_path.read_text(encoding="utf-8")),
+            args.json_output,
+            args.markdown_output,
+            limit=args.limit,
+            closed_jobs=load_closed_jobs(args.closed_jobs),
+            include_values=args.include_values,
+            allow_local_synthetic_submit=args.allow_local_synthetic_submit,
+        )
+        print(f"Wrote fake position rehearsal JSON to {args.json_output}")
+        print(f"Wrote fake position rehearsal Markdown to {args.markdown_output}")
+        print(f"Runs: {report.get('run_count', 0)} / {report.get('requested_count', 0)}")
+        print(f"Local synthetic submits: {report.get('actual_submit_count', 0)}")
+        print(f"Eligible submit achieved: {str(bool(report.get('eligible_submit_achieved'))).lower()}")
+        print(f"Pre-synthetic missing inputs: {report.get('pre_synthetic_missing_input_count', 0)}")
+        print(f"Selector misses: {report.get('selector_miss_count', 0)}")
         return 0
 
     if args.command == "synthetic-run":

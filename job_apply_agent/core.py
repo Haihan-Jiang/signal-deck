@@ -4075,6 +4075,254 @@ def render_fake_learning_probe_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def build_fake_position_rehearsal(
+    research: dict[str, Any],
+    learning_tasks: dict[str, Any],
+    limit: int = 100,
+    closed_jobs: dict[str, Any] | None = None,
+    include_values: bool = False,
+    allow_local_synthetic_submit: bool = False,
+) -> dict[str, Any]:
+    fake_profile, profile_updates = _fake_profile_for_learning_tasks(learning_tasks)
+    fake_memory, answer_summary = _fake_answer_memory_for_learning_tasks(learning_tasks)
+    items_by_position = _research_items_by_position(research)
+    selection = _select_fake_rehearsal_positions(
+        research,
+        items_by_position,
+        limit=limit,
+        closed_jobs=closed_jobs,
+    )
+
+    executions: list[dict[str, Any]] = []
+    for index, position in enumerate(selection["selected_positions"], start=1):
+        position_key = str(position.get("position_key") or "")
+        snapshot = _observed_position_snapshot(
+            position,
+            items_by_position.get(position_key, []),
+        )
+        plan = build_form_fill_plan(
+            snapshot,
+            profile=fake_profile,
+            answer_memory=fake_memory,
+            include_values=include_values,
+        )
+        manifest = build_browser_action_manifest(
+            plan,
+            page_text=str(snapshot.get("page_text") or ""),
+            closed_jobs=closed_jobs,
+            include_values=include_values,
+        )
+        pre_counts = _pre_synthetic_stop_counts(manifest)
+        execution = execute_browser_action_manifest_locally(
+            manifest,
+            snapshot,
+            allow_local_synthetic_submit=allow_local_synthetic_submit,
+        )
+        execution.update(
+            {
+                "index": index,
+                "position_key": position_key,
+                "company": position.get("company"),
+                "job_title": position.get("title"),
+                "role_variant": position.get("title"),
+                "role_family": position.get("role_family"),
+                "apply_url": position.get("apply_url"),
+                "prompt_count": len(items_by_position.get(position_key, [])),
+                "manifest_status": manifest.get("status"),
+                "pre_synthetic_missing_input_count": pre_counts["missing_input_count"],
+                "pre_synthetic_manual_security_count": pre_counts["manual_security_count"],
+                "pre_synthetic_sensitive_gate_count": pre_counts["sensitive_gate_count"],
+                "pre_synthetic_final_submit_count": pre_counts["final_submit_count"],
+                "pre_synthetic_stop_action_count": pre_counts["stop_action_count"],
+            }
+        )
+        executions.append(execution)
+
+    platform_counts = _count_by(executions, "platform")
+    role_variant_counts = _count_by(executions, "role_variant")
+    role_family_counts = _count_by(executions, "role_family")
+    platform_role_family_counts = _platform_role_family_counts(executions)
+    actual_submit_count = sum(int(item.get("actual_submit_count", 0)) for item in executions)
+    selector_miss_count = sum(int(item.get("selector_miss_count", 0)) for item in executions)
+    pre_missing_count = sum(int(item.get("pre_synthetic_missing_input_count", 0)) for item in executions)
+    expected_blocker_count = sum(
+        1
+        for item in executions
+        if str(item.get("policy_stop") or "") in {"closed_posting", "manual_security_step"}
+    )
+    eligible_submit_target_count = sum(
+        1
+        for item in executions
+        if int(item.get("pre_synthetic_missing_input_count", 0)) == 0
+        and int(item.get("pre_synthetic_manual_security_count", 0)) == 0
+        and str(item.get("policy_stop") or "") != "closed_posting"
+    )
+    unexpected_runs = _fake_rehearsal_unexpected_runs(executions)
+    eligible_submit_achieved = (
+        bool(allow_local_synthetic_submit)
+        and selector_miss_count == 0
+        and pre_missing_count == 0
+        and actual_submit_count == eligible_submit_target_count
+    )
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "fake_position_rehearsal",
+        "execution": "observed_prompt_local_browser_manifest_executor",
+        "requested_count": max(int(limit), 0),
+        "run_count": len(executions),
+        "real_platform_submission": False,
+        "local_synthetic_submit_allowed": bool(allow_local_synthetic_submit),
+        "actual_submit_count": actual_submit_count,
+        "would_submit_count": sum(1 for item in executions if bool(item.get("would_submit"))),
+        "eligible_submit_target_count": eligible_submit_target_count,
+        "eligible_submit_count": actual_submit_count,
+        "eligible_submit_achieved": eligible_submit_achieved,
+        "expected_blocker_count": expected_blocker_count,
+        "selector_miss_count": selector_miss_count,
+        "pre_synthetic_missing_input_count": pre_missing_count,
+        "pre_synthetic_manual_security_count": sum(
+            int(item.get("pre_synthetic_manual_security_count", 0)) for item in executions
+        ),
+        "pre_synthetic_sensitive_gate_count": sum(
+            int(item.get("pre_synthetic_sensitive_gate_count", 0)) for item in executions
+        ),
+        "pre_synthetic_final_submit_count": sum(
+            int(item.get("pre_synthetic_final_submit_count", 0)) for item in executions
+        ),
+        "unexpected_run_count": len(unexpected_runs),
+        "excluded_closed_position_count": len(selection["excluded_closed_positions"]),
+        "skipped_no_prompt_position_count": len(selection["skipped_no_prompt_positions"]),
+        "source_position_count": len(research.get("positions", []) or []),
+        "source_prompt_item_count": len(research.get("items", []) or []),
+        "fake_answer_memory_entry_count": len(fake_memory.get("answers", [])),
+        "fake_category_policy_count": answer_summary["category_policy_count"],
+        "fake_profile_updates": profile_updates,
+        "outcome_counts": _count_by(executions, "outcome"),
+        "policy_stop_counts": _count_by(executions, "policy_stop"),
+        "platform_counts": platform_counts,
+        "role_variant_counts": role_variant_counts,
+        "role_family_counts": role_family_counts,
+        "platform_role_family_counts": platform_role_family_counts,
+        "executed_action_count": sum(int(item.get("executed_action_count", 0)) for item in executions),
+        "stop_action_count": sum(int(item.get("stop_action_count", 0)) for item in executions),
+        "synthetic_gate_answer_count": sum(
+            int(item.get("synthetic_gate_answer_count", 0)) for item in executions
+        ),
+        "selected_positions": [
+            _fake_rehearsal_position_row(item) for item in selection["selected_positions"]
+        ],
+        "excluded_closed_positions": selection["excluded_closed_positions"][:100],
+        "skipped_no_prompt_positions": selection["skipped_no_prompt_positions"][:100],
+        "unexpected_runs": unexpected_runs[:100],
+        "runs": executions,
+        "policy": {
+            "uses_fake_candidate_only": True,
+            "real_platform_submission": False,
+            "local_synthetic_submit_only": bool(allow_local_synthetic_submit),
+            "fake_data_real_submission_allowed": False,
+            "closed_jobs_excluded_before_rehearsal": True,
+            "closed_page_text_still_stops_execution": True,
+            "remote_employer_final_submit_blocked": True,
+            "captcha_or_security_not_bypassed": True,
+        },
+    }
+
+
+def write_fake_position_rehearsal(
+    research: dict[str, Any],
+    learning_tasks: dict[str, Any],
+    json_output: str | Path,
+    markdown_output: str | Path,
+    limit: int = 100,
+    closed_jobs: dict[str, Any] | None = None,
+    include_values: bool = False,
+    allow_local_synthetic_submit: bool = False,
+) -> dict[str, Any]:
+    report = build_fake_position_rehearsal(
+        research,
+        learning_tasks,
+        limit=limit,
+        closed_jobs=closed_jobs,
+        include_values=include_values,
+        allow_local_synthetic_submit=allow_local_synthetic_submit,
+    )
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2), encoding="utf-8")
+    markdown_path.write_text(render_fake_position_rehearsal_markdown(report), encoding="utf-8")
+    return report
+
+
+def render_fake_position_rehearsal_markdown(report: dict[str, Any]) -> str:
+    lines = [
+        "# Fake Position Rehearsal",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        f"Runs: {report.get('run_count', 0)} / {report.get('requested_count', 0)}",
+        f"Execution: {report.get('execution')}",
+        f"Real platform submission: {str(bool(report.get('real_platform_submission'))).lower()}",
+        f"Local synthetic submit allowed: {str(bool(report.get('local_synthetic_submit_allowed'))).lower()}",
+        f"Local synthetic submit count: {report.get('actual_submit_count', 0)}",
+        f"Eligible synthetic submit count: {report.get('eligible_submit_count', 0)} / {report.get('eligible_submit_target_count', 0)}",
+        f"Eligible submit achieved: {str(bool(report.get('eligible_submit_achieved'))).lower()}",
+        f"Selector misses: {report.get('selector_miss_count', 0)}",
+        f"Pre-synthetic missing inputs: {report.get('pre_synthetic_missing_input_count', 0)}",
+        f"Manual security gates: {report.get('pre_synthetic_manual_security_count', 0)}",
+        f"Excluded closed positions: {report.get('excluded_closed_position_count', 0)}",
+        f"Unexpected runs: {report.get('unexpected_run_count', 0)}",
+        "",
+        "## Outcome Counts",
+        "",
+    ]
+    for outcome, count in sorted((report.get("outcome_counts") or {}).items()):
+        lines.append(f"- {outcome}: {count}")
+    lines.extend(["", "## Policy Stop Counts", ""])
+    for stop, count in sorted((report.get("policy_stop_counts") or {}).items()):
+        lines.append(f"- {stop}: {count}")
+    lines.extend(["", "## Platform Counts", ""])
+    for platform, count in sorted((report.get("platform_counts") or {}).items()):
+        lines.append(f"- {platform}: {count}")
+    if report.get("role_family_counts"):
+        lines.extend(["", "## Role Family Counts", ""])
+        for role_family, count in sorted((report.get("role_family_counts") or {}).items()):
+            lines.append(f"- {role_family}: {count}")
+    if report.get("platform_role_family_counts"):
+        lines.extend(["", "## Platform Role Family Counts", ""])
+        for key, count in sorted((report.get("platform_role_family_counts") or {}).items()):
+            lines.append(f"- {key}: {count}")
+    if report.get("unexpected_runs"):
+        lines.extend(["", "## Unexpected Runs", ""])
+        for run in report.get("unexpected_runs", [])[:20]:
+            lines.append(
+                "- {outcome}: {company} - {title} [{platform}; stop={stop}; missing={missing}; misses={misses}]".format(
+                    outcome=run.get("outcome"),
+                    company=run.get("company") or "Unknown company",
+                    title=run.get("job_title") or run.get("title") or "Unknown title",
+                    platform=run.get("platform") or "Unknown",
+                    stop=run.get("policy_stop"),
+                    missing=run.get("pre_synthetic_missing_input_count", 0),
+                    misses=run.get("selector_miss_count", 0),
+                )
+            )
+    lines.extend(["", "## First Runs", ""])
+    for run in report.get("runs", [])[:20]:
+        lines.append(
+            "- {outcome}: {company} - {title} [{platform}; actions={actions}; submit={submit}; stop={stop}]".format(
+                outcome=run.get("outcome"),
+                company=run.get("company") or "Unknown company",
+                title=run.get("job_title") or run.get("title") or "Unknown title",
+                platform=run.get("platform") or "Unknown",
+                actions=run.get("executed_action_count", 0),
+                submit=run.get("actual_submit_count", 0),
+                stop=run.get("policy_stop"),
+            )
+        )
+    return "\n".join(lines) + "\n"
+
+
 def _fake_profile_for_learning_tasks(
     learning_tasks: dict[str, Any],
 ) -> tuple[CandidateProfile, list[str]]:
@@ -4256,6 +4504,261 @@ def _fake_probe_prompt_row(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _research_items_by_position(research: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for item in research.get("items", []) or []:
+        if not isinstance(item, dict):
+            continue
+        position_key = str(item.get("position_key") or "")
+        if not position_key:
+            continue
+        grouped.setdefault(position_key, []).append(item)
+    return grouped
+
+
+def _select_fake_rehearsal_positions(
+    research: dict[str, Any],
+    items_by_position: dict[str, list[dict[str, Any]]],
+    limit: int,
+    closed_jobs: dict[str, Any] | None,
+) -> dict[str, Any]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    excluded_closed: list[dict[str, Any]] = []
+    skipped_no_prompt: list[dict[str, Any]] = []
+
+    for position in research.get("positions", []) or []:
+        if not isinstance(position, dict):
+            continue
+        position_key = str(position.get("position_key") or "")
+        prompt_items = items_by_position.get(position_key, [])
+        if not prompt_items:
+            skipped_no_prompt.append(_fake_rehearsal_position_row(position))
+            continue
+        closed_reason = closed_application_reason(position, closed_jobs=closed_jobs)
+        if closed_reason:
+            row = _fake_rehearsal_position_row(position)
+            row["closed_reason"] = closed_reason
+            excluded_closed.append(row)
+            continue
+        group_key = "{platform}::{role_family}".format(
+            platform=position.get("platform") or "Unknown",
+            role_family=position.get("role_family") or "Other",
+        )
+        grouped.setdefault(group_key, []).append(position)
+
+    selected: list[dict[str, Any]] = []
+    group_keys = sorted(grouped)
+    target = max(int(limit), 0)
+    while len(selected) < target and any(grouped.get(key) for key in group_keys):
+        for key in group_keys:
+            if len(selected) >= target:
+                break
+            if grouped.get(key):
+                selected.append(grouped[key].pop(0))
+
+    return {
+        "selected_positions": selected,
+        "excluded_closed_positions": excluded_closed,
+        "skipped_no_prompt_positions": skipped_no_prompt,
+    }
+
+
+def _observed_position_snapshot(
+    position: dict[str, Any],
+    items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    fields: list[dict[str, Any]] = []
+    buttons: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    field_index = 1
+    for item in items:
+        label = str(item.get("label") or "").strip()
+        normalized = _normalize_question(label)
+        if not label or normalized in seen:
+            continue
+        seen.add(normalized)
+        control = _observed_research_item_control(item, field_index)
+        if _observed_item_is_submit_button(item):
+            buttons.append(control)
+        else:
+            fields.append(control)
+        field_index += 1
+    if not any(_observed_item_is_submit_button(button) for button in buttons):
+        buttons.append(
+            {
+                "i": field_index,
+                "text": "Submit application",
+                "tag": "BUTTON",
+                "required": True,
+            }
+        )
+    title = str(position.get("title") or "Observed role")
+    company = str(position.get("company") or "Observed company")
+    return {
+        "title": f"{company} application",
+        "company": company,
+        "job_title": title,
+        "role_variant": title,
+        "role_family": position.get("role_family") or _infer_role_family(title),
+        "platform": position.get("platform") or infer_platform_from_url(str(position.get("apply_url") or "")) or "Unknown",
+        "url": position.get("apply_url"),
+        "page_text": f"Local fake rehearsal for {title}; original page is not submitted.",
+        "fields": fields,
+        "buttons": buttons,
+    }
+
+
+def _observed_research_item_control(item: dict[str, Any], field_index: int) -> dict[str, Any]:
+    label = str(item.get("label") or "").strip()
+    category = str(item.get("category") or "")
+    tag = _observed_research_item_tag(item)
+    control: dict[str, Any] = {
+        "i": field_index,
+        "label": label,
+        "tag": tag,
+        "required": _truthy(item.get("required")),
+    }
+    if _observed_item_is_submit_button(item):
+        control.pop("label", None)
+        control["text"] = label or "Submit application"
+        control["tag"] = "BUTTON"
+    elif category in {"resume_upload", "cover_letter_upload", "file_upload"}:
+        control["type"] = "file"
+    elif category == "policy_acknowledgement":
+        control["type"] = "checkbox"
+    elif category == "manual_security_step":
+        control["name"] = "g-recaptcha-response"
+    return control
+
+
+def _observed_research_item_tag(item: dict[str, Any]) -> str:
+    category = str(item.get("category") or "")
+    label = _normalize(str(item.get("label") or ""))
+    if _observed_item_is_submit_button(item):
+        return "BUTTON"
+    if category in {"role_specific_free_text", "skills_experience", "technical_experience"}:
+        return "TEXTAREA"
+    if category == "manual_security_step":
+        return "TEXTAREA"
+    if category in {"policy_acknowledgement", "resume_upload", "cover_letter_upload", "file_upload"}:
+        return "INPUT"
+    if any(term in label for term in ["describe", "explain", "why", "details", "tell us"]):
+        return "TEXTAREA"
+    if category in {
+        "authorization",
+        "sponsorship",
+        "relocation",
+        "communication_consent",
+        "citizenship_status",
+        "country_work_permit",
+        "sensitive_demographic",
+    }:
+        return "SELECT"
+    return "INPUT"
+
+
+def _observed_item_is_submit_button(item: dict[str, Any]) -> bool:
+    category = str(item.get("category") or "")
+    label = _normalize(str(item.get("label") or item.get("text") or ""))
+    return category == "final_submit" or label in {
+        "submit",
+        "submit application",
+        "submit my application",
+        "send application",
+        "apply",
+    }
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    text = _normalize(str(value))
+    if text in {"", "0", "false", "no", "none", "null"}:
+        return False
+    return True
+
+
+def _pre_synthetic_stop_counts(manifest: dict[str, Any]) -> dict[str, int]:
+    missing_statuses = {
+        "missing_profile_value",
+        "missing_local_material",
+        "missing_answer",
+        "missing_resume_facts",
+    }
+    stops = [stop for stop in manifest.get("stop_actions", []) if isinstance(stop, dict)]
+    return {
+        "stop_action_count": len(stops),
+        "missing_input_count": sum(1 for stop in stops if str(stop.get("status") or "") in missing_statuses),
+        "manual_security_count": sum(1 for stop in stops if str(stop.get("status") or "") == "manual_security_step"),
+        "sensitive_gate_count": sum(1 for stop in stops if str(stop.get("status") or "") == "sensitive_not_stored"),
+        "final_submit_count": sum(1 for stop in stops if str(stop.get("status") or "") == "final_submit_confirmation"),
+    }
+
+
+def _fake_rehearsal_unexpected_runs(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    expected_policy_stops = {
+        "local_synthetic_submit_allowed",
+        "manual_security_step",
+        "closed_posting",
+        "final_submit_confirmation",
+        "final_submit_not_requested",
+    }
+    unexpected: list[dict[str, Any]] = []
+    for run in runs:
+        if int(run.get("selector_miss_count", 0)):
+            unexpected.append(_fake_rehearsal_run_row(run))
+            continue
+        if int(run.get("pre_synthetic_missing_input_count", 0)):
+            unexpected.append(_fake_rehearsal_run_row(run))
+            continue
+        policy_stop = str(run.get("policy_stop") or "")
+        if policy_stop not in expected_policy_stops:
+            unexpected.append(_fake_rehearsal_run_row(run))
+    return unexpected
+
+
+def _fake_rehearsal_run_row(run: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "index": run.get("index"),
+        "position_key": run.get("position_key"),
+        "platform": run.get("platform"),
+        "company": run.get("company"),
+        "job_title": run.get("job_title") or run.get("title"),
+        "role_family": run.get("role_family"),
+        "apply_url": run.get("apply_url") or run.get("url"),
+        "outcome": run.get("outcome"),
+        "policy_stop": run.get("policy_stop"),
+        "selector_miss_count": run.get("selector_miss_count", 0),
+        "pre_synthetic_missing_input_count": run.get("pre_synthetic_missing_input_count", 0),
+        "pre_synthetic_manual_security_count": run.get("pre_synthetic_manual_security_count", 0),
+    }
+
+
+def _fake_rehearsal_position_row(position: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "position_key": position.get("position_key"),
+        "platform": position.get("platform"),
+        "company": position.get("company"),
+        "title": position.get("title"),
+        "role_family": position.get("role_family"),
+        "apply_url": position.get("apply_url"),
+    }
+
+
+def _platform_role_family_counts(items: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        platform = str(item.get("platform") or "Unknown")
+        role_family = str(item.get("role_family") or "Other")
+        key = f"{platform} | {role_family}"
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
 def build_synthetic_candidate_profile() -> CandidateProfile:
     return CandidateProfile(
         name="Morgan Test",
@@ -4337,6 +4840,10 @@ def build_synthetic_candidate_profile() -> CandidateProfile:
             "policy_acknowledgement": "Yes, I acknowledge.",
             "english_level": "Professional working proficiency in English.",
             "linkedin_profile": "https://www.linkedin.com/in/fake-synthetic-candidate/",
+            "github_profile": "https://github.com/fake-synthetic-candidate",
+            "portfolio": "https://fake-synthetic-candidate.example.com",
+            "website": "https://fake-synthetic-candidate.example.com",
+            "x_profile": "https://x.com/fake_synthetic",
             "resume_path": "/tmp/fake-synthetic-resume.pdf",
         },
     )
@@ -5462,6 +5969,7 @@ def write_question_export(
     source_artifacts: list[dict[str, Any]] | None = None,
     synthetic_browser_execution: dict[str, Any] | None = None,
     fake_learning_probe: dict[str, Any] | None = None,
+    fake_position_rehearsal: dict[str, Any] | None = None,
     answer_memory: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -5474,6 +5982,7 @@ def write_question_export(
         source_artifacts=source_artifacts,
         synthetic_browser_execution=synthetic_browser_execution,
         fake_learning_probe=fake_learning_probe,
+        fake_position_rehearsal=fake_position_rehearsal,
         answer_memory=answer_memory,
         closed_jobs=closed_jobs,
     )
@@ -5496,6 +6005,7 @@ def build_question_export(
     source_artifacts: list[dict[str, Any]] | None = None,
     synthetic_browser_execution: dict[str, Any] | None = None,
     fake_learning_probe: dict[str, Any] | None = None,
+    fake_position_rehearsal: dict[str, Any] | None = None,
     answer_memory: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -5522,6 +6032,7 @@ def build_question_export(
         "count",
     )
     fake_learning_probe_rows = _fake_learning_probe_export_rows(fake_learning_probe)
+    fake_position_rehearsal_rows = _fake_position_rehearsal_export_rows(fake_position_rehearsal)
     answer_memory_rows = _answer_memory_export_rows(answer_memory)
     closed_posting_rows = _closed_posting_export_rows(closed_jobs)
     collection_targets = [
@@ -5581,6 +6092,21 @@ def build_question_export(
         "fake_learning_blockers_cleared": bool(
             (fake_learning_probe or {}).get("learning_blockers_cleared")
         ),
+        "fake_position_rehearsal_runs": int(
+            (fake_position_rehearsal or {}).get("run_count") or 0
+        ),
+        "fake_position_rehearsal_submit_count": int(
+            (fake_position_rehearsal or {}).get("actual_submit_count") or 0
+        ),
+        "fake_position_rehearsal_submit_achieved": bool(
+            (fake_position_rehearsal or {}).get("eligible_submit_achieved")
+        ),
+        "fake_position_rehearsal_missing_inputs": int(
+            (fake_position_rehearsal or {}).get("pre_synthetic_missing_input_count") or 0
+        ),
+        "fake_position_rehearsal_selector_misses": int(
+            (fake_position_rehearsal or {}).get("selector_miss_count") or 0
+        ),
         "real_submit_count": 0,
         "answer_memory_count": len(answer_memory_rows),
         "closed_posting_count": len(closed_posting_rows),
@@ -5593,6 +6119,7 @@ def build_question_export(
         "synthetic_policy_stops": synthetic_policy_stop_rows,
         "synthetic_platform_roles": synthetic_platform_role_rows,
         "fake_learning_probe": fake_learning_probe_rows,
+        "fake_position_rehearsal": fake_position_rehearsal_rows,
         "answer_memory": answer_memory_rows,
         "closed_postings": closed_posting_rows,
         "coverage_counts": gaps.get("coverage_counts", {}),
@@ -5674,6 +6201,18 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                     "Synthetic platform-role target achieved",
                     _yes_no(summary.get("synthetic_platform_role_target_achieved")),
                 ],
+                ["Fake observed-position rehearsal runs", summary.get("fake_position_rehearsal_runs", 0)],
+                [
+                    "Fake observed-position submit count",
+                    "{count} / {target}".format(
+                        count=summary.get("fake_position_rehearsal_submit_count", 0),
+                        target=summary.get("fake_position_rehearsal_runs", 0),
+                    ),
+                ],
+                [
+                    "Fake observed-position submit achieved",
+                    _yes_no(summary.get("fake_position_rehearsal_submit_achieved")),
+                ],
                 ["Local synthetic submit count", summary.get("local_synthetic_submit_count", 0)],
                 [
                     "Eligible synthetic submit count",
@@ -5710,6 +6249,12 @@ def render_question_export_html(export: dict[str, Any]) -> str:
         _html_table(
             ["Metric", "Value"],
             [[row.get("metric"), row.get("value")] for row in export.get("fake_learning_probe", [])],
+        ),
+        "</section>",
+        "<section><h2>Fake Position Rehearsal</h2>",
+        _html_table(
+            ["Metric", "Value"],
+            [[row.get("metric"), row.get("value")] for row in export.get("fake_position_rehearsal", [])],
         ),
         "</section>",
         "<section><h2>Problem Buckets</h2>",
@@ -8932,6 +9477,20 @@ def _answer_value_for_form_field(
             "value": direct,
             "reason": "profile_question_answer",
         }
+    classification = classify_application_prompt(label)
+    if profile and classification.category in {"skills_experience", "technical_experience"}:
+        answer, missing_facts = answer_question(
+            profile,
+            {"title": "this role", "company": "the company"},
+            label,
+        )
+        if not missing_facts and not _has_sensitive_or_unclear_question({label: answer}):
+            return {
+                "available": True,
+                "source": "profile.resume_facts",
+                "value": answer,
+                "reason": "profile_resume_fact_answer",
+            }
     return {
         "available": False,
         "source": "answer_memory",
@@ -11776,6 +12335,43 @@ def _fake_learning_probe_export_rows(fake_learning_probe: dict[str, Any] | None)
     return [{"metric": key, "value": value} for key, value in metrics.items()]
 
 
+def _fake_position_rehearsal_export_rows(fake_position_rehearsal: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not fake_position_rehearsal:
+        return []
+    metrics = {
+        "generated_at": fake_position_rehearsal.get("generated_at"),
+        "execution": fake_position_rehearsal.get("execution"),
+        "requested_count": fake_position_rehearsal.get("requested_count"),
+        "run_count": fake_position_rehearsal.get("run_count"),
+        "real_platform_submission": fake_position_rehearsal.get("real_platform_submission"),
+        "local_synthetic_submit_allowed": fake_position_rehearsal.get("local_synthetic_submit_allowed"),
+        "actual_submit_count": fake_position_rehearsal.get("actual_submit_count"),
+        "eligible_submit_target_count": fake_position_rehearsal.get("eligible_submit_target_count"),
+        "eligible_submit_count": fake_position_rehearsal.get("eligible_submit_count"),
+        "eligible_submit_achieved": fake_position_rehearsal.get("eligible_submit_achieved"),
+        "selector_miss_count": fake_position_rehearsal.get("selector_miss_count"),
+        "pre_synthetic_missing_input_count": fake_position_rehearsal.get("pre_synthetic_missing_input_count"),
+        "pre_synthetic_manual_security_count": fake_position_rehearsal.get("pre_synthetic_manual_security_count"),
+        "pre_synthetic_sensitive_gate_count": fake_position_rehearsal.get("pre_synthetic_sensitive_gate_count"),
+        "pre_synthetic_final_submit_count": fake_position_rehearsal.get("pre_synthetic_final_submit_count"),
+        "excluded_closed_position_count": fake_position_rehearsal.get("excluded_closed_position_count"),
+        "skipped_no_prompt_position_count": fake_position_rehearsal.get("skipped_no_prompt_position_count"),
+        "unexpected_run_count": fake_position_rehearsal.get("unexpected_run_count"),
+        "fake_answer_memory_entry_count": fake_position_rehearsal.get("fake_answer_memory_entry_count"),
+        "fake_category_policy_count": fake_position_rehearsal.get("fake_category_policy_count"),
+    }
+    rows = [{"metric": key, "value": value} for key, value in metrics.items()]
+    for prefix, values in [
+        ("outcome", fake_position_rehearsal.get("outcome_counts") or {}),
+        ("policy_stop", fake_position_rehearsal.get("policy_stop_counts") or {}),
+        ("platform", fake_position_rehearsal.get("platform_counts") or {}),
+        ("role_family", fake_position_rehearsal.get("role_family_counts") or {}),
+    ]:
+        for key, value in sorted(values.items()):
+            rows.append({"metric": f"{prefix}:{key}", "value": value})
+    return rows
+
+
 def _answer_memory_export_rows(answer_memory: dict[str, Any] | None) -> list[dict[str, Any]]:
     if not answer_memory:
         return []
@@ -11957,6 +12553,7 @@ def _write_question_export_xlsx(export: dict[str, Any], path: Path) -> None:
         ("Synthetic Stops", _table_rows(export.get("synthetic_policy_stops", []))),
         ("Synthetic Roles", _table_rows(export.get("synthetic_platform_roles", []))),
         ("Fake Learning Probe", _table_rows(export.get("fake_learning_probe", []))),
+        ("Fake Position Rehearsal", _table_rows(export.get("fake_position_rehearsal", []))),
         ("Problem Buckets", _table_rows(export.get("problem_buckets", []))),
         ("User Questions", _table_rows(export.get("user_questions", []))),
         ("Blocking Prompts", _table_rows(export.get("blocker_rows", []))),

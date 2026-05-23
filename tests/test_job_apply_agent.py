@@ -25,6 +25,7 @@ from job_apply_agent.core import (
     build_browser_review_record,
     build_form_fill_plan,
     build_fake_learning_probe,
+    build_fake_position_rehearsal,
     build_learning_task_template,
     build_pre_submit_review,
     build_position_readiness_report,
@@ -71,6 +72,7 @@ from job_apply_agent.core import (
     render_browser_dom_execution_plan_markdown,
     render_form_fill_plan_markdown,
     render_fake_learning_probe_markdown,
+    render_fake_position_rehearsal_markdown,
     render_learning_task_template_markdown,
     render_pre_submit_review_markdown,
     render_position_readiness_markdown,
@@ -99,6 +101,7 @@ from job_apply_agent.core import (
     write_browser_dom_harness,
     write_form_fill_plan,
     write_fake_learning_probe,
+    write_fake_position_rehearsal,
     write_learning_task_template,
     write_pre_submit_review,
     write_position_readiness_report,
@@ -3746,6 +3749,139 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(report["remaining_learning_blocker_count"], 0)
             self.assertIn("Fake Learning Probe", markdown_output.read_text())
 
+    def test_fake_position_rehearsal_runs_observed_prompts_locally(self) -> None:
+        research = {
+            "generated_at": "2026-05-22T00:00:00+00:00",
+            "positions_observed_total": 2,
+            "positions": [
+                {
+                    "position_key": "linkedin:4410000001",
+                    "platform": "LinkedIn",
+                    "job_id": "4410000001",
+                    "company": "OpenCo",
+                    "title": "Site Reliability Engineer",
+                    "role_family": "Site Reliability",
+                    "apply_url": "https://www.linkedin.com/jobs/view/4410000001/",
+                },
+                {
+                    "position_key": "linkedin:4415508499",
+                    "platform": "LinkedIn",
+                    "job_id": "4415508499",
+                    "company": "ClosedCo",
+                    "title": "Cloud Engineer",
+                    "role_family": "Cloud DevOps",
+                    "apply_url": "https://www.linkedin.com/jobs/view/4415508499/",
+                },
+            ],
+            "items": [
+                {
+                    "position_key": "linkedin:4410000001",
+                    "label": "Resume/CV",
+                    "category": "resume_upload",
+                    "automation_action": "auto_fill_from_profile",
+                    "required": True,
+                    "platform": "LinkedIn",
+                    "source_file": "observed.json",
+                },
+                {
+                    "position_key": "linkedin:4410000001",
+                    "label": "What is your expected compensation range?",
+                    "category": "compensation",
+                    "automation_action": "auto_answer_from_memory",
+                    "required": True,
+                    "platform": "LinkedIn",
+                    "source_file": "observed.json",
+                },
+                {
+                    "position_key": "linkedin:4410000001",
+                    "label": "Submit application",
+                    "category": "final_submit",
+                    "automation_action": "human_review_required",
+                    "required": True,
+                    "platform": "LinkedIn",
+                    "source_file": "observed.json",
+                },
+                {
+                    "position_key": "linkedin:4415508499",
+                    "label": "What is your expected compensation range?",
+                    "category": "compensation",
+                    "automation_action": "auto_answer_from_memory",
+                    "required": True,
+                    "platform": "LinkedIn",
+                    "source_file": "observed.json",
+                },
+            ],
+        }
+        closed_jobs = {
+            "jobs": [
+                {
+                    "key": "linkedin:4415508499",
+                    "status": "CLOSED",
+                    "reason": "No longer accepting applications",
+                }
+            ]
+        }
+
+        report = build_fake_position_rehearsal(
+            research,
+            {"task_count": 0, "tasks": []},
+            limit=2,
+            closed_jobs=closed_jobs,
+            allow_local_synthetic_submit=True,
+        )
+
+        self.assertFalse(report["real_platform_submission"])
+        self.assertEqual(report["run_count"], 1)
+        self.assertEqual(report["excluded_closed_position_count"], 1)
+        self.assertEqual(report["pre_synthetic_missing_input_count"], 0)
+        self.assertEqual(report["selector_miss_count"], 0)
+        self.assertEqual(report["actual_submit_count"], 1)
+        self.assertTrue(report["eligible_submit_achieved"])
+        self.assertEqual(report["policy_stop_counts"]["local_synthetic_submit_allowed"], 1)
+        self.assertIn("Fake Position Rehearsal", render_fake_position_rehearsal_markdown(report))
+
+    def test_write_fake_position_rehearsal_outputs_reports(self) -> None:
+        research = {
+            "positions": [
+                {
+                    "position_key": "greenhouse:1",
+                    "platform": "Greenhouse",
+                    "company": "ExampleCo",
+                    "title": "Platform Engineer",
+                    "role_family": "Platform Infrastructure",
+                    "apply_url": "https://job-boards.greenhouse.io/example/jobs/1",
+                }
+            ],
+            "items": [
+                {
+                    "position_key": "greenhouse:1",
+                    "label": "First Name",
+                    "category": "profile_identity",
+                    "automation_action": "auto_fill_from_profile",
+                    "required": True,
+                    "platform": "Greenhouse",
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            json_output = Path(temp_dir) / "rehearsal.json"
+            markdown_output = Path(temp_dir) / "rehearsal.md"
+
+            report = write_fake_position_rehearsal(
+                research,
+                {"task_count": 0, "tasks": []},
+                json_output,
+                markdown_output,
+                limit=1,
+                allow_local_synthetic_submit=True,
+            )
+
+            self.assertTrue(json_output.exists())
+            self.assertTrue(markdown_output.exists())
+            self.assertEqual(report["run_count"], 1)
+            self.assertEqual(report["actual_submit_count"], 1)
+            self.assertIn("Fake Position Rehearsal", markdown_output.read_text())
+
     def test_synthetic_application_simulation_never_submits_real_applications(self) -> None:
         report = run_synthetic_application_simulation(count=20)
 
@@ -5284,6 +5420,22 @@ class JobApplyAgentTests(unittest.TestCase):
             "remaining_manual_gate_count": 2,
             "learning_blockers_cleared": True,
         }
+        fake_position_rehearsal = {
+            "generated_at": "2026-05-22T00:00:00+00:00",
+            "execution": "observed_prompt_local_browser_manifest_executor",
+            "requested_count": 100,
+            "run_count": 100,
+            "real_platform_submission": False,
+            "local_synthetic_submit_allowed": True,
+            "actual_submit_count": 100,
+            "eligible_submit_target_count": 100,
+            "eligible_submit_count": 100,
+            "eligible_submit_achieved": True,
+            "selector_miss_count": 0,
+            "pre_synthetic_missing_input_count": 0,
+            "policy_stop_counts": {"local_synthetic_submit_allowed": 100},
+            "platform_counts": {"Greenhouse": 100},
+        }
         answer_memory = {
             "answers": [
                 {
@@ -5319,6 +5471,7 @@ class JobApplyAgentTests(unittest.TestCase):
             source_artifacts=source_artifacts,
             synthetic_browser_execution=synthetic_browser_execution,
             fake_learning_probe=fake_learning_probe,
+            fake_position_rehearsal=fake_position_rehearsal,
             answer_memory=answer_memory,
             closed_jobs=closed_jobs,
         )
@@ -5329,6 +5482,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Source Artifacts", html)
         self.assertIn("Synthetic Browser Execution", html)
         self.assertIn("Fake Learning Probe", html)
+        self.assertIn("Fake Position Rehearsal", html)
+        self.assertIn("observed_prompt_local_browser_manifest_executor", html)
         self.assertIn("learning_blockers_cleared", html)
         self.assertIn("Closed Posting Registry", html)
         self.assertIn("Answer Memory Index", html)
@@ -5354,6 +5509,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 source_artifacts=source_artifacts,
                 synthetic_browser_execution=synthetic_browser_execution,
                 fake_learning_probe=fake_learning_probe,
+                fake_position_rehearsal=fake_position_rehearsal,
                 answer_memory=answer_memory,
                 closed_jobs=closed_jobs,
             )
@@ -5370,20 +5526,22 @@ class JobApplyAgentTests(unittest.TestCase):
                 self.assertIn("xl/worksheets/sheet1.xml", names)
                 self.assertIn("xl/worksheets/sheet2.xml", names)
                 self.assertIn("xl/worksheets/sheet7.xml", names)
-                self.assertIn("xl/worksheets/sheet18.xml", names)
+                self.assertIn("xl/worksheets/sheet19.xml", names)
                 source_sheet = workbook.read("xl/worksheets/sheet2.xml").decode("utf-8")
                 self.assertIn("Answer gaps", source_sheet)
                 synthetic_sheet = workbook.read("xl/worksheets/sheet3.xml").decode("utf-8")
                 self.assertIn("local_synthetic_browser_action_executor", synthetic_sheet)
                 fake_probe = workbook.read("xl/worksheets/sheet6.xml").decode("utf-8")
                 self.assertIn("learning_blockers_cleared", fake_probe)
-                problem_buckets = workbook.read("xl/worksheets/sheet7.xml").decode("utf-8")
+                fake_position = workbook.read("xl/worksheets/sheet7.xml").decode("utf-8")
+                self.assertIn("observed_prompt_local_browser_manifest_executor", fake_position)
+                problem_buckets = workbook.read("xl/worksheets/sheet8.xml").decode("utf-8")
                 self.assertIn("needs_user_confirmation", problem_buckets)
-                user_questions = workbook.read("xl/worksheets/sheet8.xml").decode("utf-8")
+                user_questions = workbook.read("xl/worksheets/sheet9.xml").decode("utf-8")
                 self.assertIn("Have you worked at DoorDash?", user_questions)
-                platform_shortfalls = workbook.read("xl/worksheets/sheet13.xml").decode("utf-8")
+                platform_shortfalls = workbook.read("xl/worksheets/sheet14.xml").decode("utf-8")
                 self.assertIn("Greenhouse", platform_shortfalls)
-                closed_postings = workbook.read("xl/worksheets/sheet18.xml").decode("utf-8")
+                closed_postings = workbook.read("xl/worksheets/sheet19.xml").decode("utf-8")
                 self.assertIn("No longer accepting applications", closed_postings)
 
 
