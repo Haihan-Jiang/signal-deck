@@ -1144,6 +1144,11 @@ def main() -> int:
     final_answer_blockers_parser.add_argument("--telegram-env", default=None)
     final_answer_blockers_parser.add_argument("--telegram-dry-run", action="store_true")
     final_answer_blockers_parser.add_argument("--limit", type=int, default=6)
+    final_answer_blockers_parser.add_argument(
+        "--print-minimal-reply",
+        action="store_true",
+        help="print only the shortest fill-in reply shape to stdout after writing reports",
+    )
 
     final_answer_reply_parser = subparsers.add_parser(
         "final-answer-reply",
@@ -3186,6 +3191,10 @@ def main() -> int:
         print(f"Blockers: {summary.get('blocker_count', 0)}")
         print(f"Missing answers: {summary.get('missing_answer_count', 0)}")
         print(f"Unconfirmed high-risk: {summary.get('unconfirmed_high_risk_count', 0)}")
+        if args.print_minimal_reply:
+            minimal_reply = str(report.get("minimal_reply_prompt") or "").strip()
+            print("Minimal final-answer reply:")
+            print(minimal_reply or "No final-answer blockers remain.")
         if args.notify_telegram:
             result = notify_telegram_for_final_answer_blockers(
                 report,

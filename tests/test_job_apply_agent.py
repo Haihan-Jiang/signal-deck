@@ -7598,6 +7598,44 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertIn("answer text stored: false", notified_markdown)
             self.assertNotIn("Sensitive citizenship answer phrase 12345", json.dumps(notified))
             self.assertNotIn("Sensitive citizenship answer phrase 12345", notified_markdown)
+            template_path = root / "template.json"
+            goal_path = root / "goal.json"
+            cli_json_output = root / "cli_blockers.json"
+            cli_markdown_output = root / "cli_blockers.md"
+            cli_reply_template_output = root / "cli_reply.txt"
+            template_path.write_text(json.dumps(template, ensure_ascii=True, indent=2), encoding="utf-8")
+            goal_path.write_text(json.dumps(goal_audit, ensure_ascii=True, indent=2), encoding="utf-8")
+            cli_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "job_apply_agent",
+                    "final-answer-blockers",
+                    "--template",
+                    str(template_path),
+                    "--goal-audit",
+                    str(goal_path),
+                    "--json-output",
+                    str(cli_json_output),
+                    "--markdown-output",
+                    str(cli_markdown_output),
+                    "--reply-template-output",
+                    str(cli_reply_template_output),
+                    "--print-minimal-reply",
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(cli_result.returncode, 0, cli_result.stderr)
+            self.assertIn("Minimal final-answer reply:", cli_result.stdout)
+            self.assertIn("\u6211\u7684\u516c\u6c11\u8eab\u4efd\u662f<fill>", cli_result.stdout)
+            self.assertIn("\u4ee5\u4e0a\u786e\u8ba4", cli_result.stdout)
+            self.assertNotIn("Sensitive citizenship answer phrase 12345", cli_result.stdout)
+            self.assertTrue(cli_json_output.exists())
+            self.assertTrue(cli_markdown_output.exists())
+            self.assertTrue(cli_reply_template_output.exists())
 
     def test_final_answer_reply_text_builds_ready_intake_without_markdown_answer_text(self) -> None:
         unblockers = {
