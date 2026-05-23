@@ -15596,7 +15596,8 @@ def _automation_handoff_confirmed_answer_runbook(summary: dict[str, Any]) -> lis
             "step": 3,
             "name": "Run safe post-answer preflight",
             "status": "ready_after_confirmation" if final_blanks else "ready",
-            "action": f"python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --run-post-answer-pipeline --fail-on-not-ready",
+            "action": "python3 -m job_apply_agent resume-after-answers --reply-text '<filled final-answer lines>'",
+            "alternate_action": f"python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --run-post-answer-pipeline --fail-on-not-ready",
             "expected_result": "The reply is parsed, merged with the prefilled drafts, and verified without writing profile or answer memory.",
         },
         {
@@ -15656,6 +15657,7 @@ def _automation_handoff_next_commands(summary: dict[str, Any]) -> list[str]:
         _automation_handoff_one_command_resume(summary),
         "python3 -m job_apply_agent final-answer-blockers --notify-telegram --telegram-dry-run",
         "python3 -m job_apply_agent rehearse-after-answers",
+        "python3 -m job_apply_agent resume-after-answers --reply-text '<filled final-answer lines>'",
         f"python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --run-post-answer-pipeline --fail-on-not-ready",
         "python3 -m job_apply_agent resume-after-answers",
         "python3 -m job_apply_agent resume-after-answers --open-browser --open-limit 100",
@@ -20479,6 +20481,7 @@ def build_final_answer_blocker_report(
         "reply_template_lines": reply_template_lines,
         "next_commands": [
             "python3 -m job_apply_agent rehearse-after-answers",
+            "python3 -m job_apply_agent resume-after-answers --reply-text '<filled final-answer lines>'",
             f"python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --run-post-answer-pipeline --fail-on-not-ready",
             "python3 -m job_apply_agent resume-after-answers",
             "python3 -m job_apply_agent final-answer-intake-server --open-browser --once --run-post-answer-pipeline --post-answer-apply --post-answer-live-check --post-answer-include-values",

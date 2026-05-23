@@ -7045,8 +7045,9 @@ class JobApplyAgentTests(unittest.TestCase):
         )
         reply_template_text = render_final_answer_reply_template_text(report)
         self.assertIn("rehearse-after-answers", report["next_commands"][0])
-        self.assertIn("--run-post-answer-pipeline", report["next_commands"][1])
-        self.assertIn("resume-after-answers", report["next_commands"][2])
+        self.assertIn("resume-after-answers --reply-text", report["next_commands"][1])
+        self.assertIn("--run-post-answer-pipeline", report["next_commands"][2])
+        self.assertIn("resume-after-answers", report["next_commands"][3])
         self.assertIn("Final Answer Blockers", markdown)
         self.assertIn("citizenship_status", markdown)
         self.assertIn("Example Shape", markdown)
@@ -7281,6 +7282,17 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(post_answer_report["ready_for_workflow"])
             self.assertFalse(post_answer_report["apply_requested"])
             self.assertIn("Wrote final answer intake payload JSON", cli_result.stdout)
+
+            resume_help = subprocess.run(
+                [sys.executable, "-m", "job_apply_agent", "resume-after-answers", "--help"],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(resume_help.returncode, 0, resume_help.stderr)
+            self.assertIn("--reply-text", resume_help.stdout)
+            self.assertIn("--reply-file", resume_help.stdout)
 
     def test_final_answer_reply_accepts_chinese_colon_and_confirmations(self) -> None:
         unblockers = {
@@ -9161,15 +9173,16 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("resume-after-answers", report["next_commands"][0])
         self.assertIn("final-answer-blockers", report["next_commands"][1])
         self.assertIn("rehearse-after-answers", report["next_commands"][2])
-        self.assertIn("final-answer-reply --reply-file", report["next_commands"][3])
-        self.assertIn("job_apply_agent/outbox/final_answer_reply_template_latest.txt", report["next_commands"][3])
-        self.assertIn("--run-post-answer-pipeline", report["next_commands"][3])
-        self.assertIn("resume-after-answers", report["next_commands"][4])
+        self.assertIn("resume-after-answers --reply-text", report["next_commands"][3])
+        self.assertIn("final-answer-reply --reply-file", report["next_commands"][4])
+        self.assertIn("job_apply_agent/outbox/final_answer_reply_template_latest.txt", report["next_commands"][4])
+        self.assertIn("--run-post-answer-pipeline", report["next_commands"][4])
         self.assertIn("resume-after-answers", report["next_commands"][5])
-        self.assertIn("--open-browser", report["next_commands"][5])
-        self.assertIn("post-answer-pipeline --synthetic-final-answers --synthetic-rehearse-queue", report["next_commands"][6])
-        self.assertIn("post-answer-pipeline --fail-on-not-ready", report["next_commands"][7])
-        self.assertIn("post-answer-pipeline --apply --live-check", report["next_commands"][8])
+        self.assertIn("resume-after-answers", report["next_commands"][6])
+        self.assertIn("--open-browser", report["next_commands"][6])
+        self.assertIn("post-answer-pipeline --synthetic-final-answers --synthetic-rehearse-queue", report["next_commands"][7])
+        self.assertIn("post-answer-pipeline --fail-on-not-ready", report["next_commands"][8])
+        self.assertIn("post-answer-pipeline --apply --live-check", report["next_commands"][9])
         self.assertIn("closed-preflight --jobs", " ".join(report["next_commands"]))
         self.assertEqual(report["answer_impact_queue"][0]["input_id"], "answer_memory_citizenship_status_default_policy")
         self.assertEqual(report["final_answer_intake"][0]["alias"], "citizenship_status")

@@ -1160,6 +1160,11 @@ def main() -> int:
         "--reply-file",
         default=str(DEFAULT_FINAL_ANSWER_REPLY_TEMPLATE_TEXT),
     )
+    resume_after_answers_parser.add_argument(
+        "--reply-text",
+        default=None,
+        help="filled final-answer lines; when provided, it is used instead of --reply-file",
+    )
     resume_after_answers_parser.add_argument("--live-check-limit", type=int, default=100)
     resume_after_answers_parser.add_argument("--live-check-timeout", type=float, default=25.0)
     resume_after_answers_parser.add_argument("--open-browser", action="store_true")
@@ -2918,10 +2923,13 @@ def main() -> int:
         return 0
 
     if args.command == "resume-after-answers":
+        resume_reply_text = getattr(args, "reply_text", None)
+        resume_reply_file = None if resume_reply_text else args.reply_file
         args.command = "final-answer-reply"
         args.template = str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON)
         args.unblockers = str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_JSON)
-        args.reply_text = None
+        args.reply_text = resume_reply_text
+        args.reply_file = resume_reply_file
         args.json_output = str(DEFAULT_FINAL_ANSWER_REPLY_JSON)
         args.markdown_output = str(DEFAULT_FINAL_ANSWER_REPLY_MARKDOWN)
         args.intake_output = str(DEFAULT_FINAL_ANSWER_REPLY_PAYLOAD_JSON)
