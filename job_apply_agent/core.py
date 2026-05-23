@@ -6931,6 +6931,326 @@ def render_fake_position_rehearsal_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def build_autofill_batch_plan(
+    research: dict[str, Any],
+    readiness: dict[str, Any],
+    profile: CandidateProfile | None = None,
+    answer_memory: dict[str, Any] | None = None,
+    closed_jobs: dict[str, Any] | None = None,
+    limit: int = 100,
+    include_values: bool = False,
+) -> dict[str, Any]:
+    items_by_position = _research_items_by_position(research)
+    selection = _select_autofill_batch_positions(
+        readiness,
+        items_by_position,
+        limit=len(readiness.get("positions", []) or []),
+        closed_jobs=closed_jobs,
+    )
+    selected_runs: list[dict[str, Any]] = []
+    blocked_candidates: list[dict[str, Any]] = []
+    requested_count = max(int(limit), 0)
+    if requested_count == 0:
+        selection["selected_positions"] = []
+    for position in selection["selected_positions"]:
+        position_key = str(position.get("position_key") or "")
+        position_items = items_by_position.get(position_key, [])
+        snapshot = _observed_position_snapshot(position, position_items)
+        plan = build_form_fill_plan(
+            snapshot,
+            profile=profile,
+            answer_memory=answer_memory,
+            include_values=include_values,
+        )
+        manifest = build_browser_action_manifest(
+            plan,
+            page_text=str(snapshot.get("page_text") or ""),
+            closed_jobs=closed_jobs,
+            include_values=include_values,
+        )
+        local_check = execute_browser_action_manifest_locally(
+            manifest,
+            snapshot,
+            allow_local_synthetic_submit=False,
+        )
+        run = {
+            "index": 0,
+            "position_key": position_key,
+            "platform": position.get("platform"),
+            "company": position.get("company"),
+            "title": position.get("title"),
+            "role_family": position.get("role_family"),
+            "apply_url": position.get("apply_url"),
+            "readiness": position.get("readiness"),
+            "ready_for_autofill": bool(position.get("ready_for_autofill")),
+            "prompt_count": len(position_items),
+            "required_prompt_count": int(position.get("required_prompt_count") or 0),
+            "covered_prompt_count": int(position.get("covered_prompt_count") or 0),
+            "plan_status_counts": plan.get("status_counts", {}),
+            "manifest_status": manifest.get("status"),
+            "autofill_allowed": bool(manifest.get("autofill_allowed")),
+            "browser_action_count": int(manifest.get("action_count") or 0),
+            "stop_action_count": int(manifest.get("stop_action_count") or 0),
+            "stop_action_statuses": sorted(
+                {
+                    str(action.get("status") or "")
+                    for action in manifest.get("stop_actions") or []
+                    if str(action.get("status") or "")
+                }
+            ),
+            "local_check_outcome": local_check.get("outcome"),
+            "local_check_policy_stop": local_check.get("policy_stop"),
+            "local_check_executed_action_count": int(local_check.get("executed_action_count") or 0),
+            "local_check_selector_miss_count": int(local_check.get("selector_miss_count") or 0),
+            "would_submit": bool(manifest.get("would_submit")),
+            "real_platform_submission": False,
+        }
+        if run["autofill_allowed"]:
+            run["index"] = len(selected_runs) + 1
+            selected_runs.append(run)
+        else:
+            run["index"] = len(blocked_candidates) + 1
+            blocked_candidates.append(run)
+        if len(selected_runs) >= requested_count:
+            break
+
+    runs = selected_runs
+    selector_miss_count = sum(int(run.get("local_check_selector_miss_count") or 0) for run in runs)
+    blocked_missing_count = sum(
+        1 for run in blocked_candidates if run.get("manifest_status") == "blocked_missing_inputs"
+    )
+    manual_gate_count = sum(
+        1
+        for run in runs
+        if str(run.get("manifest_status") or "") == "autofill_ready_with_supervised_gates"
+    )
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "autofill_batch_plan",
+        "requested_count": requested_count,
+        "selected_count": len(runs),
+        "selected_autofill_allowed_count": len(runs),
+        "candidate_evaluated_count": len(runs) + len(blocked_candidates),
+        "blocked_candidate_count": len(blocked_candidates),
+        "blocked_missing_input_position_count": blocked_missing_count,
+        "supervised_gate_position_count": manual_gate_count,
+        "selector_miss_count": selector_miss_count,
+        "real_platform_submission": False,
+        "would_submit_count": sum(1 for run in runs if bool(run.get("would_submit"))),
+        "browser_action_count": sum(int(run.get("browser_action_count") or 0) for run in runs),
+        "stop_action_count": sum(int(run.get("stop_action_count") or 0) for run in runs),
+        "source_position_count": len(readiness.get("positions", []) or []),
+        "ready_source_position_count": int(selection.get("ready_source_position_count") or 0),
+        "excluded_closed_position_count": len(selection["excluded_closed_positions"]),
+        "skipped_no_prompt_position_count": len(selection["skipped_no_prompt_positions"]),
+        "skipped_not_ready_position_count": int(selection.get("skipped_not_ready_position_count") or 0),
+        "include_values": bool(include_values),
+        "platform_counts": _count_by(runs, "platform"),
+        "role_family_counts": _count_by(runs, "role_family"),
+        "platform_role_family_counts": _platform_role_family_counts(runs),
+        "manifest_status_counts": _count_by(runs, "manifest_status"),
+        "local_outcome_counts": _count_by(runs, "local_check_outcome"),
+        "local_policy_stop_counts": _count_by(runs, "local_check_policy_stop"),
+        "first_urls": [
+            {
+                "index": run.get("index"),
+                "company": run.get("company"),
+                "title": run.get("title"),
+                "platform": run.get("platform"),
+                "apply_url": run.get("apply_url"),
+            }
+            for run in runs[:100]
+        ],
+        "positions": runs,
+        "blocked_candidates": blocked_candidates[:100],
+        "excluded_closed_positions": selection["excluded_closed_positions"][:100],
+        "skipped_no_prompt_positions": selection["skipped_no_prompt_positions"][:100],
+        "policy": {
+            "real_platform_submission": False,
+            "remote_employer_final_submit_blocked": True,
+            "final_submit_requires_explicit_user_confirmation": True,
+            "captcha_or_security_not_bypassed": True,
+            "closed_jobs_excluded_before_batch": True,
+            "include_values": bool(include_values),
+        },
+        "next_commands": [
+            "python3 -m job_apply_agent critical-inputs-workflow --updates <confirmed_answers.json> --approve --apply",
+            "python3 -m job_apply_agent autofill-batch --limit 100",
+            "python3 -m job_apply_agent pre-submit-review --outbox-dir job_apply_agent/outbox",
+        ],
+    }
+
+
+def write_autofill_batch_plan(
+    research: dict[str, Any],
+    readiness: dict[str, Any],
+    json_output: str | Path,
+    markdown_output: str | Path,
+    html_output: str | Path,
+    profile: CandidateProfile | None = None,
+    answer_memory: dict[str, Any] | None = None,
+    closed_jobs: dict[str, Any] | None = None,
+    limit: int = 100,
+    include_values: bool = False,
+) -> dict[str, Any]:
+    report = build_autofill_batch_plan(
+        research,
+        readiness,
+        profile=profile,
+        answer_memory=answer_memory,
+        closed_jobs=closed_jobs,
+        limit=limit,
+        include_values=include_values,
+    )
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    html_path = Path(html_output)
+    for path in [json_path, markdown_path, html_path]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(render_autofill_batch_plan_markdown(report), encoding="utf-8")
+    html_path.write_text(render_autofill_batch_plan_html(report), encoding="utf-8")
+    return report
+
+
+def render_autofill_batch_plan_markdown(report: dict[str, Any]) -> str:
+    lines = [
+        "# Autofill Batch Plan",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        f"Selected: {report.get('selected_count', 0)} / {report.get('requested_count', 0)}",
+        f"Candidates evaluated: {report.get('candidate_evaluated_count', 0)}",
+        f"Blocked candidates skipped: {report.get('blocked_candidate_count', 0)}",
+        f"Autofill allowed positions: {report.get('selected_autofill_allowed_count', 0)}",
+        f"Blocked missing-input positions: {report.get('blocked_missing_input_position_count', 0)}",
+        f"Supervised-gate positions: {report.get('supervised_gate_position_count', 0)}",
+        f"Browser actions: {report.get('browser_action_count', 0)}",
+        f"Stop actions: {report.get('stop_action_count', 0)}",
+        f"Selector misses: {report.get('selector_miss_count', 0)}",
+        f"Real platform submission: {str(bool(report.get('real_platform_submission'))).lower()}",
+        f"Would submit: {report.get('would_submit_count', 0)}",
+        "",
+        "## Manifest Status Counts",
+        "",
+    ]
+    for status, count in sorted((report.get("manifest_status_counts") or {}).items()):
+        lines.append(f"- {status}: {count}")
+    lines.extend(["", "## Platform Counts", ""])
+    for platform, count in sorted((report.get("platform_counts") or {}).items()):
+        lines.append(f"- {platform}: {count}")
+    if report.get("role_family_counts"):
+        lines.extend(["", "## Role Family Counts", ""])
+        for role_family, count in sorted((report.get("role_family_counts") or {}).items()):
+            lines.append(f"- {role_family}: {count}")
+    lines.extend(["", "## First Positions", ""])
+    for run in report.get("positions", [])[:40]:
+        lines.append(
+            "- {index}. {company} - {title} [{platform}; {role}; status={status}; actions={actions}; stops={stops}]".format(
+                index=run.get("index"),
+                company=run.get("company") or "Unknown company",
+                title=run.get("title") or "Unknown title",
+                platform=run.get("platform") or "Unknown",
+                role=run.get("role_family") or "Other",
+                status=run.get("manifest_status"),
+                actions=run.get("browser_action_count", 0),
+                stops=run.get("stop_action_count", 0),
+            )
+        )
+        if run.get("apply_url"):
+            lines.append(f"  url: {run.get('apply_url')}")
+    lines.extend(["", "## Policy", ""])
+    for key, value in sorted((report.get("policy") or {}).items()):
+        lines.append(f"- {key}: {str(value).lower() if isinstance(value, bool) else value}")
+    lines.extend(["", "## Next Commands", ""])
+    for command in report.get("next_commands") or []:
+        lines.append(f"- `{command}`")
+    return "\n".join(lines) + "\n"
+
+
+def render_autofill_batch_plan_html(report: dict[str, Any]) -> str:
+    positions = report.get("positions") or []
+    position_rows = [
+        [
+            run.get("index"),
+            run.get("platform"),
+            run.get("company"),
+            run.get("title"),
+            run.get("role_family"),
+            run.get("manifest_status"),
+            run.get("browser_action_count", 0),
+            run.get("stop_action_count", 0),
+            run.get("local_check_outcome"),
+            run.get("apply_url"),
+        ]
+        for run in positions
+    ]
+    status_rows = [
+        [status, count] for status, count in sorted((report.get("manifest_status_counts") or {}).items())
+    ]
+    platform_rows = [
+        [platform, count] for platform, count in sorted((report.get("platform_counts") or {}).items())
+    ]
+    return "\n".join(
+        [
+            "<!doctype html>",
+            '<html lang="en">',
+            "<head>",
+            '<meta charset="utf-8">',
+            '<meta name="viewport" content="width=device-width, initial-scale=1">',
+            "<title>Autofill Batch Plan</title>",
+            "<style>",
+            _question_export_css(),
+            "</style>",
+            "</head>",
+            "<body>",
+            "<main>",
+            "<h1>Autofill Batch Plan</h1>",
+            f"<p class=\"muted\">Generated: {_html_escape(report.get('generated_at'))}</p>",
+            _html_kpis(
+                [
+                    ("Selected", f"{report.get('selected_count', 0)} / {report.get('requested_count', 0)}"),
+                    ("Evaluated", report.get("candidate_evaluated_count", 0)),
+                    ("Skipped blocked", report.get("blocked_candidate_count", 0)),
+                    ("Autofill allowed", report.get("selected_autofill_allowed_count", 0)),
+                    ("Browser actions", report.get("browser_action_count", 0)),
+                    ("Stop actions", report.get("stop_action_count", 0)),
+                    ("Selector misses", report.get("selector_miss_count", 0)),
+                    ("Real submits", report.get("would_submit_count", 0)),
+                ]
+            ),
+            "<section><h2>Manifest Status Counts</h2>",
+            _html_table(["Status", "Count"], status_rows),
+            "</section>",
+            "<section><h2>Platform Counts</h2>",
+            _html_table(["Platform", "Count"], platform_rows),
+            "</section>",
+            "<section><h2>Positions</h2>",
+            _html_table(
+                [
+                    "#",
+                    "Platform",
+                    "Company",
+                    "Title",
+                    "Role",
+                    "Manifest status",
+                    "Actions",
+                    "Stops",
+                    "Local check",
+                    "Apply URL",
+                ],
+                position_rows,
+            ),
+            "</section>",
+            "<section><h2>Policy</h2>",
+            _html_key_value_table(report.get("policy") or {}),
+            "</section>",
+            "</main>",
+            "</body>",
+            "</html>",
+        ]
+    )
+
+
 def _fake_profile_for_learning_tasks(
     learning_tasks: dict[str, Any],
 ) -> tuple[CandidateProfile, list[str]]:
@@ -7200,6 +7520,58 @@ def _select_fake_rehearsal_positions(
         "target_platforms": normalized_target_platforms,
         "target_role_families": normalized_target_role_families,
         "platform_role_target_shortfalls": dict(sorted(platform_role_shortfalls.items())),
+    }
+
+
+def _select_autofill_batch_positions(
+    readiness: dict[str, Any],
+    items_by_position: dict[str, list[dict[str, Any]]],
+    limit: int,
+    closed_jobs: dict[str, Any] | None,
+) -> dict[str, Any]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    excluded_closed: list[dict[str, Any]] = []
+    skipped_no_prompt: list[dict[str, Any]] = []
+    skipped_not_ready = 0
+    ready_source_count = 0
+    for position in readiness.get("positions", []) or []:
+        if not isinstance(position, dict):
+            continue
+        position_key = str(position.get("position_key") or "")
+        if not bool(position.get("ready_for_autofill")):
+            skipped_not_ready += 1
+            continue
+        ready_source_count += 1
+        if not items_by_position.get(position_key):
+            skipped_no_prompt.append(_fake_rehearsal_position_row(position))
+            continue
+        closed_reason = closed_application_reason(position, closed_jobs=closed_jobs)
+        if closed_reason:
+            row = _fake_rehearsal_position_row(position)
+            row["closed_reason"] = closed_reason
+            excluded_closed.append(row)
+            continue
+        group_key = "{platform}::{role_family}".format(
+            platform=position.get("platform") or "Unknown",
+            role_family=position.get("role_family") or "Other",
+        )
+        grouped.setdefault(group_key, []).append(position)
+
+    selected: list[dict[str, Any]] = []
+    group_keys = sorted(grouped)
+    target = max(int(limit), 0)
+    while len(selected) < target and any(grouped.get(key) for key in group_keys):
+        for key in group_keys:
+            if len(selected) >= target:
+                break
+            if grouped.get(key):
+                selected.append(grouped[key].pop(0))
+    return {
+        "selected_positions": selected,
+        "excluded_closed_positions": excluded_closed,
+        "skipped_no_prompt_positions": skipped_no_prompt,
+        "skipped_not_ready_position_count": skipped_not_ready,
+        "ready_source_position_count": ready_source_count,
     }
 
 
@@ -8066,12 +8438,14 @@ def build_goal_readiness_audit(
     critical_input_status: dict[str, Any] | None = None,
     fake_critical_input_probe: dict[str, Any] | None = None,
     fake_position_rehearsal: dict[str, Any] | None = None,
+    autofill_batch_plan: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     coverage_counts = gaps.get("coverage_counts") or {}
     critical_summary = (critical_input_status or {}).get("summary") or {}
     fake_critical = fake_critical_input_probe or {}
     fake_rehearsal = fake_position_rehearsal or {}
+    autofill_batch = autofill_batch_plan or {}
     synthetic = coverage_gate.get("synthetic") or {}
     readiness_counts = readiness.get("readiness_counts") or {}
     closed_count = _closed_registry_count(closed_jobs)
@@ -8093,6 +8467,14 @@ def build_goal_readiness_audit(
     )
     fake_rehearsal_selector_misses = int(fake_rehearsal.get("selector_miss_count") or 0)
     synthetic_selector_misses = int(synthetic.get("selector_miss_count") or 0)
+    batch_selected = int(autofill_batch.get("selected_count") or 0)
+    batch_allowed = int(autofill_batch.get("selected_autofill_allowed_count") or 0)
+    batch_selector_misses = int(autofill_batch.get("selector_miss_count") or 0)
+    batch_real_submit = bool(
+        autofill_batch.get("real_platform_submission")
+        or (autofill_batch.get("policy") or {}).get("real_platform_submission")
+    )
+    batch_would_submit = int(autofill_batch.get("would_submit_count") or 0)
     research_ready = bool(
         coverage_gate.get("real_platform_target_achieved")
         and coverage_gate.get("real_platform_role_target_achieved")
@@ -8110,10 +8492,18 @@ def build_goal_readiness_audit(
         and fake_rehearsal_selector_misses == 0
         and not fake_rehearsal_real_submit
     )
+    autofill_batch_ready = bool(
+        batch_selected >= 100
+        and batch_allowed >= 100
+        and batch_selector_misses == 0
+        and not batch_real_submit
+        and batch_would_submit == 0
+    )
     user_answers_ready = data_blocker_count == 0 and critical_waiting_count == 0
     supervised_autofill_ready = bool(
         research_ready
         and synthetic_ready
+        and autofill_batch_ready
         and user_answers_ready
         and synthetic_selector_misses == 0
     )
@@ -8152,6 +8542,18 @@ def build_goal_readiness_audit(
                 "fake_rehearsal_real_platform_submission": fake_rehearsal_real_submit,
                 "synthetic_run_count": int(synthetic.get("run_count") or 0),
                 "synthetic_eligible_submit_count": int(synthetic.get("eligible_submit_count") or 0),
+            },
+        },
+        {
+            "id": "real_profile_100_position_autofill_batch",
+            "requirement": "Build a 100-position queue whose browser-action manifests are ready for supervised autofill.",
+            "status": "achieved" if autofill_batch_ready else "needs_autofill_batch",
+            "evidence": {
+                "selected_count": batch_selected,
+                "autofill_allowed_count": batch_allowed,
+                "selector_miss_count": batch_selector_misses,
+                "would_submit_count": batch_would_submit,
+                "real_platform_submission": batch_real_submit,
             },
         },
         {
@@ -8217,6 +8619,9 @@ def build_goal_readiness_audit(
             "critical_supervised_only_count": critical_supervised_only_count,
             "manual_gate_count": int(readiness.get("manual_gate_count") or 0),
             "closed_registry_count": closed_count,
+            "autofill_batch_selected_count": batch_selected,
+            "autofill_batch_allowed_count": batch_allowed,
+            "autofill_batch_selector_miss_count": batch_selector_misses,
         },
         "data_blockers": _goal_coverage_status_rows(coverage_counts, GOAL_DATA_BLOCKER_STATUSES),
         "optional_gaps": _goal_coverage_status_rows(coverage_counts, GOAL_OPTIONAL_GAP_STATUSES),
@@ -8250,6 +8655,7 @@ def write_goal_readiness_audit(
     critical_input_status: dict[str, Any] | None = None,
     fake_critical_input_probe: dict[str, Any] | None = None,
     fake_position_rehearsal: dict[str, Any] | None = None,
+    autofill_batch_plan: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     audit = build_goal_readiness_audit(
@@ -8259,6 +8665,7 @@ def write_goal_readiness_audit(
         critical_input_status=critical_input_status,
         fake_critical_input_probe=fake_critical_input_probe,
         fake_position_rehearsal=fake_position_rehearsal,
+        autofill_batch_plan=autofill_batch_plan,
         closed_jobs=closed_jobs,
     )
     json_path = Path(json_output)

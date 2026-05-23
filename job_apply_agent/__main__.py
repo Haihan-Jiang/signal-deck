@@ -30,6 +30,7 @@ from .core import (
     write_apply_run_audit,
     write_application_playbook,
     write_application_research_report,
+    write_autofill_batch_plan,
     write_browser_action_manifest,
     write_candidate_observation_report,
     write_candidate_discovery_report,
@@ -73,6 +74,9 @@ DEFAULT_GAPS_JSON = Path(__file__).with_name("outbox") / "answer_gaps_latest.jso
 DEFAULT_GAPS_MARKDOWN = Path(__file__).with_name("outbox") / "answer_gaps_latest.md"
 DEFAULT_READINESS_JSON = Path(__file__).with_name("outbox") / "automation_readiness_latest.json"
 DEFAULT_READINESS_MARKDOWN = Path(__file__).with_name("outbox") / "automation_readiness_latest.md"
+DEFAULT_AUTOFILL_BATCH_JSON = Path(__file__).with_name("outbox") / "autofill_batch_latest.json"
+DEFAULT_AUTOFILL_BATCH_MARKDOWN = Path(__file__).with_name("outbox") / "autofill_batch_latest.md"
+DEFAULT_AUTOFILL_BATCH_HTML = Path(__file__).with_name("outbox") / "autofill_batch_latest.html"
 DEFAULT_FILL_PLAN_JSON = Path(__file__).with_name("outbox") / "form_fill_plan_latest.json"
 DEFAULT_FILL_PLAN_MARKDOWN = Path(__file__).with_name("outbox") / "form_fill_plan_latest.md"
 DEFAULT_APPLY_AUDIT_JSON = Path(__file__).with_name("outbox") / "apply_run_audit_latest.json"
@@ -297,6 +301,24 @@ def main() -> int:
     readiness_parser.add_argument("--closed-jobs", default=str(DEFAULT_CLOSED_JOBS))
     readiness_parser.add_argument("--json-output", default=str(DEFAULT_READINESS_JSON))
     readiness_parser.add_argument("--markdown-output", default=str(DEFAULT_READINESS_MARKDOWN))
+
+    autofill_batch_parser = subparsers.add_parser(
+        "autofill-batch",
+        help="select a 100-position autofill queue and verify local browser action manifests",
+    )
+    autofill_batch_parser.add_argument("--research-json", default=str(DEFAULT_RESEARCH_JSON))
+    autofill_batch_parser.add_argument("--readiness-json", default=str(DEFAULT_READINESS_JSON))
+    autofill_batch_parser.add_argument(
+        "--profile",
+        default=str(DEFAULT_PERSONAL_PROFILE if DEFAULT_PERSONAL_PROFILE.exists() else DEFAULT_PROFILE),
+    )
+    autofill_batch_parser.add_argument("--memory", default=str(DEFAULT_MEMORY))
+    autofill_batch_parser.add_argument("--closed-jobs", default=str(DEFAULT_CLOSED_JOBS))
+    autofill_batch_parser.add_argument("--limit", type=int, default=100)
+    autofill_batch_parser.add_argument("--include-values", action="store_true")
+    autofill_batch_parser.add_argument("--json-output", default=str(DEFAULT_AUTOFILL_BATCH_JSON))
+    autofill_batch_parser.add_argument("--markdown-output", default=str(DEFAULT_AUTOFILL_BATCH_MARKDOWN))
+    autofill_batch_parser.add_argument("--html-output", default=str(DEFAULT_AUTOFILL_BATCH_HTML))
 
     fill_plan_parser = subparsers.add_parser(
         "fill-plan",
@@ -802,6 +824,8 @@ def main() -> int:
     export_questions_parser.add_argument("--answer-memory-json", default=str(DEFAULT_MEMORY))
     export_questions_parser.add_argument("--closed-jobs-json", default=str(DEFAULT_CLOSED_JOBS))
     export_questions_parser.add_argument("--goal-audit-json", default=str(DEFAULT_GOAL_AUDIT_JSON))
+    export_questions_parser.add_argument("--autofill-batch-json", default=str(DEFAULT_AUTOFILL_BATCH_JSON))
+    export_questions_parser.add_argument("--autofill-batch-html", default=str(DEFAULT_AUTOFILL_BATCH_HTML))
     export_questions_parser.add_argument(
         "--critical-input-suggestions-json",
         default=str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON),
@@ -841,6 +865,7 @@ def main() -> int:
         "--fake-position-rehearsal-json",
         default=str(DEFAULT_FAKE_POSITION_REHEARSAL_JSON),
     )
+    goal_audit_parser.add_argument("--autofill-batch-json", default=str(DEFAULT_AUTOFILL_BATCH_JSON))
     goal_audit_parser.add_argument("--closed-jobs-json", default=str(DEFAULT_CLOSED_JOBS))
     goal_audit_parser.add_argument("--json-output", default=str(DEFAULT_GOAL_AUDIT_JSON))
     goal_audit_parser.add_argument("--markdown-output", default=str(DEFAULT_GOAL_AUDIT_MARKDOWN))
@@ -983,6 +1008,8 @@ def main() -> int:
                     "Answer memory": args.answer_memory_json,
                     "Closed postings": args.closed_jobs_json,
                     "Goal readiness audit": args.goal_audit_json,
+                    "Autofill batch": args.autofill_batch_json,
+                    "Autofill batch HTML": args.autofill_batch_html,
                     "Critical input suggestions": args.critical_input_suggestions_json,
                     "Critical input questionnaire": args.critical_input_questionnaire_json,
                     "Critical input questionnaire HTML": args.critical_input_questionnaire_html,
@@ -1018,6 +1045,7 @@ def main() -> int:
             critical_input_status=_load_optional_json(args.critical_input_status_json),
             fake_critical_input_probe=_load_optional_json(args.fake_critical_input_probe_json),
             fake_position_rehearsal=_load_optional_json(args.fake_position_rehearsal_json),
+            autofill_batch_plan=_load_optional_json(args.autofill_batch_json),
             closed_jobs=_load_optional_json(args.closed_jobs_json),
         )
         print(f"Wrote goal audit JSON to {args.json_output}")
@@ -1124,6 +1152,35 @@ def main() -> int:
         print(f"Learning queue items: {report.get('learning_queue_count', 0)}")
         print(f"Minimal learning tasks: {report.get('minimal_learning_task_count', 0)}")
         print(f"Manual gate types: {report.get('manual_gate_count', 0)}")
+        return 0
+
+    if args.command == "autofill-batch":
+        if not Path(args.research_json).exists():
+            raise FileNotFoundError(f"research report not found: {args.research_json}")
+        if not Path(args.readiness_json).exists():
+            raise FileNotFoundError(f"readiness report not found: {args.readiness_json}")
+        profile = load_profile(args.profile) if args.profile and Path(args.profile).exists() else None
+        answer_memory = load_answer_memory(args.memory) if args.memory else None
+        report = write_autofill_batch_plan(
+            json.loads(Path(args.research_json).read_text(encoding="utf-8")),
+            json.loads(Path(args.readiness_json).read_text(encoding="utf-8")),
+            args.json_output,
+            args.markdown_output,
+            args.html_output,
+            profile=profile,
+            answer_memory=answer_memory,
+            closed_jobs=load_closed_jobs(args.closed_jobs),
+            limit=args.limit,
+            include_values=args.include_values,
+        )
+        print(f"Wrote autofill batch JSON to {args.json_output}")
+        print(f"Wrote autofill batch Markdown to {args.markdown_output}")
+        print(f"Wrote autofill batch HTML to {args.html_output}")
+        print(f"Selected: {report.get('selected_count', 0)} / {report.get('requested_count', 0)}")
+        print(f"Autofill allowed: {report.get('selected_autofill_allowed_count', 0)}")
+        print(f"Browser actions: {report.get('browser_action_count', 0)}")
+        print(f"Selector misses: {report.get('selector_miss_count', 0)}")
+        print(f"Would submit: {report.get('would_submit_count', 0)}")
         return 0
 
     if args.command == "fill-plan":
@@ -1965,6 +2022,17 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_HTML,
             suggestions_payload=_load_optional_json(str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON)),
         )
+    write_autofill_batch_plan(
+        research,
+        readiness,
+        DEFAULT_AUTOFILL_BATCH_JSON,
+        DEFAULT_AUTOFILL_BATCH_MARKDOWN,
+        DEFAULT_AUTOFILL_BATCH_HTML,
+        profile=profile,
+        answer_memory=answer_memory,
+        closed_jobs=load_closed_jobs(DEFAULT_CLOSED_JOBS),
+        limit=100,
+    )
     goal = write_goal_readiness_audit(
         coverage,
         gaps,
@@ -1974,6 +2042,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
         critical_input_status=critical_status,
         fake_critical_input_probe=_load_optional_json(str(DEFAULT_FAKE_CRITICAL_INPUT_PROBE_JSON)),
         fake_position_rehearsal=_load_optional_json(str(DEFAULT_FAKE_POSITION_REHEARSAL_JSON)),
+        autofill_batch_plan=_load_optional_json(str(DEFAULT_AUTOFILL_BATCH_JSON)),
         closed_jobs=_load_optional_json(str(DEFAULT_CLOSED_JOBS)),
     )
     if DEFAULT_COLLECTION_PLAN_JSON.exists() and DEFAULT_LEARNING_TASKS_JSON.exists():
@@ -2001,6 +2070,8 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                     "Answer memory": str(DEFAULT_MEMORY),
                     "Closed postings": str(DEFAULT_CLOSED_JOBS),
                     "Goal readiness audit": str(DEFAULT_GOAL_AUDIT_JSON),
+                    "Autofill batch": str(DEFAULT_AUTOFILL_BATCH_JSON),
+                    "Autofill batch HTML": str(DEFAULT_AUTOFILL_BATCH_HTML),
                     "Critical input suggestions": str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON),
                     "Critical input questionnaire": str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_JSON),
                     "Critical input questionnaire HTML": str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_HTML),
@@ -2026,6 +2097,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             "critical-inputs-status",
             "critical-input-suggestions",
             "critical-inputs-questionnaire",
+            "autofill-batch",
             "goal-audit",
             "export-questions",
         ],

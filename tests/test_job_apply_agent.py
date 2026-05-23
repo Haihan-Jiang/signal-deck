@@ -18,6 +18,7 @@ from job_apply_agent.core import (
     build_application_draft,
     build_application_playbook,
     build_application_research,
+    build_autofill_batch_plan,
     build_collection_plan_from_coverage_gate,
     build_critical_input_answer_template,
     build_critical_input_answer_update,
@@ -73,6 +74,8 @@ from job_apply_agent.core import (
     render_answer_gap_markdown,
     render_apply_run_audit_markdown,
     render_application_playbook_markdown,
+    render_autofill_batch_plan_html,
+    render_autofill_batch_plan_markdown,
     render_candidate_observation_markdown,
     render_candidate_discovery_markdown,
     render_question_export_html,
@@ -114,6 +117,7 @@ from job_apply_agent.core import (
     write_apply_run_audit,
     write_application_playbook,
     write_application_research_report,
+    write_autofill_batch_plan,
     write_browser_action_manifest,
     write_candidate_observation_report,
     write_candidate_discovery_report,
@@ -3221,6 +3225,151 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(manifest["stop_action_count"], 1)
         self.assertEqual(manifest["stop_actions"][0]["status"], "closed_skip")
 
+    def test_autofill_batch_plan_selects_ready_positions_without_real_submit(self) -> None:
+        profile = CandidateProfile(
+            name="Alan Jiang",
+            email="alan@example.com",
+            phone="555-0100",
+            location="Bellevue, WA",
+            target_titles=["SRE"],
+            target_locations=["United States"],
+            remote_ok=True,
+            keywords=[],
+            blocklist=[],
+            min_score=1,
+            resume_facts={"professional_summary": "SRE"},
+            question_answers={"authorization": "Yes"},
+        )
+        research = {
+            "positions": [
+                {
+                    "position_key": "ashby:example:1",
+                    "platform": "Ashby",
+                    "company": "Example",
+                    "title": "Site Reliability Engineer",
+                    "role_family": "SRE",
+                    "apply_url": "https://jobs.ashbyhq.com/example/1",
+                },
+                {
+                    "position_key": "greenhouse:closed:1",
+                    "platform": "Greenhouse",
+                    "company": "Closed Co",
+                    "title": "Platform Engineer",
+                    "role_family": "Platform",
+                    "apply_url": "https://job-boards.greenhouse.io/closed/jobs/1",
+                },
+            ],
+            "items": [
+                {
+                    "position_key": "ashby:example:1",
+                    "label": "Email",
+                    "normalized_label": "email",
+                    "category": "profile_identity",
+                    "automation_action": "auto_fill_from_profile",
+                    "required": True,
+                    "platform": "Ashby",
+                    "source_file": "test",
+                },
+                {
+                    "position_key": "ashby:example:1",
+                    "label": "Submit application",
+                    "normalized_label": "submit application",
+                    "category": "final_submit",
+                    "automation_action": "submit_gate",
+                    "required": True,
+                    "platform": "Ashby",
+                    "source_file": "test",
+                },
+                {
+                    "position_key": "greenhouse:closed:1",
+                    "label": "Email",
+                    "normalized_label": "email",
+                    "category": "profile_identity",
+                    "automation_action": "auto_fill_from_profile",
+                    "required": True,
+                    "platform": "Greenhouse",
+                    "source_file": "test",
+                },
+            ],
+        }
+        readiness = {
+            "positions": [
+                {
+                    **research["positions"][0],
+                    "readiness": "supervised_ready",
+                    "ready_for_autofill": True,
+                    "required_prompt_count": 2,
+                    "covered_prompt_count": 1,
+                },
+                {
+                    **research["positions"][1],
+                    "readiness": "closed_skip",
+                    "ready_for_autofill": True,
+                    "required_prompt_count": 1,
+                    "covered_prompt_count": 1,
+                },
+                {
+                    "position_key": "lever:blocked:1",
+                    "platform": "Lever",
+                    "company": "Blocked Co",
+                    "title": "DevOps Engineer",
+                    "role_family": "DevOps",
+                    "apply_url": "https://jobs.lever.co/blocked/1",
+                    "readiness": "needs_learning",
+                    "ready_for_autofill": False,
+                },
+            ]
+        }
+        closed_jobs = {
+            "version": 1,
+            "jobs": [
+                {
+                    "status": "CLOSED",
+                    "key": "url:https://job-boards.greenhouse.io/closed/jobs/1",
+                    "apply_url": "https://job-boards.greenhouse.io/closed/jobs/1",
+                    "reason": "No longer accepting applications",
+                }
+            ],
+        }
+
+        report = build_autofill_batch_plan(
+            research,
+            readiness,
+            profile=profile,
+            answer_memory={"version": 1, "answers": []},
+            closed_jobs=closed_jobs,
+            limit=10,
+        )
+
+        self.assertEqual(report["selected_count"], 1)
+        self.assertEqual(report["selected_autofill_allowed_count"], 1)
+        self.assertEqual(report["excluded_closed_position_count"], 1)
+        self.assertEqual(report["skipped_not_ready_position_count"], 1)
+        self.assertEqual(report["would_submit_count"], 0)
+        self.assertFalse(report["real_platform_submission"])
+        self.assertEqual(report["positions"][0]["manifest_status"], "autofill_ready_with_supervised_gates")
+        self.assertIn("Autofill Batch Plan", render_autofill_batch_plan_markdown(report))
+        self.assertIn("Autofill Batch Plan", render_autofill_batch_plan_html(report))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            json_output = Path(temp_dir) / "autofill_batch.json"
+            markdown_output = Path(temp_dir) / "autofill_batch.md"
+            html_output = Path(temp_dir) / "autofill_batch.html"
+            written = write_autofill_batch_plan(
+                research,
+                readiness,
+                json_output,
+                markdown_output,
+                html_output,
+                profile=profile,
+                answer_memory={"version": 1, "answers": []},
+                closed_jobs=closed_jobs,
+            )
+            self.assertEqual(written["selected_count"], 1)
+            self.assertTrue(json_output.exists())
+            self.assertTrue(markdown_output.exists())
+            self.assertTrue(html_output.exists())
+
     def test_write_browser_action_manifest_outputs_reports(self) -> None:
         plan = {
             "title": "Application",
@@ -5755,6 +5904,13 @@ class JobApplyAgentTests(unittest.TestCase):
             "selector_miss_count": 0,
             "real_platform_submission": False,
         }
+        autofill_batch = {
+            "selected_count": 100,
+            "selected_autofill_allowed_count": 100,
+            "selector_miss_count": 0,
+            "would_submit_count": 0,
+            "real_platform_submission": False,
+        }
         closed_jobs = {"jobs": [{"key": "linkedin:1", "reason": "No longer accepting applications"}]}
 
         audit = build_goal_readiness_audit(
@@ -5764,6 +5920,7 @@ class JobApplyAgentTests(unittest.TestCase):
             critical_input_status=critical_status,
             fake_critical_input_probe=fake_critical,
             fake_position_rehearsal=fake_rehearsal,
+            autofill_batch_plan=autofill_batch,
             closed_jobs=closed_jobs,
         )
         markdown = render_goal_readiness_audit_markdown(audit)
@@ -5792,6 +5949,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 critical_input_status=critical_status,
                 fake_critical_input_probe=fake_critical,
                 fake_position_rehearsal=fake_rehearsal,
+                autofill_batch_plan=autofill_batch,
                 closed_jobs=closed_jobs,
             )
 

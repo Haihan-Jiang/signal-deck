@@ -220,6 +220,26 @@ The readiness report marks each observed position as `autofill_ready`,
 `needs_learning`, or `needs_research`, and condenses repeated blockers into a
 minimal learning task list for answers/materials that should be confirmed once.
 
+Build a 100-position autofill queue from the latest readiness data:
+
+```bash
+python3 -m job_apply_agent autofill-batch --limit 100
+```
+
+This writes:
+
+```text
+job_apply_agent/outbox/autofill_batch_latest.json
+job_apply_agent/outbox/autofill_batch_latest.md
+job_apply_agent/outbox/autofill_batch_latest.html
+```
+
+The batch plan selects positions marked ready for autofill, excludes the closed
+posting registry, generates guarded browser action manifests from observed
+prompts, and runs those manifests against local synthetic forms to catch selector
+misses. It does not submit real employer applications; final submit, CAPTCHA,
+and protected-class or privacy gates remain supervised stops.
+
 To make the 100-position target machine-checkable across real observations and
 synthetic execution evidence:
 
