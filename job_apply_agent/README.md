@@ -853,6 +853,16 @@ one-shot updates file, reruns live closed-posting checks before opening pages,
 rebuilds the 100-position autofill packet with values only after the answers
 are approved, and keeps final submit as a supervised stop.
 
+To inspect the selected 100-position queue row by row, including live-open
+status, selector misses, local synthetic-submit evidence, and final-submit stop
+gates, run:
+
+```bash
+python3 -m job_apply_agent position-execution-audit
+```
+
+This writes `position_execution_audit_latest.{json,md,html}`.
+
 To see the per-platform question handling summary for the 100-position rehearsal,
 write the platform playbook:
 

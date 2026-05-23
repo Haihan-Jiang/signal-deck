@@ -75,6 +75,7 @@ from .core import (
     write_question_export,
     write_position_readiness_report,
     write_platform_question_playbook,
+    write_position_execution_audit,
     write_research_coverage_gate,
     write_synthetic_unblocker_proof,
     write_synthetic_apply_execution,
@@ -324,6 +325,15 @@ DEFAULT_PLATFORM_QUESTION_PLAYBOOK_HTML = (
 )
 DEFAULT_GOAL_AUDIT_JSON = Path(__file__).with_name("outbox") / "goal_readiness_audit_latest.json"
 DEFAULT_GOAL_AUDIT_MARKDOWN = Path(__file__).with_name("outbox") / "goal_readiness_audit_latest.md"
+DEFAULT_POSITION_EXECUTION_AUDIT_JSON = (
+    Path(__file__).with_name("outbox") / "position_execution_audit_latest.json"
+)
+DEFAULT_POSITION_EXECUTION_AUDIT_MARKDOWN = (
+    Path(__file__).with_name("outbox") / "position_execution_audit_latest.md"
+)
+DEFAULT_POSITION_EXECUTION_AUDIT_HTML = (
+    Path(__file__).with_name("outbox") / "position_execution_audit_latest.html"
+)
 DEFAULT_PERSONAL_PROFILE = Path(__file__).with_name("outbox") / "alan_jiang_profile.json"
 
 
@@ -1646,6 +1656,31 @@ def main() -> int:
     )
     platform_playbook_parser.add_argument("--html-output", default=str(DEFAULT_PLATFORM_QUESTION_PLAYBOOK_HTML))
 
+    position_execution_audit_parser = subparsers.add_parser(
+        "position-execution-audit",
+        help="write a per-position execution ledger for the selected 100-position queue",
+    )
+    position_execution_audit_parser.add_argument(
+        "--autofill-packet-json",
+        default=str(DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_JSON),
+    )
+    position_execution_audit_parser.add_argument(
+        "--synthetic-autofill-packet-json",
+        default=str(DEFAULT_POST_ANSWER_SYNTHETIC_AUTOFILL_PACKET_JSON),
+    )
+    position_execution_audit_parser.add_argument(
+        "--platform-question-playbook-json",
+        default=str(DEFAULT_PLATFORM_QUESTION_PLAYBOOK_JSON),
+    )
+    position_execution_audit_parser.add_argument("--goal-audit-json", default=str(DEFAULT_GOAL_AUDIT_JSON))
+    position_execution_audit_parser.add_argument("--target-count", type=int, default=100)
+    position_execution_audit_parser.add_argument("--json-output", default=str(DEFAULT_POSITION_EXECUTION_AUDIT_JSON))
+    position_execution_audit_parser.add_argument(
+        "--markdown-output",
+        default=str(DEFAULT_POSITION_EXECUTION_AUDIT_MARKDOWN),
+    )
+    position_execution_audit_parser.add_argument("--html-output", default=str(DEFAULT_POSITION_EXECUTION_AUDIT_HTML))
+
     goal_audit_parser = subparsers.add_parser(
         "goal-audit",
         help="audit current evidence against the 100-position automation goal",
@@ -1902,6 +1937,29 @@ def main() -> int:
         print(f"Selected positions: {summary.get('selected_position_count', 0)}")
         print(f"Local synthetic submits: {summary.get('selected_local_synthetic_submit_count', 0)}")
         print(f"Final answers missing: {summary.get('final_answer_missing_count', 0)}")
+        return 0
+
+    if args.command == "position-execution-audit":
+        report = write_position_execution_audit(
+            args.autofill_packet_json,
+            args.synthetic_autofill_packet_json,
+            args.platform_question_playbook_json,
+            args.goal_audit_json,
+            args.json_output,
+            args.markdown_output,
+            args.html_output,
+            target_count=args.target_count,
+        )
+        summary = report.get("summary") or {}
+        print(f"Wrote position execution audit JSON to {args.json_output}")
+        print(f"Wrote position execution audit Markdown to {args.markdown_output}")
+        print(f"Wrote position execution audit HTML to {args.html_output}")
+        print(f"Status: {report.get('status')}")
+        print(f"Positions audited: {summary.get('position_count', 0)} / {summary.get('target_count', 0)}")
+        print(f"Local synthetic submits: {summary.get('local_synthetic_submit_position_count', 0)}")
+        print(f"Selector miss positions: {summary.get('selector_miss_position_count', 0)}")
+        print(f"Final submit stop positions: {summary.get('final_submit_stop_position_count', 0)}")
+        print(f"Remaining user answers: {summary.get('remaining_user_answer_count', 0)}")
         return 0
 
     if args.command == "goal-audit":

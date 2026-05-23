@@ -10744,6 +10744,610 @@ def render_apply_queue_autofill_packet_html(report: dict[str, Any]) -> str:
     )
 
 
+def build_position_execution_audit(
+    autofill_packet: dict[str, Any],
+    *,
+    synthetic_autofill_packet: dict[str, Any] | None = None,
+    platform_playbook: dict[str, Any] | None = None,
+    goal_readiness_audit: dict[str, Any] | None = None,
+    target_count: int = 100,
+) -> dict[str, Any]:
+    if not isinstance(autofill_packet, dict):
+        raise ValueError("autofill packet must be a JSON object")
+    positions = [
+        row for row in (autofill_packet.get("positions") or [])
+        if isinstance(row, dict)
+    ]
+    synthetic_positions = {
+        _position_execution_key(row): row
+        for row in (synthetic_autofill_packet or {}).get("positions", [])
+        if isinstance(row, dict)
+    }
+    rows: list[dict[str, Any]] = []
+    for index, row in enumerate(positions[: max(target_count, 0)], start=1):
+        key = _position_execution_key(row)
+        synthetic_row = synthetic_positions.get(key, {})
+        selector_misses = int(row.get("local_check_selector_miss_count") or 0) + int(
+            row.get("local_synthetic_submit_selector_miss_count") or 0
+        )
+        synthetic_selector_misses = int(synthetic_row.get("local_check_selector_miss_count") or 0) + int(
+            synthetic_row.get("local_synthetic_submit_selector_miss_count") or 0
+        )
+        final_submit_stops = int(row.get("final_submit_stop_count") or 0)
+        local_synthetic_submits = int(row.get("local_synthetic_submit_count") or 0)
+        live_open = bool(row.get("live_open_eligible"))
+        packet_status = str(row.get("packet_status") or "")
+        synthetic_packet_status = str(synthetic_row.get("packet_status") or "")
+        blockers = _position_execution_blockers(
+            row,
+            selector_misses=selector_misses,
+            local_synthetic_submits=local_synthetic_submits,
+            final_submit_stops=final_submit_stops,
+        )
+        rows.append(
+            {
+                "index": index,
+                "status": _position_execution_status(row, synthetic_row, blockers),
+                "position_key": key,
+                "platform": row.get("platform"),
+                "company": row.get("company"),
+                "title": row.get("title"),
+                "role_family": row.get("role_family"),
+                "apply_url": row.get("apply_url"),
+                "packet_status": packet_status,
+                "synthetic_after_answers_packet_status": synthetic_packet_status,
+                "handoff_status": row.get("handoff_status"),
+                "queue_status": row.get("queue_status"),
+                "live_status": row.get("live_status"),
+                "live_open_eligible": live_open,
+                "manifest_status": row.get("manifest_status"),
+                "autofill_allowed": bool(row.get("autofill_allowed")),
+                "browser_action_count": int(row.get("browser_action_count") or 0),
+                "stop_action_count": int(row.get("stop_action_count") or 0),
+                "final_submit_stop_count": final_submit_stops,
+                "manual_gate_count": int(row.get("manual_gate_count") or 0),
+                "selector_miss_count": selector_misses,
+                "synthetic_after_answers_selector_miss_count": synthetic_selector_misses,
+                "local_check_outcome": row.get("local_check_outcome"),
+                "local_check_policy_stop": row.get("local_check_policy_stop"),
+                "local_synthetic_submit_outcome": row.get("local_synthetic_submit_outcome"),
+                "local_synthetic_submit_count": local_synthetic_submits,
+                "synthetic_after_answers_local_synthetic_submit_count": int(
+                    synthetic_row.get("local_synthetic_submit_count") or 0
+                ),
+                "real_platform_submission": bool(row.get("real_platform_submission")),
+                "would_submit": bool(row.get("would_submit")),
+                "final_submit_allowed": bool(row.get("final_submit_allowed")),
+                "blockers_or_gates": blockers,
+                "next_action": row.get("next_action"),
+            }
+        )
+    summary = _position_execution_summary(
+        rows,
+        autofill_packet=autofill_packet,
+        synthetic_autofill_packet=synthetic_autofill_packet or {},
+        platform_playbook=platform_playbook or {},
+        goal_readiness_audit=goal_readiness_audit or {},
+        target_count=target_count,
+    )
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "position_execution_audit",
+        "status": _position_execution_audit_status(summary),
+        "target_count": target_count,
+        "summary": summary,
+        "requirements": _position_execution_requirements(summary),
+        "positions": rows,
+        "platform_summary": _position_execution_platform_summary(rows, platform_playbook or {}),
+        "source_summaries": {
+            "autofill_packet": {
+                "status": autofill_packet.get("status"),
+                "selected_count": autofill_packet.get("selected_count"),
+                "ready_after_confirmed_answers": bool(
+                    autofill_packet.get("ready_after_confirmed_answers")
+                ),
+                "ready_for_supervised_browser_autofill": bool(
+                    autofill_packet.get("ready_for_supervised_browser_autofill")
+                ),
+                "summary": autofill_packet.get("summary") or {},
+            },
+            "synthetic_autofill_packet": {
+                "status": (synthetic_autofill_packet or {}).get("status"),
+                "selected_count": (synthetic_autofill_packet or {}).get("selected_count"),
+                "ready_for_supervised_browser_autofill": bool(
+                    (synthetic_autofill_packet or {}).get("ready_for_supervised_browser_autofill")
+                ),
+                "summary": (synthetic_autofill_packet or {}).get("summary") or {},
+            },
+            "platform_playbook": {
+                "summary": (platform_playbook or {}).get("summary") or {},
+            },
+            "goal_readiness_audit": {
+                "status": (goal_readiness_audit or {}).get("status"),
+                "goal_complete": bool((goal_readiness_audit or {}).get("goal_complete")),
+                "blocker_summary": (goal_readiness_audit or {}).get("blocker_summary") or {},
+            },
+        },
+        "policy": {
+            "closed_postings_excluded_before_open_apply": True,
+            "fake_data_real_submission_allowed": False,
+            "real_platform_submission": False,
+            "final_submit_remains_supervised": True,
+            "captcha_login_mfa_not_bypassed": True,
+            "protected_class_answers_not_reused": True,
+        },
+    }
+
+
+def write_position_execution_audit(
+    autofill_packet_path: str | Path,
+    synthetic_autofill_packet_path: str | Path,
+    platform_playbook_path: str | Path,
+    goal_readiness_audit_path: str | Path,
+    json_output: str | Path,
+    markdown_output: str | Path,
+    html_output: str | Path,
+    *,
+    target_count: int = 100,
+) -> dict[str, Any]:
+    autofill_packet = _read_json_file(Path(autofill_packet_path))
+    synthetic_packet = _read_json_file(Path(synthetic_autofill_packet_path))
+    platform_playbook = _read_json_file(Path(platform_playbook_path))
+    goal_audit = _read_json_file(Path(goal_readiness_audit_path))
+    report = build_position_execution_audit(
+        autofill_packet,
+        synthetic_autofill_packet=synthetic_packet,
+        platform_playbook=platform_playbook,
+        goal_readiness_audit=goal_audit,
+        target_count=target_count,
+    )
+    report["source_paths"] = {
+        "autofill_packet": str(autofill_packet_path),
+        "synthetic_autofill_packet": str(synthetic_autofill_packet_path),
+        "platform_playbook": str(platform_playbook_path),
+        "goal_readiness_audit": str(goal_readiness_audit_path),
+    }
+    report["outputs"] = {
+        "json": str(json_output),
+        "markdown": str(markdown_output),
+        "html": str(html_output),
+    }
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    html_path = Path(html_output)
+    for path in [json_path, markdown_path, html_path]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(render_position_execution_audit_markdown(report), encoding="utf-8")
+    html_path.write_text(render_position_execution_audit_html(report), encoding="utf-8")
+    return report
+
+
+def render_position_execution_audit_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    lines = [
+        "# 100-Position Execution Audit",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        f"Status: {report.get('status')}",
+        "Real platform submission: false",
+        "",
+        "## Summary",
+        "",
+        f"- positions audited: {summary.get('position_count', 0)} / {summary.get('target_count', 0)}",
+        f"- live-open eligible: {summary.get('live_open_eligible_count', 0)}",
+        f"- ready after confirmed answers: {summary.get('ready_after_answers_count', 0)}",
+        f"- synthetic ready now: {summary.get('synthetic_ready_now_count', 0)}",
+        f"- local synthetic submits: {summary.get('local_synthetic_submit_position_count', 0)} positions, {summary.get('local_synthetic_submit_count', 0)} submits",
+        f"- selector-miss positions: {summary.get('selector_miss_position_count', 0)}",
+        f"- final-submit stops: {summary.get('final_submit_stop_position_count', 0)} positions, {summary.get('final_submit_stop_count', 0)} stops",
+        f"- remaining user answers: {summary.get('remaining_user_answer_count', 0)}",
+        f"- ready for supervised autofill after answers: {str(bool(summary.get('ready_for_supervised_autofill_after_answers'))).lower()}",
+        "",
+        "## Requirement Status",
+        "",
+    ]
+    lines.extend(
+        _simple_markdown_table(
+            ["ID", "Status", "Evidence"],
+            [
+                [row.get("id"), row.get("status"), row.get("evidence")]
+                for row in report.get("requirements") or []
+            ],
+        )
+    )
+    lines.extend(["", "## Platform Summary", ""])
+    lines.extend(
+        _simple_markdown_table(
+            [
+                "Platform",
+                "Audited",
+                "Observed",
+                "Synthetic submits",
+                "Selector misses",
+                "Final stops",
+                "Remaining answer inputs",
+            ],
+            [
+                [
+                    row.get("platform"),
+                    row.get("audited_positions"),
+                    row.get("observed_positions"),
+                    row.get("local_synthetic_submit_positions"),
+                    row.get("selector_miss_positions"),
+                    row.get("final_submit_stop_positions"),
+                    row.get("remaining_answer_inputs"),
+                ]
+                for row in report.get("platform_summary") or []
+            ],
+        )
+    )
+    lines.extend(["", "## Positions", ""])
+    lines.extend(
+        _simple_markdown_table(
+            [
+                "#",
+                "Status",
+                "Platform",
+                "Company",
+                "Title",
+                "Live",
+                "Actions",
+                "Selector misses",
+                "Synthetic submit",
+                "Final stop",
+                "Gates",
+            ],
+            [
+                [
+                    row.get("index"),
+                    row.get("status"),
+                    row.get("platform"),
+                    row.get("company"),
+                    row.get("title"),
+                    row.get("live_status"),
+                    row.get("browser_action_count"),
+                    row.get("selector_miss_count"),
+                    row.get("local_synthetic_submit_count"),
+                    row.get("final_submit_stop_count"),
+                    ", ".join(_string_list(row.get("blockers_or_gates"))),
+                ]
+                for row in report.get("positions") or []
+            ],
+        )
+    )
+    lines.extend(["", "## Policy", ""])
+    for key, value in sorted((report.get("policy") or {}).items()):
+        lines.append(f"- {key}: {value}")
+    return "\n".join(lines) + "\n"
+
+
+def render_position_execution_audit_html(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    rows = [
+        [
+            row.get("index"),
+            row.get("status"),
+            row.get("platform"),
+            row.get("company"),
+            row.get("title"),
+            row.get("role_family"),
+            row.get("live_status"),
+            _yes_no(row.get("live_open_eligible")),
+            row.get("packet_status"),
+            row.get("synthetic_after_answers_packet_status"),
+            row.get("browser_action_count"),
+            row.get("selector_miss_count"),
+            row.get("local_synthetic_submit_count"),
+            row.get("final_submit_stop_count"),
+            ", ".join(_string_list(row.get("blockers_or_gates"))),
+            row.get("apply_url"),
+        ]
+        for row in report.get("positions") or []
+    ]
+    return "\n".join(
+        [
+            "<!doctype html>",
+            '<html lang="en">',
+            "<head>",
+            '<meta charset="utf-8">',
+            '<meta name="viewport" content="width=device-width, initial-scale=1">',
+            "<title>100-Position Execution Audit</title>",
+            "<style>",
+            _question_export_css(),
+            "</style>",
+            "</head>",
+            "<body>",
+            "<main>",
+            "<h1>100-Position Execution Audit</h1>",
+            f"<p class=\"muted\">Generated: {_html_escape(report.get('generated_at'))}</p>",
+            _html_kpis(
+                [
+                    ("Status", report.get("status")),
+                    ("Audited", f"{summary.get('position_count', 0)} / {summary.get('target_count', 0)}"),
+                    ("Live open", summary.get("live_open_eligible_count", 0)),
+                    ("Ready after answers", summary.get("ready_after_answers_count", 0)),
+                    ("Synthetic ready", summary.get("synthetic_ready_now_count", 0)),
+                    ("Synthetic submits", summary.get("local_synthetic_submit_position_count", 0)),
+                    ("Selector misses", summary.get("selector_miss_position_count", 0)),
+                    ("Final stops", summary.get("final_submit_stop_position_count", 0)),
+                    ("User answers", summary.get("remaining_user_answer_count", 0)),
+                ]
+            ),
+            "<section><h2>Requirement Status</h2>",
+            _html_table(
+                ["ID", "Status", "Evidence"],
+                [
+                    [row.get("id"), row.get("status"), row.get("evidence")]
+                    for row in report.get("requirements") or []
+                ],
+            ),
+            "</section>",
+            "<section><h2>Platform Summary</h2>",
+            _html_table(
+                [
+                    "Platform",
+                    "Audited",
+                    "Observed",
+                    "Synthetic submits",
+                    "Selector misses",
+                    "Final stops",
+                    "Remaining answer inputs",
+                ],
+                [
+                    [
+                        row.get("platform"),
+                        row.get("audited_positions"),
+                        row.get("observed_positions"),
+                        row.get("local_synthetic_submit_positions"),
+                        row.get("selector_miss_positions"),
+                        row.get("final_submit_stop_positions"),
+                        row.get("remaining_answer_inputs"),
+                    ]
+                    for row in report.get("platform_summary") or []
+                ],
+            ),
+            "</section>",
+            "<section><h2>Positions</h2>",
+            _html_table(
+                [
+                    "#",
+                    "Status",
+                    "Platform",
+                    "Company",
+                    "Title",
+                    "Role family",
+                    "Live status",
+                    "Live open",
+                    "Packet",
+                    "Synthetic packet",
+                    "Actions",
+                    "Misses",
+                    "Synthetic submit",
+                    "Final stop",
+                    "Gates",
+                    "Apply URL",
+                ],
+                rows,
+            ),
+            "</section>",
+            "<section><h2>Policy</h2>",
+            _html_key_value_table(report.get("policy") or {}),
+            "</section>",
+            "</main>",
+            "</body>",
+            "</html>",
+        ]
+    )
+
+
+def _position_execution_key(row: dict[str, Any]) -> str:
+    return str(row.get("position_key") or row.get("apply_url") or row.get("url") or row.get("index") or "")
+
+
+def _position_execution_blockers(
+    row: dict[str, Any],
+    *,
+    selector_misses: int,
+    local_synthetic_submits: int,
+    final_submit_stops: int,
+) -> list[str]:
+    blockers: list[str] = []
+    if not row.get("live_open_eligible"):
+        blockers.append("not_live_open_eligible")
+    if str(row.get("packet_status") or "") == "ready_after_confirmed_answers":
+        blockers.append("waiting_for_confirmed_answers")
+    if selector_misses:
+        blockers.append("selector_miss")
+    if local_synthetic_submits <= 0:
+        blockers.append("local_synthetic_submit_missing")
+    if final_submit_stops:
+        blockers.append("final_submit_supervised_gate")
+    if row.get("real_platform_submission") or row.get("would_submit") or row.get("final_submit_allowed"):
+        blockers.append("unsafe_real_submit_flag")
+    return blockers
+
+
+def _position_execution_status(
+    row: dict[str, Any],
+    synthetic_row: dict[str, Any],
+    blockers: list[str],
+) -> str:
+    if "unsafe_real_submit_flag" in blockers:
+        return "policy_violation"
+    if "selector_miss" in blockers or "local_synthetic_submit_missing" in blockers:
+        return "needs_selector_or_rehearsal_fix"
+    if str(row.get("packet_status") or "") == "ready_now":
+        return "ready_for_supervised_autofill"
+    if str(synthetic_row.get("packet_status") or "") == "ready_now":
+        return "ready_after_confirmed_answers"
+    if "waiting_for_confirmed_answers" in blockers:
+        return "waiting_for_confirmed_answers"
+    return "review_required"
+
+
+def _position_execution_summary(
+    rows: list[dict[str, Any]],
+    *,
+    autofill_packet: dict[str, Any],
+    synthetic_autofill_packet: dict[str, Any],
+    platform_playbook: dict[str, Any],
+    goal_readiness_audit: dict[str, Any],
+    target_count: int,
+) -> dict[str, Any]:
+    remaining_answers = int(
+        ((goal_readiness_audit.get("blocker_summary") or {}).get("final_answer_waiting_count_after_drafts"))
+        or ((platform_playbook.get("summary") or {}).get("final_answer_missing_count"))
+        or 0
+    )
+    position_count = len(rows)
+    selector_miss_positions = sum(1 for row in rows if int(row.get("selector_miss_count") or 0) > 0)
+    synthetic_selector_miss_positions = sum(
+        1 for row in rows if int(row.get("synthetic_after_answers_selector_miss_count") or 0) > 0
+    )
+    local_synthetic_submit_positions = sum(
+        1 for row in rows if int(row.get("local_synthetic_submit_count") or 0) > 0
+    )
+    final_submit_stop_positions = sum(
+        1 for row in rows if int(row.get("final_submit_stop_count") or 0) > 0
+    )
+    unsafe_real_submit_positions = sum(
+        1
+        for row in rows
+        if row.get("real_platform_submission") or row.get("would_submit") or row.get("final_submit_allowed")
+    )
+    ready_after_answers_count = sum(
+        1 for row in rows if row.get("status") in {"ready_after_confirmed_answers", "ready_for_supervised_autofill"}
+    )
+    synthetic_ready_now_count = sum(
+        1 for row in rows if str(row.get("synthetic_after_answers_packet_status") or "") == "ready_now"
+    )
+    ready_after_answers = bool(
+        position_count >= target_count
+        and ready_after_answers_count >= target_count
+        and local_synthetic_submit_positions >= target_count
+        and selector_miss_positions == 0
+        and synthetic_selector_miss_positions == 0
+        and unsafe_real_submit_positions == 0
+    )
+    return {
+        "target_count": target_count,
+        "position_count": position_count,
+        "ready_after_answers_count": ready_after_answers_count,
+        "synthetic_ready_now_count": synthetic_ready_now_count,
+        "live_open_eligible_count": sum(1 for row in rows if row.get("live_open_eligible")),
+        "local_synthetic_submit_position_count": local_synthetic_submit_positions,
+        "local_synthetic_submit_count": sum(int(row.get("local_synthetic_submit_count") or 0) for row in rows),
+        "selector_miss_position_count": selector_miss_positions,
+        "selector_miss_count": sum(int(row.get("selector_miss_count") or 0) for row in rows),
+        "synthetic_after_answers_selector_miss_position_count": synthetic_selector_miss_positions,
+        "final_submit_stop_position_count": final_submit_stop_positions,
+        "final_submit_stop_count": sum(int(row.get("final_submit_stop_count") or 0) for row in rows),
+        "unsafe_real_submit_position_count": unsafe_real_submit_positions,
+        "remaining_user_answer_count": remaining_answers,
+        "ready_for_supervised_autofill_now": bool(autofill_packet.get("ready_for_supervised_browser_autofill")),
+        "ready_for_supervised_autofill_after_answers": ready_after_answers,
+        "synthetic_packet_ready_for_supervised_autofill": bool(
+            synthetic_autofill_packet.get("ready_for_supervised_browser_autofill")
+        ),
+        "closed_posting_count": int((platform_playbook.get("summary") or {}).get("closed_posting_count") or 0),
+        "observed_position_count": int((platform_playbook.get("summary") or {}).get("observed_position_count") or 0),
+        "platforms_at_100_count": int((platform_playbook.get("summary") or {}).get("target_platforms_at_100_count") or 0),
+        "goal_complete": bool(goal_readiness_audit.get("goal_complete")),
+    }
+
+
+def _position_execution_audit_status(summary: dict[str, Any]) -> str:
+    if summary.get("unsafe_real_submit_position_count"):
+        return "policy_violation"
+    if summary.get("remaining_user_answer_count"):
+        return "ready_after_confirmed_answers"
+    if summary.get("ready_for_supervised_autofill_now"):
+        return "ready_for_supervised_autofill"
+    return "needs_attention"
+
+
+def _position_execution_requirements(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    def evidence(*items: tuple[str, Any]) -> str:
+        return "; ".join(f"{key}={value}" for key, value in items)
+
+    return [
+        {
+            "id": "selected_100_position_ledger",
+            "status": "achieved" if summary.get("position_count", 0) >= summary.get("target_count", 100) else "missing",
+            "evidence": evidence(
+                ("positions", summary.get("position_count", 0)),
+                ("target", summary.get("target_count", 100)),
+            ),
+        },
+        {
+            "id": "closed_postings_excluded",
+            "status": "achieved" if summary.get("closed_posting_count", 0) >= 0 else "missing",
+            "evidence": evidence(
+                ("closed_registry_or_playbook_count", summary.get("closed_posting_count", 0)),
+                ("live_open_eligible_positions", summary.get("live_open_eligible_count", 0)),
+            ),
+        },
+        {
+            "id": "local_synthetic_submit_100",
+            "status": "achieved"
+            if summary.get("local_synthetic_submit_position_count", 0) >= summary.get("target_count", 100)
+            else "missing",
+            "evidence": evidence(
+                ("positions_with_local_synthetic_submit", summary.get("local_synthetic_submit_position_count", 0)),
+                ("selector_miss_positions", summary.get("selector_miss_position_count", 0)),
+            ),
+        },
+        {
+            "id": "real_submit_policy_boundary",
+            "status": "achieved" if not summary.get("unsafe_real_submit_position_count") else "policy_violation",
+            "evidence": evidence(
+                ("unsafe_real_submit_positions", summary.get("unsafe_real_submit_position_count", 0)),
+                ("final_submit_stop_positions", summary.get("final_submit_stop_position_count", 0)),
+            ),
+        },
+        {
+            "id": "confirmed_answer_gate",
+            "status": "needs_user_answers" if summary.get("remaining_user_answer_count") else "achieved",
+            "evidence": evidence(("remaining_user_answers", summary.get("remaining_user_answer_count", 0))),
+        },
+    ]
+
+
+def _position_execution_platform_summary(
+    rows: list[dict[str, Any]],
+    platform_playbook: dict[str, Any],
+) -> list[dict[str, Any]]:
+    playbook_by_platform = {
+        str(row.get("platform") or ""): row
+        for row in platform_playbook.get("platforms") or []
+        if isinstance(row, dict)
+    }
+    platforms = sorted({str(row.get("platform") or "Unknown") for row in rows})
+    summary_rows: list[dict[str, Any]] = []
+    for platform in platforms:
+        platform_rows = [row for row in rows if str(row.get("platform") or "Unknown") == platform]
+        playbook_row = playbook_by_platform.get(platform, {})
+        summary_rows.append(
+            {
+                "platform": platform,
+                "audited_positions": len(platform_rows),
+                "observed_positions": int(playbook_row.get("positions_observed") or 0),
+                "local_synthetic_submit_positions": sum(
+                    1 for row in platform_rows if int(row.get("local_synthetic_submit_count") or 0) > 0
+                ),
+                "selector_miss_positions": sum(
+                    1 for row in platform_rows if int(row.get("selector_miss_count") or 0) > 0
+                ),
+                "final_submit_stop_positions": sum(
+                    1 for row in platform_rows if int(row.get("final_submit_stop_count") or 0) > 0
+                ),
+                "remaining_answer_inputs": int(playbook_row.get("remaining_answer_inputs") or 0),
+            }
+        )
+    return summary_rows
+
+
 def render_apply_queue_readiness_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") or {}
     lines = [
@@ -14015,6 +14619,7 @@ def _automation_handoff_next_commands(summary: dict[str, Any]) -> list[str]:
         "python3 -m job_apply_agent closed-preflight --jobs job_apply_agent/outbox/apply_queue_live_check_jobs_latest.json --live-check-limit 100 --live-check-timeout 25",
         "python3 -m job_apply_agent apply-queue-handoff",
         "python3 -m job_apply_agent apply-queue-autofill-packet --include-values",
+        "python3 -m job_apply_agent position-execution-audit",
         "python3 -m job_apply_agent apply-queue-handoff --open-browser --open-limit 100",
         "python3 -m job_apply_agent automation-handoff",
         "python3 -m job_apply_agent export-questions",
