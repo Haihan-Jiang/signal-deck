@@ -152,6 +152,8 @@ from job_apply_agent.core import (
     render_learning_approval_pack_markdown,
     render_learning_task_template_markdown,
     render_pre_submit_review_markdown,
+    render_position_execution_audit_html,
+    render_position_execution_audit_markdown,
     render_position_readiness_markdown,
     render_platform_question_playbook_html,
     render_platform_question_playbook_markdown,
@@ -10423,6 +10425,11 @@ class JobApplyAgentTests(unittest.TestCase):
                 "selector_miss_count": 0,
                 "unsafe_real_submit_position_count": 0,
                 "final_submit_stop_position_count": 100,
+                "target_platform_count": 2,
+                "selected_target_platform_count": 2,
+                "target_platform_local_synthetic_submit_count": 2,
+                "missing_target_platform_count": 0,
+                "missing_target_platforms": [],
                 "remaining_user_answer_count": 2,
             },
         }
@@ -10514,6 +10521,9 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertTrue(audit["blocker_summary"]["position_execution_ready"])
         self.assertEqual(audit["blocker_summary"]["position_execution_position_count"], 100)
         self.assertEqual(audit["blocker_summary"]["position_execution_selector_miss_count"], 0)
+        self.assertEqual(audit["blocker_summary"]["position_execution_target_platform_count"], 2)
+        self.assertEqual(audit["blocker_summary"]["position_execution_selected_target_platform_count"], 2)
+        self.assertEqual(audit["blocker_summary"]["position_execution_missing_target_platform_count"], 0)
         self.assertEqual(audit["requirements"][0]["status"], "achieved")
         self.assertEqual(audit["requirements"][0]["evidence"]["latest_preflight_open_eligible"], 100)
         self.assertEqual(audit["requirements"][0]["evidence"]["latest_preflight_uncertain"], 0)
@@ -10600,6 +10610,9 @@ class JobApplyAgentTests(unittest.TestCase):
         )
         self.assertEqual(position_requirement["status"], "achieved")
         self.assertEqual(position_requirement["evidence"]["position_count"], 100)
+        self.assertEqual(position_requirement["evidence"]["target_platform_count"], 2)
+        self.assertEqual(position_requirement["evidence"]["selected_target_platform_count"], 2)
+        self.assertEqual(position_requirement["evidence"]["missing_target_platform_count"], 0)
         ready_position_execution_audit = json.loads(json.dumps(position_execution_audit))
         ready_position_execution_audit["status"] = "ready_for_supervised_autofill"
         ready_position_execution_audit["summary"]["remaining_user_answer_count"] = 0
@@ -10906,6 +10919,12 @@ class JobApplyAgentTests(unittest.TestCase):
                 "selector_miss_count": 0,
                 "final_submit_stop_count": 100,
                 "remaining_user_answer_count": 6,
+                "target_platform_count": 2,
+                "selected_target_platform_count": 2,
+                "missing_target_platform_count": 0,
+                "missing_target_platforms": [],
+                "selected_platform_counts": {"Greenhouse": 40, "Lever": 60},
+                "target_platform_local_synthetic_submit_count": 2,
             },
             "positions": [
                 {
@@ -10929,6 +10948,7 @@ class JobApplyAgentTests(unittest.TestCase):
             "platform_summary": [
                 {
                     "platform": "Lever",
+                    "target_research_met": True,
                     "audited_positions": 100,
                     "observed_positions": 100,
                     "local_synthetic_submit_positions": 100,
@@ -11021,6 +11041,10 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["summary"]["position_execution_audited_count"], 100)
         self.assertEqual(report["summary"]["position_execution_ready_after_answers_count"], 100)
         self.assertEqual(report["summary"]["position_execution_selector_miss_count"], 0)
+        self.assertEqual(report["summary"]["position_execution_target_platform_count"], 2)
+        self.assertEqual(report["summary"]["position_execution_selected_target_platform_count"], 2)
+        self.assertEqual(report["summary"]["position_execution_missing_target_platforms"], [])
+        self.assertEqual(report["summary"]["position_execution_target_platform_local_synthetic_submit_count"], 2)
         self.assertTrue(report["summary"]["submission_safety_safe"])
         self.assertEqual(report["summary"]["submission_safety_issue_count"], 0)
         self.assertEqual(report["summary"]["submission_safety_warning_count"], 1)
@@ -11061,6 +11085,9 @@ class JobApplyAgentTests(unittest.TestCase):
             }["selected_100_technical_path"],
             "achieved",
         )
+        technical_row = next(row for row in report["completion_verdict"] if row["id"] == "selected_100_technical_path")
+        self.assertIn("target_platforms=2/2", technical_row["evidence"])
+        self.assertIn("missing_target_platforms=0", technical_row["evidence"])
         self.assertEqual(
             {
                 row["id"]: row["status"]
@@ -11116,6 +11143,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("apply queue preflight: checked 100, open eligible 100", markdown)
         self.assertIn("live_closed_identity_preflight", markdown)
         self.assertIn("autofill packet: waiting_for_confirmed_answers", markdown)
+        self.assertIn("position platform coverage: 2 / 2 target platforms", markdown)
+        self.assertIn("Position Execution Platform Summary", markdown)
         self.assertIn("submission safety: safe", markdown)
         self.assertIn("final-answer fake/test markers: real 0, synthetic 5", markdown)
         self.assertIn("Goal Completion Verdict", markdown)
@@ -11140,6 +11169,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Queue refresh", html)
         self.assertIn("Preflight checked", html)
         self.assertIn("Identity unverified", html)
+        self.assertIn("Target platforms", html)
+        self.assertIn("Position Execution Platform Summary", html)
         self.assertIn("Safety audit", html)
         self.assertIn("Goal Completion Verdict", html)
         self.assertIn("waiting_for_truthful_user_answers", html)
@@ -12242,6 +12273,12 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(audit["summary"]["remaining_user_answer_count"], 6)
         self.assertEqual(audit["summary"]["global_remaining_user_answer_count"], 6)
         self.assertTrue(audit["summary"]["ready_for_supervised_autofill_after_answers"])
+        self.assertEqual(audit["summary"]["target_platform_count"], 2)
+        self.assertEqual(audit["summary"]["selected_target_platform_count"], 2)
+        self.assertEqual(audit["summary"]["missing_target_platforms"], [])
+        self.assertEqual(audit["summary"]["target_platform_local_synthetic_submit_count"], 2)
+        self.assertEqual(audit["summary"]["selected_platform_counts"], {"Greenhouse": 1, "Lever": 1})
+        self.assertEqual(audit["platform_summary"][0]["target_research_met"], True)
         self.assertEqual(
             {
                 row["id"]: row["status"]
@@ -12256,6 +12293,20 @@ class JobApplyAgentTests(unittest.TestCase):
             }["global_truthful_answer_gate"],
             "needs_user_answers",
         )
+        self.assertEqual(
+            {
+                row["id"]: row["status"]
+                for row in audit["requirements"]
+            }["target_platform_execution_coverage"],
+            "achieved",
+        )
+        markdown = render_position_execution_audit_markdown(audit)
+        html = render_position_execution_audit_html(audit)
+        self.assertIn("target platforms covered: 2 / 2", markdown)
+        self.assertIn("target platform missing from execution: none", markdown)
+        self.assertIn("Target 100+", markdown)
+        self.assertIn("Target platforms", html)
+        self.assertIn("Missing platforms", html)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -12379,6 +12430,13 @@ class JobApplyAgentTests(unittest.TestCase):
                 for row in audit["requirements"]
             }["global_truthful_answer_gate"],
             "needs_user_answers",
+        )
+        self.assertEqual(
+            {
+                row["id"]: row["status"]
+                for row in audit["requirements"]
+            }["target_platform_execution_coverage"],
+            "missing_research_evidence",
         )
 
     def test_apply_queue_autofill_packet_ready_writes_outputs(self) -> None:

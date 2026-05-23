@@ -12313,6 +12313,17 @@ def render_position_execution_audit_markdown(report: dict[str, Any]) -> str:
         f"- global remaining user answers: {summary.get('global_remaining_user_answer_count', 0)}",
         f"- ready for supervised autofill now: {str(bool(summary.get('ready_for_supervised_autofill_now'))).lower()}",
         f"- ready for supervised autofill after answers: {str(bool(summary.get('ready_for_supervised_autofill_after_answers'))).lower()}",
+        f"- target platforms covered: {summary.get('selected_target_platform_count', 0)} / {summary.get('target_platform_count', 0)}",
+        "- target platform selected counts: "
+        + (
+            ", ".join(
+                f"{platform}={count}"
+                for platform, count in (summary.get("selected_platform_counts") or {}).items()
+            )
+            or "none"
+        ),
+        "- target platform missing from execution: "
+        + (", ".join(summary.get("missing_target_platforms") or []) or "none"),
         "",
         "## Requirement Status",
         "",
@@ -12331,6 +12342,7 @@ def render_position_execution_audit_markdown(report: dict[str, Any]) -> str:
         _simple_markdown_table(
             [
                 "Platform",
+                "Target 100+",
                 "Audited",
                 "Observed",
                 "Synthetic submits",
@@ -12341,6 +12353,7 @@ def render_position_execution_audit_markdown(report: dict[str, Any]) -> str:
             [
                 [
                     row.get("platform"),
+                    str(bool(row.get("target_research_met"))).lower(),
                     row.get("audited_positions"),
                     row.get("observed_positions"),
                     row.get("local_synthetic_submit_positions"),
@@ -12443,6 +12456,11 @@ def render_position_execution_audit_html(report: dict[str, Any]) -> str:
                     ("Final stops", summary.get("final_submit_stop_position_count", 0)),
                     ("User answers", summary.get("remaining_user_answer_count", 0)),
                     ("Global answers", summary.get("global_remaining_user_answer_count", 0)),
+                    (
+                        "Target platforms",
+                        f"{summary.get('selected_target_platform_count', 0)} / {summary.get('target_platform_count', 0)}",
+                    ),
+                    ("Missing platforms", ", ".join(summary.get("missing_target_platforms") or []) or "none"),
                 ]
             ),
             "<section><h2>Requirement Status</h2>",
@@ -12458,6 +12476,7 @@ def render_position_execution_audit_html(report: dict[str, Any]) -> str:
             _html_table(
                 [
                     "Platform",
+                    "Target 100+",
                     "Audited",
                     "Observed",
                     "Synthetic submits",
@@ -12468,6 +12487,7 @@ def render_position_execution_audit_html(report: dict[str, Any]) -> str:
                 [
                     [
                         row.get("platform"),
+                        _yes_no(row.get("target_research_met")),
                         row.get("audited_positions"),
                         row.get("observed_positions"),
                         row.get("local_synthetic_submit_positions"),
@@ -12566,6 +12586,26 @@ def _position_execution_summary(
     goal_readiness_audit: dict[str, Any],
     target_count: int,
 ) -> dict[str, Any]:
+    target_platforms = _position_execution_target_platforms(platform_playbook)
+    selected_platform_counts = _position_execution_selected_platform_counts(rows)
+    selected_target_platforms = [
+        platform for platform in target_platforms if selected_platform_counts.get(platform, 0) > 0
+    ]
+    missing_target_platforms = [
+        platform for platform in target_platforms if selected_platform_counts.get(platform, 0) == 0
+    ]
+    target_platform_local_synthetic_submit_count = sum(
+        1
+        for platform in target_platforms
+        if any(
+            str(row.get("platform") or "Unknown") == platform
+            and int(row.get("local_synthetic_submit_count") or 0) > 0
+            for row in rows
+        )
+    )
+    selected_target_platform_position_counts = [
+        selected_platform_counts.get(platform, 0) for platform in target_platforms
+    ]
     global_remaining_answers = int(
         ((goal_readiness_audit.get("blocker_summary") or {}).get("final_answer_waiting_count_after_drafts"))
         or ((platform_playbook.get("summary") or {}).get("final_answer_missing_count"))
@@ -12628,6 +12668,21 @@ def _position_execution_summary(
         "closed_posting_count": int((platform_playbook.get("summary") or {}).get("closed_posting_count") or 0),
         "observed_position_count": int((platform_playbook.get("summary") or {}).get("observed_position_count") or 0),
         "platforms_at_100_count": int((platform_playbook.get("summary") or {}).get("target_platforms_at_100_count") or 0),
+        "target_platform_count": len(target_platforms),
+        "target_platforms": target_platforms,
+        "selected_platform_count": len(selected_platform_counts),
+        "selected_platform_counts": selected_platform_counts,
+        "selected_target_platform_count": len(selected_target_platforms),
+        "selected_target_platforms": selected_target_platforms,
+        "missing_target_platforms": missing_target_platforms,
+        "missing_target_platform_count": len(missing_target_platforms),
+        "target_platform_local_synthetic_submit_count": target_platform_local_synthetic_submit_count,
+        "selected_target_platform_min_positions": min(selected_target_platform_position_counts)
+        if selected_target_platform_position_counts
+        else 0,
+        "selected_target_platform_max_positions": max(selected_target_platform_position_counts)
+        if selected_target_platform_position_counts
+        else 0,
         "goal_complete": bool(goal_readiness_audit.get("goal_complete")),
     }
 
@@ -12674,6 +12729,35 @@ def _position_execution_requirements(summary: dict[str, Any]) -> list[dict[str, 
             ),
         },
         {
+            "id": "target_platform_execution_coverage",
+            "status": (
+                "achieved"
+                if summary.get("target_platform_count", 0) > 0
+                and summary.get("selected_target_platform_count", 0) >= summary.get("target_platform_count", 0)
+                and summary.get("target_platform_local_synthetic_submit_count", 0) >= summary.get("target_platform_count", 0)
+                else "missing_research_evidence"
+                if summary.get("target_platform_count", 0) == 0
+                else "missing_platform_execution_coverage"
+            ),
+            "evidence": evidence(
+                ("target_platforms", ",".join(summary.get("target_platforms") or [])),
+                ("selected_target_platforms", ",".join(summary.get("selected_target_platforms") or [])),
+                ("missing_target_platforms", ",".join(summary.get("missing_target_platforms") or [])),
+                (
+                    "target_platforms_with_synthetic_submit",
+                    summary.get("target_platform_local_synthetic_submit_count", 0),
+                ),
+                (
+                    "selected_target_platform_min_positions",
+                    summary.get("selected_target_platform_min_positions", 0),
+                ),
+                (
+                    "selected_target_platform_max_positions",
+                    summary.get("selected_target_platform_max_positions", 0),
+                ),
+            ),
+        },
+        {
             "id": "real_submit_policy_boundary",
             "status": "achieved" if not summary.get("unsafe_real_submit_position_count") else "policy_violation",
             "evidence": evidence(
@@ -12710,7 +12794,8 @@ def _position_execution_platform_summary(
         for row in platform_playbook.get("platforms") or []
         if isinstance(row, dict)
     }
-    platforms = sorted({str(row.get("platform") or "Unknown") for row in rows})
+    target_platforms = _position_execution_target_platforms(platform_playbook)
+    platforms = sorted({str(row.get("platform") or "Unknown") for row in rows} | set(target_platforms))
     summary_rows: list[dict[str, Any]] = []
     for platform in platforms:
         platform_rows = [row for row in rows if str(row.get("platform") or "Unknown") == platform]
@@ -12718,6 +12803,7 @@ def _position_execution_platform_summary(
         summary_rows.append(
             {
                 "platform": platform,
+                "target_research_met": platform in target_platforms,
                 "audited_positions": len(platform_rows),
                 "observed_positions": int(playbook_row.get("positions_observed") or 0),
                 "local_synthetic_submit_positions": sum(
@@ -12733,6 +12819,34 @@ def _position_execution_platform_summary(
             }
         )
     return summary_rows
+
+
+def _position_execution_target_platforms(platform_playbook: dict[str, Any]) -> list[str]:
+    platforms: set[str] = set()
+    for row in platform_playbook.get("platform_100_status") or []:
+        if not isinstance(row, dict):
+            continue
+        platform = str(row.get("platform") or "").strip()
+        if not platform:
+            continue
+        if bool(row.get("target_met")) or int(row.get("positions_observed") or 0) >= 100:
+            platforms.add(platform)
+    if not platforms:
+        for row in platform_playbook.get("platforms") or []:
+            if not isinstance(row, dict):
+                continue
+            platform = str(row.get("platform") or "").strip()
+            if platform and int(row.get("positions_observed") or 0) >= 100:
+                platforms.add(platform)
+    return sorted(platforms)
+
+
+def _position_execution_selected_platform_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        platform = str(row.get("platform") or "Unknown")
+        counts[platform] = counts.get(platform, 0) + 1
+    return dict(sorted(counts.items()))
 
 
 def render_apply_queue_readiness_markdown(report: dict[str, Any]) -> str:
@@ -15184,6 +15298,27 @@ def build_goal_readiness_audit(
     position_audit_final_submit_stops = int(
         position_audit_summary.get("final_submit_stop_position_count") or 0
     )
+    position_audit_target_platform_count = int(
+        position_audit_summary.get("target_platform_count") or 0
+    )
+    position_audit_selected_target_platform_count = int(
+        position_audit_summary.get("selected_target_platform_count") or 0
+    )
+    position_audit_missing_target_platform_count = int(
+        position_audit_summary.get("missing_target_platform_count") or 0
+    )
+    position_audit_target_platform_submit_count = int(
+        position_audit_summary.get("target_platform_local_synthetic_submit_count") or 0
+    )
+    position_audit_platform_target = position_audit_target_platform_count or playbook_target_count
+    position_audit_platform_coverage_ready = bool(
+        position_audit_platform_target == 0
+        or (
+            position_audit_selected_target_platform_count >= position_audit_platform_target
+            and position_audit_target_platform_submit_count >= position_audit_platform_target
+            and position_audit_missing_target_platform_count == 0
+        )
+    )
     position_audit_remaining_answers = int(
         position_audit_summary.get("remaining_user_answer_count") or 0
     )
@@ -15199,6 +15334,7 @@ def build_goal_readiness_audit(
         and position_audit_selector_misses == 0
         and position_audit_unsafe_real_submit == 0
         and position_audit_final_submit_stops >= position_audit_target
+        and position_audit_platform_coverage_ready
     )
     user_answers_ready = data_blocker_count == 0 and critical_waiting_count == 0
     selected_queue_supervised_autofill_ready = bool(
@@ -15391,6 +15527,11 @@ def build_goal_readiness_audit(
                 "selector_miss_count": position_audit_selector_misses,
                 "unsafe_real_submit_positions": position_audit_unsafe_real_submit,
                 "final_submit_stop_positions": position_audit_final_submit_stops,
+                "target_platform_count": position_audit_platform_target,
+                "selected_target_platform_count": position_audit_selected_target_platform_count,
+                "target_platform_local_synthetic_submit_count": position_audit_target_platform_submit_count,
+                "missing_target_platform_count": position_audit_missing_target_platform_count,
+                "missing_target_platforms": position_audit_summary.get("missing_target_platforms") or [],
                 "remaining_user_answers": position_audit_remaining_answers,
             },
         },
@@ -15554,6 +15695,11 @@ def build_goal_readiness_audit(
             "position_execution_selector_miss_count": position_audit_selector_misses,
             "position_execution_unsafe_real_submit_positions": position_audit_unsafe_real_submit,
             "position_execution_final_submit_stop_positions": position_audit_final_submit_stops,
+            "position_execution_target_platform_count": position_audit_platform_target,
+            "position_execution_selected_target_platform_count": position_audit_selected_target_platform_count,
+            "position_execution_target_platform_local_synthetic_submit_count": position_audit_target_platform_submit_count,
+            "position_execution_missing_target_platform_count": position_audit_missing_target_platform_count,
+            "position_execution_missing_target_platforms": position_audit_summary.get("missing_target_platforms") or [],
             "position_execution_remaining_user_answers": position_audit_remaining_answers,
             "position_execution_global_remaining_user_answers": position_audit_global_remaining_answers,
             "selected_queue_supervised_autofill_ready": selected_queue_supervised_autofill_ready,
@@ -16297,6 +16443,22 @@ def build_automation_handoff_report(
         "position_execution_remaining_user_answer_count": int(
             execution_summary.get("remaining_user_answer_count") or 0
         ),
+        "position_execution_target_platform_count": int(
+            execution_summary.get("target_platform_count") or 0
+        ),
+        "position_execution_selected_target_platform_count": int(
+            execution_summary.get("selected_target_platform_count") or 0
+        ),
+        "position_execution_missing_target_platform_count": int(
+            execution_summary.get("missing_target_platform_count") or 0
+        ),
+        "position_execution_missing_target_platforms": _string_list(
+            execution_summary.get("missing_target_platforms")
+        ),
+        "position_execution_selected_platform_counts": execution_summary.get("selected_platform_counts") or {},
+        "position_execution_target_platform_local_synthetic_submit_count": int(
+            execution_summary.get("target_platform_local_synthetic_submit_count") or 0
+        ),
         "submission_safety_status": safety_audit.get("status", ""),
         "submission_safety_safe": bool(safety_audit.get("safe")) if safety_audit else False,
         "submission_safety_issue_count": _submission_safety_int(safety_audit.get("issue_count")),
@@ -16425,6 +16587,12 @@ def _automation_handoff_completion_verdict_rows(
     ready_after_answers = int(summary.get("position_execution_ready_after_answers_count") or 0)
     selector_misses = int(summary.get("position_execution_selector_miss_count") or 0)
     final_submit_stops = int(summary.get("position_execution_final_submit_stop_count") or 0)
+    target_platforms = int(summary.get("position_execution_target_platform_count") or 0)
+    selected_target_platforms = int(summary.get("position_execution_selected_target_platform_count") or 0)
+    target_platform_synthetic_submits = int(
+        summary.get("position_execution_target_platform_local_synthetic_submit_count") or 0
+    )
+    missing_target_platforms = int(summary.get("position_execution_missing_target_platform_count") or 0)
     local_synthetic_submits = int(
         summary.get("autofill_local_synthetic_submit_count")
         or summary.get("autofill_packet_local_synthetic_submit_count")
@@ -16447,6 +16615,14 @@ def _automation_handoff_completion_verdict_rows(
         and selector_misses == 0
         and local_synthetic_submits >= target
         and final_submit_stops >= target
+        and (
+            target_platforms == 0
+            or (
+                selected_target_platforms >= target_platforms
+                and target_platform_synthetic_submits >= target_platforms
+                and missing_target_platforms == 0
+            )
+        )
     )
     preflight_live_checked = int(summary.get("apply_queue_preflight_live_checked_count") or 0)
     preflight_open_eligible = int(summary.get("apply_queue_preflight_open_eligible_count") or 0)
@@ -16480,7 +16656,10 @@ def _automation_handoff_completion_verdict_rows(
             "evidence": (
                 f"audited={audited}/{target}; ready_after_answers={ready_after_answers}; "
                 f"selector_misses={selector_misses}; local_synthetic_submits={local_synthetic_submits}; "
-                f"final_submit_stops={final_submit_stops}"
+                f"final_submit_stops={final_submit_stops}; "
+                f"target_platforms={selected_target_platforms}/{target_platforms}; "
+                f"target_platform_synthetic_submits={target_platform_synthetic_submits}; "
+                f"missing_target_platforms={missing_target_platforms}"
             ),
             "next_action": "rerun position-execution-audit or fix selectors" if not technical_ready else "none",
         },
@@ -16561,6 +16740,7 @@ def render_automation_handoff_markdown(report: dict[str, Any]) -> str:
         f"- apply queue refresh: {summary.get('apply_queue_refresh_status') or 'missing'}, rounds {summary.get('apply_queue_refresh_round_count', 0)}, live open after answers {summary.get('apply_queue_refresh_live_open_after_answers_count', 0)}, top-up required {summary.get('apply_queue_refresh_top_up_required_count', 0)}",
         f"- autofill packet: {summary.get('autofill_packet_status') or 'missing'}, selected {summary.get('autofill_packet_selected_count', 0)}, browser actions {summary.get('autofill_packet_browser_action_count', 0)}, final-submit stops {summary.get('autofill_packet_final_submit_stop_count', 0)}, selector misses {summary.get('autofill_packet_selector_miss_count', 0)}",
         f"- position execution audit: {summary.get('position_execution_status') or 'missing'}, audited {summary.get('position_execution_audited_count', 0)} / {summary.get('position_execution_target_count', 0)}, ready after answers {summary.get('position_execution_ready_after_answers_count', 0)}, selector misses {summary.get('position_execution_selector_miss_count', 0)}",
+        f"- position platform coverage: {summary.get('position_execution_selected_target_platform_count', 0)} / {summary.get('position_execution_target_platform_count', 0)} target platforms, target-platform synthetic submits {summary.get('position_execution_target_platform_local_synthetic_submit_count', 0)}, missing {', '.join(summary.get('position_execution_missing_target_platforms') or []) or 'none'}",
         f"- submission safety: {summary.get('submission_safety_status') or 'missing'}, safe {str(bool(summary.get('submission_safety_safe'))).lower()}, issues {summary.get('submission_safety_issue_count', 0)}, warnings {summary.get('submission_safety_warning_count', 0)}",
         f"- final-answer fake/test markers: real {summary.get('submission_safety_real_final_answer_fake_marker_count', 0)}, synthetic {summary.get('submission_safety_synthetic_final_answer_fake_marker_count', 0)}, packet final-submit stops {summary.get('submission_safety_apply_packet_final_submit_stop_count', 0)}",
         "",
@@ -16743,6 +16923,34 @@ def render_automation_handoff_markdown(report: dict[str, Any]) -> str:
             ],
         )
     )
+    lines.extend(["", "## Position Execution Platform Summary", ""])
+    lines.extend(
+        _simple_markdown_table(
+            [
+                "Platform",
+                "Target 100+",
+                "Audited",
+                "Observed",
+                "Synthetic submits",
+                "Selector misses",
+                "Final stops",
+                "Remaining answer inputs",
+            ],
+            [
+                [
+                    row.get("platform"),
+                    row.get("target_research_met"),
+                    row.get("audited_positions"),
+                    row.get("observed_positions"),
+                    row.get("local_synthetic_submit_positions"),
+                    row.get("selector_miss_positions"),
+                    row.get("final_submit_stop_positions"),
+                    row.get("remaining_answer_inputs"),
+                ]
+                for row in report.get("position_execution_platform_summary", [])
+            ],
+        )
+    )
     lines.extend(["", "Blocked candidate pool:"])
     lines.extend(
         _simple_markdown_table(
@@ -16847,6 +17055,14 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
                     ("Audited positions", summary.get("position_execution_audited_count", 0)),
                     ("Ready after answers", summary.get("position_execution_ready_after_answers_count", 0)),
                     ("Execution misses", summary.get("position_execution_selector_miss_count", 0)),
+                    (
+                        "Target platforms",
+                        f"{summary.get('position_execution_selected_target_platform_count', 0)} / {summary.get('position_execution_target_platform_count', 0)}",
+                    ),
+                    (
+                        "Missing platforms",
+                        ", ".join(summary.get("position_execution_missing_target_platforms") or []) or "none",
+                    ),
                     ("Safety audit", summary.get("submission_safety_status") or "missing"),
                     ("Safety safe", str(bool(summary.get("submission_safety_safe"))).lower()),
                     ("Safety issues", summary.get("submission_safety_issue_count", 0)),
@@ -17066,6 +17282,7 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
             _html_table(
                 [
                     "Platform",
+                    "Target 100+",
                     "Audited",
                     "Observed",
                     "Synthetic submits",
@@ -17076,6 +17293,7 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
                 [
                     [
                         row.get("platform"),
+                        _yes_no(row.get("target_research_met")),
                         row.get("audited_positions"),
                         row.get("observed_positions"),
                         row.get("local_synthetic_submit_positions"),
