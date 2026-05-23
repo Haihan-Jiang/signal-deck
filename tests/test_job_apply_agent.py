@@ -167,6 +167,7 @@ from job_apply_agent.core import (
     score_job,
     select_candidate_topup,
     shorten_apply_url,
+    submission_skip_reason,
     write_answer_gap_report,
     write_apply_queue_autofill_packet,
     write_apply_queue_handoff,
@@ -1210,7 +1211,7 @@ class JobApplyAgentTests(unittest.TestCase):
         def fake_fetcher(url: str, timeout: float) -> str:
             if url.endswith("/1/"):
                 return "<figcaption>No longer accepting applications</figcaption>"
-            return "<html>Apply now</html>"
+            return "<html>OpenCo SRE Apply now</html>"
 
         with tempfile.TemporaryDirectory() as temp_dir:
             closed_path = Path(temp_dir) / "closed_jobs.json"
@@ -1225,6 +1226,72 @@ class JobApplyAgentTests(unittest.TestCase):
             closed_jobs = load_closed_jobs(closed_path)
             self.assertTrue(is_job_closed(submissions[0], closed_jobs))
             self.assertFalse(is_job_closed(submissions[1], closed_jobs))
+
+    def test_live_check_marks_identity_mismatch_as_skip_for_notify_and_open(self) -> None:
+        submissions = [
+            {
+                "platform": "LinkedIn",
+                "job_id": "4415090263",
+                "company": "Jobright.ai",
+                "title": "Senior Platform & Reliability Engineer",
+                "score": 97,
+                "apply_url": "https://www.linkedin.com/jobs/view/4415090263/?trk=search",
+                "automation": {"mode": "supervised_review"},
+                "safety": {"human_review_required_before_real_submit": True},
+            },
+            {
+                "platform": "LinkedIn",
+                "job_id": "2",
+                "company": "OpenCo",
+                "title": "SRE",
+                "score": 91,
+                "apply_url": "https://www.linkedin.com/jobs/view/2/",
+                "automation": {"mode": "supervised_review"},
+                "safety": {"human_review_required_before_real_submit": True},
+            },
+        ]
+
+        def fake_fetcher(url: str, timeout: float) -> str:
+            if "4415090263" in url:
+                return "<html>4,000+ Quality And Reliability Engineer jobs in United States Sign in</html>"
+            return "<html>OpenCo SRE Apply now</html>"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            closed_path = Path(temp_dir) / "closed_jobs.json"
+            result = refresh_closed_jobs_from_live_pages(
+                submissions,
+                closed_path,
+                fetcher=fake_fetcher,
+            )
+            skip_reasons = {
+                check["key"]: check["reason"]
+                for check in result["checks"]
+                if check.get("skip_for_open")
+            }
+            opened: list[str] = []
+            alert = build_telegram_job_alert(
+                submissions,
+                live_skip_reasons=skip_reasons,
+            )
+            opened_urls = open_apply_urls_in_browser(
+                submissions,
+                opener=opened.append,
+                max_items=5,
+                live_skip_reasons=skip_reasons,
+            )
+
+        self.assertEqual(result["checks"][0]["status"], "live_identity_unverified")
+        self.assertTrue(result["checks"][0]["skip_for_open"])
+        self.assertFalse(result["checks"][0]["closed"])
+        self.assertFalse(is_job_closed(submissions[0], result["closed_jobs"]))
+        self.assertEqual(submission_skip_reason(submissions[0], live_skip_reasons=skip_reasons), result["checks"][0]["reason"])
+        self.assertEqual(result["checks"][1]["status"], "open_live_checked")
+        self.assertTrue(result["checks"][1]["open_verified"])
+        self.assertIn("Skipped closed/unverified postings: 1", alert)
+        self.assertNotIn("Jobright.ai - Senior Platform", alert)
+        self.assertIn("OpenCo - SRE", alert)
+        self.assertEqual(opened_urls, ["https://www.linkedin.com/jobs/view/2/"])
+        self.assertEqual(opened, ["https://www.linkedin.com/jobs/view/2/"])
 
     def test_live_check_errors_do_not_close_job(self) -> None:
         submissions = [
@@ -1268,7 +1335,7 @@ class JobApplyAgentTests(unittest.TestCase):
             calls["count"] += 1
             if calls["count"] == 1:
                 raise TimeoutError("temporary timeout")
-            return "<html>Apply now</html>"
+            return "<html>RetryCo SRE Apply now</html>"
 
         with tempfile.TemporaryDirectory() as temp_dir:
             closed_path = Path(temp_dir) / "closed_jobs.json"
@@ -1480,7 +1547,7 @@ class JobApplyAgentTests(unittest.TestCase):
             if url.endswith("/11/"):
                 return "<html>This position is no longer available.</html>"
             if "/open/jobs/12" in url:
-                return "<html>Apply now</html>"
+                return "<html>OpenCo Infrastructure Engineer Apply now</html>"
             raise TimeoutError("timed out")
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1527,6 +1594,42 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertIn("timed out", markdown)
             self.assertIn("closed_live_text", render_closed_posting_preflight_markdown(report))
 
+    def test_closed_preflight_does_not_mark_linkedin_search_fallback_open(self) -> None:
+        candidates = [
+            {
+                "platform": "LinkedIn",
+                "job_id": "4415090263",
+                "company": "Jobright.ai",
+                "title": "Senior Platform & Reliability Engineer",
+                "apply_url": "https://www.linkedin.com/jobs/view/4415090263/",
+            }
+        ]
+
+        def search_fallback_fetcher(url: str, timeout: float) -> str:
+            return "<html>4,000+ Quality And Reliability Engineer jobs in United States Sign in Join now</html>"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            closed_path = Path(temp_dir) / "closed_jobs.json"
+            report = build_closed_posting_preflight(
+                candidates,
+                closed_path,
+                fetcher=search_fallback_fetcher,
+                max_checks=1,
+            )
+            markdown = render_closed_posting_preflight_markdown(report)
+
+        self.assertEqual(report["live_checked_count"], 1)
+        self.assertEqual(report["open_eligible_count"], 0)
+        self.assertEqual(report["uncertain_count"], 1)
+        self.assertEqual(report["status_counts"]["live_identity_unverified"], 1)
+        check = report["checks"][0]
+        self.assertEqual(check["status"], "live_identity_unverified")
+        self.assertFalse(check["open_eligible"])
+        self.assertIn("title_and_company", check["live_identity"]["required"])
+        self.assertIn("live page did not match expected", check["reason"])
+        self.assertIn("live_identity_unverified", markdown)
+        self.assertIn("live page did not match expected", markdown)
+
     def test_closed_preflight_retries_transient_errors_before_marking_uncertain(self) -> None:
         candidates = [
             {
@@ -1543,7 +1646,7 @@ class JobApplyAgentTests(unittest.TestCase):
             calls["count"] += 1
             if calls["count"] == 1:
                 raise TimeoutError("temporary timeout")
-            return "<html>Apply now</html>"
+            return "<html>RetryCo Platform Engineer Apply now</html>"
 
         with tempfile.TemporaryDirectory() as temp_dir:
             closed_path = Path(temp_dir) / "closed_jobs.json"
@@ -13296,8 +13399,13 @@ class JobApplyAgentTests(unittest.TestCase):
                 return "<html>No longer accepting applications</html>"
             return """
             <html>
-              <head><meta property="og:site_name" content="OpenCo"></head>
+              <head>
+                <title>OpenCo - Backend Software Engineer</title>
+                <meta property="og:site_name" content="OpenCo">
+              </head>
               <body>
+                <h1>Backend Software Engineer</h1>
+                <div>OpenCo</div>
                 <label>LinkedIn Profile</label>
                 <div>Will you now or in the future require visa sponsorship?</div>
                 <button>Submit application</button>
@@ -13346,7 +13454,7 @@ class JobApplyAgentTests(unittest.TestCase):
         ]
 
         def fake_fetcher(url: str, timeout: float) -> str:
-            return "<html><label>LinkedIn Profile URL</label></html>"
+            return "<html><title>Example - Platform Engineer</title><label>LinkedIn Profile URL</label></html>"
 
         with tempfile.TemporaryDirectory() as temp_dir:
             observed_output = Path(temp_dir) / "observed_candidates.jsonl"
@@ -13486,7 +13594,10 @@ class JobApplyAgentTests(unittest.TestCase):
         ]
 
         def fake_fetcher(url: str, timeout: float) -> str:
-            return "<html><label>Website</label><button>Submit Application</button></html>"
+            return (
+                "<html><title>Example - Platform Engineer</title>"
+                "<label>Website</label><button>Submit Application</button></html>"
+            )
 
         with tempfile.TemporaryDirectory() as temp_dir:
             observed_output = Path(temp_dir) / "observed.jsonl"

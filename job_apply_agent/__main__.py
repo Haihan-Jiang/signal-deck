@@ -410,6 +410,20 @@ DEFAULT_SUBMISSION_SAFETY_AUDIT_MARKDOWN = (
 DEFAULT_PERSONAL_PROFILE = Path(__file__).with_name("outbox") / "alan_jiang_profile.json"
 
 
+def _live_skip_reasons_from_checks(live_result: dict[str, object] | None) -> dict[str, str]:
+    if not isinstance(live_result, dict):
+        return {}
+    skip_reasons: dict[str, str] = {}
+    for check in live_result.get("checks") or []:
+        if not isinstance(check, dict) or not check.get("skip_for_open"):
+            continue
+        key = str(check.get("key") or "").strip()
+        if not key:
+            continue
+        skip_reasons[key] = str(check.get("reason") or "live page identity was not verified")
+    return skip_reasons
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Dry-run job application assistant")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -4202,6 +4216,7 @@ def main() -> int:
     if args.command == "notify":
         submissions = load_submissions_jsonl(args.submissions, limit=None)
         closed_jobs = load_closed_jobs(args.closed_jobs)
+        live_skip_reasons: dict[str, str] = {}
         if args.live_check:
             live_result = refresh_closed_jobs_from_live_pages(
                 submissions,
@@ -4210,11 +4225,13 @@ def main() -> int:
                 timeout=args.live_check_timeout,
             )
             closed_jobs = live_result["closed_jobs"]
+            live_skip_reasons = _live_skip_reasons_from_checks(live_result)
             closed_count = sum(1 for check in live_result["checks"] if check.get("closed"))
             error_count = sum(1 for check in live_result["checks"] if check.get("error"))
+            unverified_count = sum(1 for check in live_result["checks"] if check.get("skip_for_open"))
             print(
                 f"Live checked {len(live_result['checks'])} page(s); "
-                f"recorded {closed_count} closed; errors={error_count}"
+                f"recorded {closed_count} closed; unverified={unverified_count}; errors={error_count}"
             )
         result = notify_telegram_for_submissions(
             submissions,
@@ -4222,6 +4239,7 @@ def main() -> int:
             dry_run=args.telegram_dry_run,
             closed_jobs=closed_jobs,
             max_items=args.limit,
+            live_skip_reasons=live_skip_reasons,
         )
         if result.get("skipped"):
             print(f"Telegram notification skipped: {result.get('reason')}")
@@ -4236,6 +4254,7 @@ def main() -> int:
                 record_path=args.review_log,
                 source="notify_open_browser",
                 closed_jobs=closed_jobs,
+                live_skip_reasons=live_skip_reasons,
             )
             print(f"Opened {len(opened_urls)} apply URL(s) in browser")
             print(f"Recorded browser review queue in {args.review_log}")
@@ -4281,6 +4300,7 @@ def main() -> int:
         print("No jobs met the minimum score threshold. No dry-run submissions were written.")
         return 0
 
+    live_skip_reasons: dict[str, str] = {}
     if args.live_check:
         live_result = refresh_closed_jobs_from_live_pages(
             submissions,
@@ -4289,11 +4309,13 @@ def main() -> int:
             timeout=args.live_check_timeout,
         )
         closed_jobs = live_result["closed_jobs"]
+        live_skip_reasons = _live_skip_reasons_from_checks(live_result)
         closed_count = sum(1 for check in live_result["checks"] if check.get("closed"))
         error_count = sum(1 for check in live_result["checks"] if check.get("error"))
+        unverified_count = sum(1 for check in live_result["checks"] if check.get("skip_for_open"))
         print(
             f"Live checked {len(live_result['checks'])} page(s); "
-            f"recorded {closed_count} closed; errors={error_count}"
+            f"recorded {closed_count} closed; unverified={unverified_count}; errors={error_count}"
         )
 
     if args.notify_telegram:
@@ -4303,6 +4325,7 @@ def main() -> int:
             dry_run=args.telegram_dry_run,
             closed_jobs=closed_jobs,
             max_items=args.limit,
+            live_skip_reasons=live_skip_reasons,
         )
         if result.get("skipped"):
             print(f"Telegram notification skipped: {result.get('reason')}")
@@ -4318,6 +4341,7 @@ def main() -> int:
             record_path=args.review_log,
             source="run_open_browser",
             closed_jobs=closed_jobs,
+            live_skip_reasons=live_skip_reasons,
         )
         print(f"Opened {len(opened_urls)} apply URL(s) in browser")
         print(f"Recorded browser review queue in {args.review_log}")

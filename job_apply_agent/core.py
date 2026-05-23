@@ -565,6 +565,21 @@ def closed_application_phrase(job: dict[str, Any]) -> str | None:
     return match.phrase if match else None
 
 
+def submission_skip_reason(
+    submission: dict[str, Any],
+    closed_jobs: dict[str, Any] | None = None,
+    live_skip_reasons: dict[str, str] | None = None,
+) -> str | None:
+    closed_reason = closed_application_reason(submission, closed_jobs=closed_jobs)
+    if closed_reason:
+        return closed_reason
+    if not live_skip_reasons:
+        return None
+    key = job_registry_key(submission)
+    reason = str(live_skip_reasons.get(key) or "").strip()
+    return reason or None
+
+
 def closed_application_match(job: dict[str, Any]) -> ClosedApplicationMatch | None:
     for source_field, text in _closed_application_search_fields(job):
         match = _closed_application_match_text(text, source_field)
@@ -628,6 +643,126 @@ def _closed_application_match_text(text: str, source_field: str) -> ClosedApplic
                 snippet=_closed_application_snippet(text, phrase, normalized_span=regex_match.span()),
             )
     return None
+
+
+_LIVE_IDENTITY_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "at",
+    "co",
+    "company",
+    "corp",
+    "corporation",
+    "for",
+    "inc",
+    "in",
+    "llc",
+    "ltd",
+    "of",
+    "on",
+    "remote",
+    "the",
+    "to",
+}
+
+
+def _live_page_identity_check(candidate: dict[str, Any], page_text: str, url: str) -> dict[str, Any]:
+    normalized_page_text = _normalize(page_text)
+    title = str(candidate.get("title") or candidate.get("job_title") or "").strip()
+    company = str(candidate.get("company") or candidate.get("company_name") or "").strip()
+    platform = str(candidate.get("platform") or infer_platform_from_url(url) or "").strip()
+    job_id = str(candidate.get("job_id") or extract_linkedin_job_id(url) or "").strip()
+    title_match = _identity_text_matches(title, normalized_page_text)
+    company_match = _identity_text_matches(company, normalized_page_text, min_token_count=1, min_overlap=0.8)
+    job_id_match = bool(job_id and _normalize(job_id) and _normalize(job_id) in normalized_page_text)
+    company_identity_required = bool(_identity_tokens(_normalize(company)))
+    has_expected_identity = bool(title or company or job_id)
+    matched_signals = [
+        signal
+        for signal, matched in [
+            ("title", title_match),
+            ("company", company_match),
+            ("job_id", job_id_match),
+        ]
+        if matched
+    ]
+    if not has_expected_identity:
+        return {
+            "verified": True,
+            "status": "identity_not_required",
+            "reason": "no expected title, company, or job id was provided",
+            "matched_signals": matched_signals,
+        }
+    if str(platform).lower() == "linkedin" and title and company and company_identity_required:
+        verified = bool(title_match and company_match)
+        required = "title_and_company"
+    elif str(platform).lower() == "linkedin" and title:
+        verified = bool(title_match)
+        required = "title"
+    elif title and company:
+        verified = bool(title_match or company_match)
+        required = "title_or_company"
+    elif title:
+        verified = title_match
+        required = "title"
+    elif company:
+        verified = company_match
+        required = "company"
+    else:
+        verified = job_id_match
+        required = "job_id"
+    return {
+        "verified": verified,
+        "status": "identity_verified" if verified else "identity_unverified",
+        "reason": (
+            "live page matched expected " + ", ".join(matched_signals)
+            if verified
+            else f"live page did not match expected {required}"
+        ),
+        "required": required,
+        "matched_signals": matched_signals,
+        "expected_title": title,
+        "expected_company": company,
+        "expected_job_id": job_id,
+        "company_identity_required": company_identity_required,
+        "page_excerpt": _identity_page_excerpt(page_text),
+    }
+
+
+def _identity_text_matches(
+    expected: str,
+    normalized_page_text: str,
+    *,
+    min_token_count: int = 2,
+    min_overlap: float = 0.6,
+) -> bool:
+    normalized_expected = _normalize(expected)
+    if not normalized_expected or not normalized_page_text:
+        return False
+    if len(normalized_expected) >= 5 and normalized_expected in normalized_page_text:
+        return True
+    expected_tokens = _identity_tokens(normalized_expected)
+    if not expected_tokens:
+        return False
+    if len(expected_tokens) < min_token_count:
+        return all(token in normalized_page_text for token in expected_tokens)
+    matched = sum(1 for token in expected_tokens if token in normalized_page_text)
+    return matched / max(len(expected_tokens), 1) >= min_overlap
+
+
+def _identity_tokens(normalized_text: str) -> list[str]:
+    tokens: list[str] = []
+    for token in str(normalized_text).split():
+        if len(token) < 3 or token in _LIVE_IDENTITY_STOPWORDS:
+            continue
+        if token not in tokens:
+            tokens.append(token)
+    return tokens
+
+
+def _identity_page_excerpt(page_text: str) -> str:
+    return re.sub(r"\s+", " ", str(page_text or "")).strip()[:240]
 
 
 def _closed_application_search_fields(job: dict[str, Any]) -> list[tuple[str, str]]:
@@ -20213,6 +20348,18 @@ def observe_candidate_pages(
             checks.append(check)
             continue
 
+        identity = _live_page_identity_check(candidate, page_text, short_url)
+        check["live_identity"] = identity
+        if not identity.get("verified"):
+            check.update(
+                {
+                    "status": "live_identity_unverified",
+                    "reason": str(identity.get("reason") or "live page identity was not verified"),
+                }
+            )
+            checks.append(check)
+            continue
+
         platform = candidate.get("platform") or infer_platform_from_url(short_url)
         metadata = extract_live_job_page_metadata(
             page_html,
@@ -21469,13 +21616,15 @@ def render_closed_posting_preflight_markdown(report: dict[str, Any]) -> str:
     if uncertain_candidates:
         for item in uncertain_candidates[:80]:
             error = f" error={item.get('error')}" if item.get("error") else ""
+            reason = f" reason={item.get('reason')}" if item.get("reason") else ""
             lines.append(
-                "- {status}: {company} - {title} [{platform}] {url}{error}".format(
+                "- {status}: {company} - {title} [{platform}] {url}{reason}{error}".format(
                     status=item.get("status"),
                     company=item.get("company") or "Unknown company",
                     title=item.get("title") or "Unknown title",
                     platform=item.get("platform") or "Unknown",
                     url=item.get("url") or "",
+                    reason=reason,
                     error=error,
                 ).rstrip()
             )
@@ -21514,11 +21663,15 @@ def refresh_closed_jobs_from_live_pages(
             continue
         checked_count += 1
         check = {
+            "key": job_registry_key(submission),
             "url": url,
             "company": submission.get("company"),
             "title": submission.get("title"),
             "job_id": submission.get("job_id"),
+            "status": "pending",
             "closed": False,
+            "open_verified": False,
+            "skip_for_open": False,
         }
         page_text, attempt_count, fetch_errors, fetch_error = _fetch_live_page_text_with_retries(
             fetch_page,
@@ -21535,6 +21688,7 @@ def refresh_closed_jobs_from_live_pages(
                 check["closed"] = True
                 check["reason"] = closed_error_phrase
                 check["error"] = str(fetch_error)
+                check["status"] = "closed_fetch_error"
                 record_closed_job(
                     closed_jobs_path,
                     {**submission, "apply_url": url},
@@ -21544,20 +21698,37 @@ def refresh_closed_jobs_from_live_pages(
                 closed_jobs = load_closed_jobs(closed_jobs_path)
                 checks.append(check)
                 continue
+            check["status"] = "check_error"
             check["error"] = str(fetch_error)
             checks.append(check)
             continue
-        phrase = closed_application_phrase({"page_text": page_text})
-        if phrase:
+        live_match = closed_application_match({"page_text": page_text})
+        if live_match:
             check["closed"] = True
-            check["reason"] = phrase
+            check["reason"] = live_match.phrase
+            check["status"] = "closed_live_text"
+            check["closed_phrase"] = live_match.phrase
+            check["closed_source_field"] = live_match.source_field
+            check["closed_snippet"] = live_match.snippet
             record_closed_job(
                 closed_jobs_path,
                 {**submission, "apply_url": url},
-                reason=phrase,
+                reason=live_match.phrase,
                 source=source,
             )
             closed_jobs = load_closed_jobs(closed_jobs_path)
+            checks.append(check)
+            continue
+        identity = _live_page_identity_check(submission, page_text, url)
+        check["live_identity"] = identity
+        if not identity.get("verified"):
+            check["status"] = "live_identity_unverified"
+            check["reason"] = str(identity.get("reason") or "live page identity was not verified")
+            check["skip_for_open"] = True
+            checks.append(check)
+            continue
+        check["status"] = "open_live_checked"
+        check["open_verified"] = True
         checks.append(check)
     return {"closed_jobs": closed_jobs, "checks": checks}
 
@@ -21706,6 +21877,19 @@ def build_closed_posting_preflight(
             checks.append(check)
             continue
 
+        identity = _live_page_identity_check(candidate, page_text, short_url)
+        check["live_identity"] = identity
+        if not identity.get("verified"):
+            check.update(
+                {
+                    "status": "live_identity_unverified",
+                    "reason": str(identity.get("reason") or "live page identity was not verified"),
+                    "open_eligible": False,
+                }
+            )
+            checks.append(check)
+            continue
+
         check.update({"status": "open_live_checked", "open_eligible": True})
         checks.append(check)
 
@@ -21836,9 +22020,16 @@ def build_telegram_job_alert(
     generated_at: datetime | None = None,
     max_items: int = 5,
     closed_jobs: dict[str, Any] | None = None,
+    live_skip_reasons: dict[str, str] | None = None,
 ) -> str:
     available_submissions = [
-        submission for submission in submissions if not is_job_closed(submission, closed_jobs)
+        submission
+        for submission in submissions
+        if not submission_skip_reason(
+            submission,
+            closed_jobs=closed_jobs,
+            live_skip_reasons=live_skip_reasons,
+        )
     ]
     now = generated_at or datetime.now(timezone.utc)
     review_count = sum(
@@ -21853,7 +22044,8 @@ def build_telegram_job_alert(
     ]
     skipped_closed = len(submissions) - len(available_submissions)
     if skipped_closed:
-        lines.append(f"🚫 Skipped closed postings: {skipped_closed}")
+        skip_label = "closed/unverified postings" if live_skip_reasons else "closed postings"
+        lines.append(f"🚫 Skipped {skip_label}: {skipped_closed}")
     if not available_submissions:
         lines.append("No matched candidates were generated in this run.")
         return "\n".join(lines)
@@ -21886,9 +22078,15 @@ def notify_telegram_for_submissions(
     dry_run: bool = False,
     closed_jobs: dict[str, Any] | None = None,
     max_items: int = 5,
+    live_skip_reasons: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     config = load_telegram_config(env_path)
-    text = build_telegram_job_alert(submissions, max_items=max_items, closed_jobs=closed_jobs)
+    text = build_telegram_job_alert(
+        submissions,
+        max_items=max_items,
+        closed_jobs=closed_jobs,
+        live_skip_reasons=live_skip_reasons,
+    )
     if not config["configured"]:
         return {
             "ok": False,
@@ -22846,13 +23044,20 @@ def open_apply_urls_in_browser(
     record_path: str | Path | None = None,
     source: str = "open_browser",
     closed_jobs: dict[str, Any] | None = None,
+    live_skip_reasons: dict[str, str] | None = None,
 ) -> list[str]:
     open_tab = opener or open_url_in_default_browser
     opened_urls: list[str] = []
     records: list[dict[str, Any]] = []
     opened_at = datetime.now(timezone.utc)
     available_submissions = [
-        submission for submission in submissions if not is_job_closed(submission, closed_jobs)
+        submission
+        for submission in submissions
+        if not submission_skip_reason(
+            submission,
+            closed_jobs=closed_jobs,
+            live_skip_reasons=live_skip_reasons,
+        )
     ]
     for submission in available_submissions[: max(max_items, 0)]:
         apply_url = str(submission.get("apply_url") or "").strip()
