@@ -924,6 +924,74 @@ class JobApplyAgentTests(unittest.TestCase):
             classify_application_prompt("Have you worked with us before?").category,
             "employment_history",
         )
+        self.assertEqual(
+            classify_application_prompt("Are you at least 18 years of age?").category,
+            "legal_age",
+        )
+        self.assertEqual(
+            classify_application_prompt("Currency").category,
+            "compensation_currency",
+        )
+        self.assertEqual(
+            classify_application_prompt("Did AI complete this application?").category,
+            "ai_application_disclosure",
+        )
+        self.assertEqual(
+            classify_application_prompt("How did you hear about this job?").category,
+            "referral_source",
+        )
+        self.assertEqual(
+            classify_application_prompt("If you were referred by someone at Later, please let us know!").category,
+            "referral_contact",
+        )
+        self.assertEqual(
+            classify_application_prompt("Where are you currently based?").category,
+            "profile_identity",
+        )
+        self.assertEqual(
+            classify_application_prompt("Title").category,
+            "employment_history",
+        )
+        self.assertEqual(
+            classify_application_prompt("How remote-friendly are you?").category,
+            "remote_preference",
+        )
+        self.assertEqual(
+            classify_application_prompt("How would you evaluate your English Level?").category,
+            "language_ability",
+        )
+        self.assertEqual(
+            classify_application_prompt("Google Scholar").category,
+            "profile_link",
+        )
+        self.assertEqual(
+            classify_application_prompt("Optional: link to a blog post or other public writing; leave blank if none.").category,
+            "profile_link",
+        )
+        self.assertEqual(
+            classify_application_prompt("Are you comfortable using your own computer running Ubuntu?").category,
+            "device_policy",
+        )
+        self.assertEqual(
+            classify_application_prompt("Are you Eligible to work in the US for any employer ?").category,
+            "work_authorization",
+        )
+        self.assertEqual(
+            classify_application_prompt("CV/Resume (please submit your file in English)").category,
+            "resume_upload",
+        )
+        self.assertEqual(
+            classify_application_prompt("Mobile Number").category,
+            "profile_identity",
+        )
+        self.assertEqual(
+            classify_application_prompt("Terms & Conditions").category,
+            "policy_acknowledgement",
+        )
+        self.assertEqual(
+            classify_application_prompt("Which companies do you think are innovating best in web design?").category,
+            "role_specific_free_text",
+        )
 
     def test_application_research_summarizes_form_snapshots_and_jsonl(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1232,6 +1300,7 @@ class JobApplyAgentTests(unittest.TestCase):
             question_answers={
                 "start_date": "I can start in about two months.",
                 "sponsorship": "Yes, I will now or in the future require visa sponsorship or a visa transfer.",
+                "authorization": "I am authorized to work in the United States.",
             },
         )
         research = {
@@ -1258,13 +1327,184 @@ class JobApplyAgentTests(unittest.TestCase):
                     "platform": "Ashby",
                     "source_file": "form.json",
                 },
+                {
+                    "label": "Do you currently have the legal right to work in one of these locations?",
+                    "normalized_label": "currently have legal right work one these locations",
+                    "category": "work_authorization",
+                    "automation_action": "auto_answer_from_memory",
+                    "sensitivity": "standard_preference",
+                    "required": True,
+                    "platform": "Ashby",
+                    "source_file": "form.json",
+                },
             ],
         }
 
         report = build_answer_gap_report(research, profile=profile, answer_memory=None)
 
         self.assertEqual(report["blocking_prompt_count"], 0)
-        self.assertEqual(report["coverage_counts"]["covered_auto_answer"], 2)
+        self.assertEqual(report["coverage_counts"]["covered_auto_answer"], 3)
+
+    def test_answer_gap_report_uses_standard_source_disclosure_and_age_answers(self) -> None:
+        profile = CandidateProfile(
+            name="Alan Jiang",
+            email="alan@example.com",
+            phone="555-0100",
+            location="Bellevue, WA",
+            target_titles=["Site Reliability Engineer"],
+            target_locations=["United States"],
+            remote_ok=True,
+            keywords=["sre"],
+            blocklist=[],
+            min_score=1,
+            resume_facts={},
+            question_answers={
+                "referral_source": "LinkedIn",
+                "referral_contact": "N/A - no specific employee referral.",
+                "age_over_18": "Yes",
+                "ai_application_disclosure": "Yes",
+                "compensation_currency": "USD",
+                "communication_consent": "Yes",
+            },
+        )
+        research = {
+            "generated_at": "2026-05-22T00:00:00+00:00",
+            "positions_observed_total": 1,
+            "items": [
+                {
+                    "label": "How did you hear about this job?",
+                    "normalized_label": "how did hear about this job",
+                    "category": "referral_source",
+                    "automation_action": "auto_answer_from_memory",
+                    "sensitivity": "standard_preference",
+                    "required": True,
+                    "platform": "Greenhouse",
+                    "source_file": "form.json",
+                },
+                {
+                    "label": "If you were referred by someone at Later, please let us know!",
+                    "normalized_label": "if referred by someone later please let us know",
+                    "category": "referral_contact",
+                    "automation_action": "auto_answer_from_memory",
+                    "sensitivity": "standard_preference",
+                    "required": True,
+                    "platform": "Greenhouse",
+                    "source_file": "form.json",
+                },
+                {
+                    "label": "Are you at least 18 years of age?",
+                    "normalized_label": "at least 18 years age",
+                    "category": "legal_age",
+                    "automation_action": "auto_answer_from_memory",
+                    "sensitivity": "standard_preference",
+                    "required": True,
+                    "platform": "Ashby",
+                    "source_file": "form.json",
+                },
+                {
+                    "label": "Did AI complete this application?",
+                    "normalized_label": "did ai complete this application",
+                    "category": "ai_application_disclosure",
+                    "automation_action": "auto_answer_from_memory",
+                    "sensitivity": "disclosure",
+                    "required": True,
+                    "platform": "Greenhouse",
+                    "source_file": "form.json",
+                },
+                {
+                    "label": "Currency",
+                    "normalized_label": "currency",
+                    "category": "compensation_currency",
+                    "automation_action": "auto_answer_from_memory",
+                    "sensitivity": "standard_preference",
+                    "required": True,
+                    "platform": "Greenhouse",
+                    "source_file": "form.json",
+                },
+                {
+                    "label": "Future Contact Consent",
+                    "normalized_label": "future contact consent",
+                    "category": "communication_consent",
+                    "automation_action": "auto_answer_from_memory",
+                    "sensitivity": "consent",
+                    "required": True,
+                    "platform": "Ashby",
+                    "source_file": "form.json",
+                },
+            ],
+        }
+
+        report = build_answer_gap_report(research, profile=profile, answer_memory=None)
+
+        self.assertEqual(report["blocking_prompt_count"], 0)
+        self.assertEqual(report["coverage_counts"]["covered_auto_answer"], 6)
+
+    def test_employment_date_fields_use_specific_resume_facts(self) -> None:
+        profile = CandidateProfile(
+            name="Alan Jiang",
+            email="alan@example.com",
+            phone="555-0100",
+            location="Bellevue, WA",
+            target_titles=["Site Reliability Engineer"],
+            target_locations=["United States"],
+            remote_ok=True,
+            keywords=["sre"],
+            blocklist=[],
+            min_score=1,
+            resume_facts={
+                "employment_dates": "Current role: Jan 2026-Present",
+                "current_role_end_month": "Present",
+                "current_role_end_year": "Present",
+            },
+            question_answers={},
+        )
+        snapshot = {
+            "title": "Example Application",
+            "url": "https://job-boards.greenhouse.io/example/jobs/1",
+            "platform": "Greenhouse",
+            "fields": [
+                {"i": 1, "label": "End date month", "tag": "INPUT", "required": True},
+                {"i": 2, "label": "End date year", "tag": "INPUT", "required": True},
+            ],
+        }
+
+        plan = build_form_fill_plan(snapshot, profile=profile, include_values=True)
+
+        self.assertEqual(plan["steps"][0]["status"], "ready")
+        self.assertEqual(plan["steps"][0]["value"], "Present")
+        self.assertEqual(plan["steps"][1]["value"], "Present")
+
+    def test_profile_link_fields_require_matching_link_type(self) -> None:
+        profile = CandidateProfile(
+            name="Alan Jiang",
+            email="alan@example.com",
+            phone="555-0100",
+            location="Bellevue, WA",
+            target_titles=["Site Reliability Engineer"],
+            target_locations=["United States"],
+            remote_ok=True,
+            keywords=["sre"],
+            blocklist=[],
+            min_score=1,
+            resume_facts={},
+            question_answers={"linkedin_profile": "https://www.linkedin.com/in/example/"},
+        )
+        snapshot = {
+            "title": "Example Application",
+            "url": "https://job-boards.greenhouse.io/example/jobs/1",
+            "platform": "Greenhouse",
+            "fields": [
+                {"i": 1, "label": "LinkedIn Profile", "tag": "INPUT", "required": True},
+                {"i": 2, "label": "Google Scholar", "tag": "INPUT", "required": False},
+            ],
+        }
+
+        plan = build_form_fill_plan(snapshot, profile=profile, include_values=True)
+
+        self.assertEqual(plan["steps"][0]["status"], "ready")
+        self.assertEqual(plan["steps"][0]["value"], "https://www.linkedin.com/in/example/")
+        self.assertEqual(plan["steps"][1]["status"], "missing_profile_value")
+        self.assertEqual(plan["steps"][1]["value_source"], "profile.question_answers.google_scholar")
 
     def test_application_research_skips_linkedin_ai_advice_prompts(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

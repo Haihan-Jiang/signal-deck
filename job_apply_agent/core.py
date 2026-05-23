@@ -859,6 +859,10 @@ def classify_application_prompt(
             "sexual orientation",
             "transgender",
             "pronoun",
+            "current age",
+            "date of birth",
+            "birthdate",
+            "communities do you belong",
         ]
     ):
         return ApplicationPromptClassification(
@@ -867,7 +871,11 @@ def classify_application_prompt(
             "protected_class",
             "protected_class_self_identification",
         )
-    if (field_type == "file" and any(term in text for term in ["resume", "cv", "autofill"])) or raw_label in {
+    if (
+        (field_type == "file" and any(term in text for term in ["resume", "cv", "autofill"]))
+        or ("resume" in text and "cover letter" not in text)
+        or ("cv" in text and "cover letter" not in text)
+    ) or raw_label in {
         "resume",
         "resume cv",
         "cv resume",
@@ -893,7 +901,17 @@ def classify_application_prompt(
             "document",
             "generic_file_upload",
         )
-    if any(term in text for term in ["legally authorized", "authorized to work", "work authorization"]):
+    if any(
+        term in text
+        for term in [
+            "legally authorized",
+            "authorized to work",
+            "work authorization",
+            "eligible to work",
+            "legal right to work",
+            "authorization to work",
+        ]
+    ):
         return ApplicationPromptClassification(
             "work_authorization",
             "auto_answer_from_memory",
@@ -926,6 +944,27 @@ def classify_application_prompt(
             "standard_preference",
             "standard_compensation_answer",
         )
+    if raw_label == "currency" or "preferred currency" in text:
+        return ApplicationPromptClassification(
+            "compensation_currency",
+            "auto_answer_from_memory",
+            "standard_preference",
+            "standard_compensation_currency_answer",
+        )
+    if any(term in text for term in ["18 years of age", "18 or older", "at least 18"]):
+        return ApplicationPromptClassification(
+            "legal_age",
+            "auto_answer_from_memory",
+            "standard_preference",
+            "minimum_work_age_answer",
+        )
+    if "did ai complete this application" in text or "ai complete this application" in text:
+        return ApplicationPromptClassification(
+            "ai_application_disclosure",
+            "auto_answer_from_memory",
+            "disclosure",
+            "ai_assistance_disclosure_answer",
+        )
     if any(
         term in text
         for term in ["start date", "available to start", "can you start", "notice period", "availability"]
@@ -943,19 +982,33 @@ def classify_application_prompt(
             "standard_preference",
             "standard_relocation_answer",
         )
+    if any(term in text for term in ["remote friendly", "remote-friendly", "remote work"]):
+        return ApplicationPromptClassification(
+            "remote_preference",
+            "auto_answer_from_memory",
+            "standard_preference",
+            "standard_remote_preference_answer",
+        )
     if any(
         term in text
         for term in [
             "remote state",
             "state will you work",
             "work remotely from",
+            "remote friendly",
+            "remote-friendly",
             "time zone",
             "timezone",
             "current location",
             "currently located",
             "presently located",
             "where currently based",
+            "where are you currently based",
             "where are you based",
+            "located in the united states",
+            "currently reside",
+            "region do you reside",
+            "state province",
             "zip code",
             "postal code",
             "please select your state",
@@ -986,7 +1039,7 @@ def classify_application_prompt(
             "job title",
             "previous employer",
         ]
-    ):
+    ) or raw_label in {"title", "title 0", "current role", "current role 0", "job title"}:
         return ApplicationPromptClassification(
             "employment_history",
             "auto_fill_from_profile",
@@ -1015,6 +1068,11 @@ def classify_application_prompt(
         "privacy" in text
         or "acknowledgement" in text
         or "acknowledgment" in text
+        or "acknowledged" in text
+        or "terms conditions" in text
+        or "terms and conditions" in text
+        or "certify the information provided" in text
+        or "personal information retained" in text
         or "consenting to the use of ai" in text
         or "ai for evaluating my candidacy" in text
     ):
@@ -1027,7 +1085,7 @@ def classify_application_prompt(
     if re.search(r"\b(?:sms|whatsapp)\b", text) or "text message" in text or "future contact consent" in text:
         return ApplicationPromptClassification(
             "communication_consent",
-            "human_review_required",
+            "auto_answer_from_memory",
             "consent",
             "optional_communication_consent",
         )
@@ -1064,6 +1122,13 @@ def classify_application_prompt(
             "resume_fact",
             "skill_or_cloud_experience",
         )
+    if "influence your decision" in text:
+        return ApplicationPromptClassification(
+            "role_specific_free_text",
+            "generate_custom_material",
+            "custom_material",
+            "role_specific_written_answer",
+        )
     if any(
         term in text
         for term in [
@@ -1074,6 +1139,10 @@ def classify_application_prompt(
             "personal site",
             "x profile",
             "profile url",
+            "google scholar",
+            "scholar",
+            "blog",
+            "public writing",
         ]
     ):
         return ApplicationPromptClassification(
@@ -1091,6 +1160,7 @@ def classify_application_prompt(
             "full name",
             "email",
             "phone",
+            "mobile number",
             "location",
             "city",
             "country",
@@ -1154,6 +1224,25 @@ def classify_application_prompt(
             "additional information or a note",
             "what will you do",
             "what ai tools",
+            "what do you value",
+            "what motivates you",
+            "what is it about",
+            "anything else",
+            "share something",
+            "developed software applications",
+            "decisions drive impact",
+            "change is constant",
+            "utilize ai tools",
+            "high traffic environment",
+            "please summarise",
+            "this role requires",
+            "what makes you the ideal candidate",
+            "what does success look like",
+            "what does it mean to be",
+            "which companies do you think",
+            "pourquoi rejoindre",
+            "prêt e",
+            "prête",
         ]
     ):
         return ApplicationPromptClassification(
@@ -1162,12 +1251,19 @@ def classify_application_prompt(
             "custom_material",
             "role_specific_written_answer",
         )
-    if any(term in text for term in ["blog", "source", "referral", "hear about"]):
+    if any(term in text for term in ["hear about", "learn about"]):
         return ApplicationPromptClassification(
-            "employer_specific_question",
-            "human_review_required",
-            "employer_specific",
-            "requires_employer_specific_context",
+            "referral_source",
+            "auto_answer_from_memory",
+            "standard_preference",
+            "standard_referral_source_answer",
+        )
+    if any(term in text for term in ["referral", "referred by", "who should we thank"]):
+        return ApplicationPromptClassification(
+            "referral_contact",
+            "auto_answer_from_memory",
+            "standard_preference",
+            "standard_referral_contact_answer",
         )
     if any(
         term in text
@@ -1178,6 +1274,8 @@ def classify_application_prompt(
             "fluent japanese",
             "verbal and written english",
             "professional level",
+            "english level",
+            "english language skills",
         ]
     ):
         return ApplicationPromptClassification(
@@ -1194,9 +1292,14 @@ def classify_application_prompt(
             "come onsite",
             "in office",
             "in-office",
+            "office",
             "onsite",
             "on-site",
             "hybrid schedule",
+            "hybrid policy",
+            "hybrid work",
+            "four days per week",
+            "5 days a week",
             "riyadh",
             "taipei",
         ]
@@ -1208,6 +1311,13 @@ def classify_application_prompt(
             "location_constraint_requires_confirmation",
         )
     if "own device" in text:
+        return ApplicationPromptClassification(
+            "device_policy",
+            "human_review_required",
+            "policy",
+            "device_policy_requires_confirmation",
+        )
+    if "own computer" in text:
         return ApplicationPromptClassification(
             "device_policy",
             "human_review_required",
@@ -6727,7 +6837,15 @@ def _profile_field_status(
             "next_action": "add current employer/title facts to profile resume_facts",
         }
     if category == "employment_dates":
-        if profile.resume_facts.get("employment_dates"):
+        if profile.resume_facts.get("employment_dates") or any(
+            profile.resume_facts.get(key)
+            for key in [
+                "current_role_start_month",
+                "current_role_start_year",
+                "current_role_end_month",
+                "current_role_end_year",
+            ]
+        ):
             return {"covered": True, "reason": "employment_dates_resume_fact_present", "source": "profile.resume_facts.employment_dates"}
         return {
             "covered": False,
@@ -6736,13 +6854,18 @@ def _profile_field_status(
             "next_action": "add employment date facts from resume before autofill",
         }
     if category == "profile_link":
-        if _profile_answer_contains_any(profile, ["linkedin", "github", "portfolio", "website"]):
-            return {"covered": True, "reason": "profile_link_present", "source": "profile.question_answers"}
+        link_status = _profile_link_value(label, profile)
+        if link_status["available"]:
+            return {
+                "covered": True,
+                "reason": "profile_link_present",
+                "source": link_status["source"],
+            }
         return {
             "covered": False,
             "missing_status": "needs_profile_field",
-            "reason": "missing_profile_link",
-            "next_action": "add LinkedIn/GitHub/profile URLs to the local profile",
+            "reason": link_status["reason"],
+            "next_action": link_status["next_action"],
         }
     if category in {"resume_upload", "cover_letter_upload", "file_upload"}:
         if _profile_answer_contains_any(profile, ["resume_path", "resume_file", "resume_pdf"]):
@@ -6768,6 +6891,45 @@ def _profile_answer_contains_any(profile: CandidateProfile, keys: list[str]) -> 
         )
     )
     return any(_normalize(key) in searchable for key in keys)
+
+
+def _profile_link_value(label: str, profile: CandidateProfile) -> dict[str, Any]:
+    text = _normalize(label)
+    key_groups: list[tuple[list[str], list[str]]] = [
+        (["linkedin"], ["linkedin_profile", "linkedin", "linkedin_url"]),
+        (["github"], ["github_profile", "github", "github_url"]),
+        (["google scholar", "scholar"], ["google_scholar", "google_scholar_url"]),
+        (["x profile", "twitter"], ["x_profile", "twitter_profile", "twitter_url"]),
+        (
+            ["portfolio", "website", "personal site", "personal blog", "blog", "public writing"],
+            ["portfolio", "portfolio_url", "website", "website_url", "personal_site", "blog", "public_writing_url"],
+        ),
+    ]
+    requested_keys: list[str] = []
+    for hints, keys in key_groups:
+        if any(hint in text for hint in hints):
+            requested_keys = keys
+            break
+    if not requested_keys:
+        requested_keys = [
+            "linkedin_profile",
+            "linkedin",
+            "github",
+            "portfolio",
+            "website",
+            "profile_url",
+        ]
+
+    for key in requested_keys:
+        value = str(profile.question_answers.get(key) or "").strip()
+        if value:
+            return _source_value(f"profile.question_answers.{key}", value)
+    return {
+        "available": False,
+        "source": f"profile.question_answers.{requested_keys[0]}",
+        "reason": "missing_profile_link",
+        "next_action": f"add {requested_keys[0]} to the local profile",
+    }
 
 
 def _profile_has_generation_facts(profile: CandidateProfile | None) -> bool:
@@ -6952,22 +7114,15 @@ def _profile_value_for_form_field(
             profile.resume_facts.get("current_role", ""),
         )
     if category == "employment_dates":
+        value = _employment_date_value(label, profile)
         return _source_value(
-            "profile.resume_facts.employment_dates",
-            profile.resume_facts.get("employment_dates", ""),
+            value.get("source", "profile.resume_facts.employment_dates"),
+            value.get("value", ""),
             missing_status="needs_resume_facts",
             next_action="add employment date facts from resume before autofill",
         )
     if category == "profile_link":
-        for key in ["linkedin_profile", "linkedin", "profile_url"]:
-            if profile.question_answers.get(key):
-                return _source_value(f"profile.question_answers.{key}", profile.question_answers[key])
-        return {
-            "available": False,
-            "source": "profile.question_answers.linkedin_profile",
-            "reason": "missing_profile_link",
-            "next_action": "add LinkedIn profile URL to profile",
-        }
+        return _profile_link_value(label, profile)
     if category in {"resume_upload", "file_upload", "cover_letter_upload"}:
         for key in ["resume_path", "resume_file", "resume_pdf"]:
             if profile.question_answers.get(key):
@@ -8852,6 +9007,8 @@ def _is_low_signal_application_prompt(normalized: str) -> bool:
         return True
     if re.fullmatch(r"question \d+", normalized):
         return True
+    if re.fullmatch(r"\d+ (what is the purpose of this document|how is your personal data collected|how long will you use my information for)", normalized):
+        return True
     if re.fullmatch(r"(start|end) (month|year) \d+", normalized):
         return True
     if normalized.startswith("toggle child menu"):
@@ -9012,11 +9169,37 @@ def _direct_answer(profile: CandidateProfile, normalized_question: str) -> str |
             return answer
 
     answer_map = {
-        "authorization": ["authorized", "authorization", "work in the united states"],
+        "authorization": [
+            "authorized",
+            "authorization",
+            "work in the united states",
+            "eligible to work",
+            "legal right to work",
+            "right to work",
+        ],
         "sponsorship": ["sponsor", "sponsorship", "visa", "immigration assistance"],
         "compensation": ["salary", "compensation", "pay"],
+        "compensation_currency": ["currency", "preferred currency"],
         "start_date": ["start", "available", "availability", "notice period", "notice"],
         "relocation": ["relocat"],
+        "remote_preference": ["remote-friendly", "remote friendly", "remote work", "work remotely"],
+        "onsite_hybrid": ["onsite", "on-site", "in office", "in-office", "hybrid", "office"],
+        "english_level": ["english level", "english language skills", "verbal and written english"],
+        "policy_acknowledgement": [
+            "acknowledgement",
+            "acknowledgment",
+            "acknowledged",
+            "terms conditions",
+            "terms and conditions",
+            "certify the information provided",
+            "personal information retained",
+            "consenting to the use of ai",
+        ],
+        "age_over_18": ["18 years of age", "18 or older", "at least 18"],
+        "ai_application_disclosure": ["did ai complete", "ai complete this application"],
+        "referral_source": ["hear about", "learn about", "source"],
+        "referral_contact": ["referral", "referred by", "who should we thank"],
+        "communication_consent": ["sms", "whatsapp", "text message", "future contact"],
         "cloud_provider_general": [
             "gcp",
             "google cloud",
@@ -9031,6 +9214,30 @@ def _direct_answer(profile: CandidateProfile, normalized_question: str) -> str |
         if answer and any(hint in normalized_question for hint in hints):
             return answer
     return None
+
+
+def _employment_date_value(label: str, profile: CandidateProfile) -> dict[str, str]:
+    text = _normalize(label)
+    facts = profile.resume_facts
+    field_key = ""
+    if "start" in text and "month" in text:
+        field_key = "current_role_start_month"
+    elif "start" in text and "year" in text:
+        field_key = "current_role_start_year"
+    elif "end" in text and "month" in text:
+        field_key = "current_role_end_month"
+    elif "end" in text and "year" in text:
+        field_key = "current_role_end_year"
+
+    if field_key and facts.get(field_key):
+        return {
+            "source": f"profile.resume_facts.{field_key}",
+            "value": facts[field_key],
+        }
+    return {
+        "source": "profile.resume_facts.employment_dates",
+        "value": facts.get("employment_dates", ""),
+    }
 
 
 def _is_remote(job: dict[str, Any]) -> bool:
