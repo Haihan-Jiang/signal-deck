@@ -39,6 +39,7 @@ from .core import (
     write_collection_plan,
     write_critical_input_answer_workflow,
     write_critical_input_answer_update,
+    write_critical_input_preflight,
     write_critical_input_questionnaire,
     write_form_fill_plan,
     write_fake_learning_probe,
@@ -100,6 +101,9 @@ DEFAULT_CRITICAL_INPUT_UPDATE_JSON = Path(__file__).with_name("outbox") / "criti
 DEFAULT_CRITICAL_INPUT_UPDATE_MARKDOWN = Path(__file__).with_name("outbox") / "critical_input_update_latest.md"
 DEFAULT_CRITICAL_INPUT_WORKFLOW_JSON = Path(__file__).with_name("outbox") / "critical_input_workflow_latest.json"
 DEFAULT_CRITICAL_INPUT_WORKFLOW_MARKDOWN = Path(__file__).with_name("outbox") / "critical_input_workflow_latest.md"
+DEFAULT_CRITICAL_INPUT_PREFLIGHT_JSON = Path(__file__).with_name("outbox") / "critical_input_preflight_latest.json"
+DEFAULT_CRITICAL_INPUT_PREFLIGHT_MARKDOWN = Path(__file__).with_name("outbox") / "critical_input_preflight_latest.md"
+DEFAULT_CRITICAL_INPUT_PREFLIGHT_HTML = Path(__file__).with_name("outbox") / "critical_input_preflight_latest.html"
 DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_JSON = Path(__file__).with_name("outbox") / "critical_input_questionnaire_latest.json"
 DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_MARKDOWN = Path(__file__).with_name("outbox") / "critical_input_questionnaire_latest.md"
 DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_HTML = Path(__file__).with_name("outbox") / "critical_input_questionnaire_latest.html"
@@ -464,6 +468,38 @@ def main() -> int:
         help="also approve high-risk rows supplied in this update",
     )
 
+    critical_inputs_preflight_parser = subparsers.add_parser(
+        "critical-inputs-preflight",
+        help="simulate compact critical answers in a temp workspace and report automation impact",
+    )
+    critical_inputs_preflight_parser.add_argument("--approval-pack", default=str(DEFAULT_LEARNING_APPROVAL_PACK_JSON))
+    critical_inputs_preflight_parser.add_argument("--answers", default=str(DEFAULT_CRITICAL_INPUT_ANSWERS_JSON))
+    critical_inputs_preflight_parser.add_argument("--updates", required=True)
+    critical_inputs_preflight_parser.add_argument("--research-json", default=str(DEFAULT_RESEARCH_JSON))
+    critical_inputs_preflight_parser.add_argument(
+        "--profile",
+        default=str(DEFAULT_PERSONAL_PROFILE if DEFAULT_PERSONAL_PROFILE.exists() else DEFAULT_PROFILE),
+    )
+    critical_inputs_preflight_parser.add_argument("--memory", default=str(DEFAULT_MEMORY))
+    critical_inputs_preflight_parser.add_argument("--closed-jobs", default=str(DEFAULT_CLOSED_JOBS))
+    critical_inputs_preflight_parser.add_argument("--source", default="critical_input_preflight")
+    critical_inputs_preflight_parser.add_argument("--json-output", default=str(DEFAULT_CRITICAL_INPUT_PREFLIGHT_JSON))
+    critical_inputs_preflight_parser.add_argument(
+        "--markdown-output",
+        default=str(DEFAULT_CRITICAL_INPUT_PREFLIGHT_MARKDOWN),
+    )
+    critical_inputs_preflight_parser.add_argument("--html-output", default=str(DEFAULT_CRITICAL_INPUT_PREFLIGHT_HTML))
+    critical_inputs_preflight_parser.add_argument(
+        "--approve",
+        action="store_true",
+        help="approve non-high-risk rows while simulating supplied answers",
+    )
+    critical_inputs_preflight_parser.add_argument(
+        "--approve-high-risk",
+        action="store_true",
+        help="also approve high-risk rows supplied in this preflight",
+    )
+
     critical_inputs_workflow_parser = subparsers.add_parser(
         "critical-inputs-workflow",
         help="merge confirmed critical answers, dry-run apply, optionally apply, then refresh reports",
@@ -778,6 +814,14 @@ def main() -> int:
         "--critical-input-questionnaire-html",
         default=str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_HTML),
     )
+    export_questions_parser.add_argument(
+        "--critical-input-preflight-json",
+        default=str(DEFAULT_CRITICAL_INPUT_PREFLIGHT_JSON),
+    )
+    export_questions_parser.add_argument(
+        "--critical-input-preflight-html",
+        default=str(DEFAULT_CRITICAL_INPUT_PREFLIGHT_HTML),
+    )
     export_questions_parser.add_argument("--xlsx-output", default=str(DEFAULT_QUESTION_EXPORT_XLSX))
     export_questions_parser.add_argument("--html-output", default=str(DEFAULT_QUESTION_EXPORT_HTML))
 
@@ -942,6 +986,8 @@ def main() -> int:
                     "Critical input suggestions": args.critical_input_suggestions_json,
                     "Critical input questionnaire": args.critical_input_questionnaire_json,
                     "Critical input questionnaire HTML": args.critical_input_questionnaire_html,
+                    "Critical input preflight": args.critical_input_preflight_json,
+                    "Critical input preflight HTML": args.critical_input_preflight_html,
                 }
             ),
             synthetic_browser_execution=_load_optional_json(args.synthetic_browser_exec_json),
@@ -1335,6 +1381,52 @@ def main() -> int:
         print(f"Unknown updates: {summary.get('unknown_update_count', 0)}")
         print(f"Ready after update: {summary.get('ready_after_update_count', 0)}")
         print(f"Waiting after update: {summary.get('waiting_after_update_count', 0)}")
+        return 0
+
+    if args.command == "critical-inputs-preflight":
+        updates_path = Path(args.updates)
+        if not Path(args.approval_pack).exists():
+            raise FileNotFoundError(f"approval pack not found: {args.approval_pack}")
+        if not Path(args.answers).exists():
+            raise FileNotFoundError(f"critical input answers not found: {args.answers}")
+        if not updates_path.exists():
+            raise FileNotFoundError(f"critical input updates not found: {args.updates}")
+        if not Path(args.research_json).exists():
+            raise FileNotFoundError(f"research report not found: {args.research_json}")
+        if not Path(args.profile).exists():
+            raise FileNotFoundError(f"profile not found: {args.profile}")
+        preflight = write_critical_input_preflight(
+            args.approval_pack,
+            args.answers,
+            json.loads(updates_path.read_text(encoding="utf-8")),
+            args.research_json,
+            args.profile,
+            args.memory,
+            args.json_output,
+            args.markdown_output,
+            args.html_output,
+            closed_jobs=_load_optional_json(args.closed_jobs),
+            approve=args.approve,
+            approve_high_risk=args.approve_high_risk,
+            source=args.source,
+        )
+        summary = preflight.get("summary") or {}
+        print(f"Wrote critical input preflight JSON to {args.json_output}")
+        print(f"Wrote critical input preflight Markdown to {args.markdown_output}")
+        print(f"Wrote critical input preflight HTML to {args.html_output}")
+        print(f"Matched updates: {summary.get('matched_updates', 0)}")
+        print(f"Unknown updates: {summary.get('unknown_updates', 0)}")
+        print(f"High-risk approvals blocked: {summary.get('high_risk_approval_blocked', 0)}")
+        print(
+            "Data-blocking prompts: "
+            f"{summary.get('data_blocking_prompts_before', 0)} -> "
+            f"{summary.get('data_blocking_prompts_after', 0)}"
+        )
+        print(
+            "Positions ready for autofill: "
+            f"{summary.get('positions_ready_for_autofill_before', 0)} -> "
+            f"{summary.get('positions_ready_for_autofill_after', 0)}"
+        )
         return 0
 
     if args.command == "critical-inputs-workflow":
@@ -1912,6 +2004,8 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                     "Critical input suggestions": str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON),
                     "Critical input questionnaire": str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_JSON),
                     "Critical input questionnaire HTML": str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_HTML),
+                    "Critical input preflight": str(DEFAULT_CRITICAL_INPUT_PREFLIGHT_JSON),
+                    "Critical input preflight HTML": str(DEFAULT_CRITICAL_INPUT_PREFLIGHT_HTML),
                 }
             ),
             synthetic_browser_execution=_load_optional_json(str(DEFAULT_SYNTHETIC_BROWSER_EXEC_JSON)),

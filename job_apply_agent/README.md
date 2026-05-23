@@ -465,6 +465,28 @@ but not approved unless the update object includes
 command is run with `--approve-high-risk`. Supervised-only rows are skipped and
 remain browser review steps.
 
+Before applying the answers to the real local profile and answer memory, run a
+temp-only impact preview:
+
+```bash
+python3 -m job_apply_agent critical-inputs-preflight \
+  --updates /path/to/confirmed_critical_input_answers.json \
+  --approve
+```
+
+This writes:
+
+```text
+job_apply_agent/outbox/critical_input_preflight_latest.json
+job_apply_agent/outbox/critical_input_preflight_latest.md
+job_apply_agent/outbox/critical_input_preflight_latest.html
+```
+
+The preflight command merges the compact answers in memory, applies them only
+inside a temporary workspace, then reports how many data blockers, ready
+prompts, and autofill-ready positions would change. It does not write the real
+profile, answer memory, or any employer application.
+
 To run the whole confirmed-answer intake loop in one command, use:
 
 ```bash

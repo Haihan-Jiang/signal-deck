@@ -8,6 +8,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -5017,6 +5018,510 @@ def _critical_input_answer_workflow_next_commands(apply_confirmed: bool) -> list
     ]
 
 
+def build_critical_input_preflight(
+    approval_pack: dict[str, Any],
+    answers_payload: dict[str, Any],
+    updates_payload: dict[str, Any] | list[Any],
+    research: dict[str, Any],
+    profile_payload: dict[str, Any],
+    answer_memory: dict[str, Any] | None = None,
+    closed_jobs: dict[str, Any] | None = None,
+    approve: bool = False,
+    approve_high_risk: bool = False,
+    source: str = "critical_input_preflight",
+) -> dict[str, Any]:
+    if not isinstance(approval_pack, dict):
+        raise ValueError("approval pack must be a JSON object")
+    if not isinstance(answers_payload, dict):
+        raise ValueError("critical input answers must be a JSON object")
+    if not isinstance(research, dict):
+        raise ValueError("research report must be a JSON object")
+    if not isinstance(profile_payload, dict):
+        raise ValueError("profile must be a JSON object")
+    if answer_memory is not None and not isinstance(answer_memory, dict):
+        raise ValueError("answer memory must be a JSON object")
+
+    memory_payload = json.loads(json.dumps(answer_memory or {"version": 1, "answers": []}))
+    profile_payload_copy = json.loads(json.dumps(profile_payload))
+    update_report = build_critical_input_answer_update(
+        answers_payload,
+        updates_payload,
+        approve=approve,
+        approve_high_risk=approve_high_risk,
+    )
+    updated_answers = update_report.get("updated_answers") or answers_payload
+    before_status = build_critical_input_status_report(approval_pack, answers_payload)
+    after_status = build_critical_input_status_report(approval_pack, updated_answers)
+    before_profile = CandidateProfile.from_mapping(profile_payload_copy)
+    before_gaps = build_answer_gap_report(
+        research,
+        profile=before_profile,
+        answer_memory=memory_payload,
+    )
+    before_readiness = build_position_readiness_report(
+        research,
+        before_gaps,
+        closed_jobs=closed_jobs,
+    )
+
+    with tempfile.TemporaryDirectory(prefix="job_apply_critical_preflight_") as temp_dir:
+        temp_root = Path(temp_dir)
+        approval_path = temp_root / "approval_pack.json"
+        answers_path = temp_root / "critical_input_answers.json"
+        profile_path = temp_root / "profile.json"
+        memory_path = temp_root / "answer_memory.json"
+        approval_path.write_text(json.dumps(approval_pack, ensure_ascii=True, indent=2), encoding="utf-8")
+        answers_path.write_text(json.dumps(updated_answers, ensure_ascii=True, indent=2), encoding="utf-8")
+        profile_path.write_text(json.dumps(profile_payload_copy, ensure_ascii=True, indent=2), encoding="utf-8")
+        memory_path.write_text(json.dumps(memory_payload, ensure_ascii=True, indent=2), encoding="utf-8")
+        temp_apply_result = apply_critical_input_answers(
+            approval_path,
+            profile_path,
+            memory_path,
+            answers_path=answers_path,
+            source=source,
+            dry_run=False,
+        )
+        simulated_profile = load_profile(profile_path)
+        simulated_memory = load_answer_memory(memory_path)
+
+    after_gaps = build_answer_gap_report(
+        research,
+        profile=simulated_profile,
+        answer_memory=simulated_memory,
+    )
+    after_readiness = build_position_readiness_report(
+        research,
+        after_gaps,
+        closed_jobs=closed_jobs,
+    )
+    summary = _critical_input_preflight_summary(
+        update_report,
+        before_status,
+        after_status,
+        before_gaps,
+        after_gaps,
+        before_readiness,
+        after_readiness,
+        temp_apply_result,
+    )
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "critical_input_preflight",
+        "summary": summary,
+        "before": {
+            "critical_status": before_status.get("summary", {}),
+            "gaps": _critical_input_preflight_gap_summary(before_gaps),
+            "readiness": _critical_input_preflight_readiness_summary(before_readiness),
+        },
+        "after": {
+            "critical_status": after_status.get("summary", {}),
+            "gaps": _critical_input_preflight_gap_summary(after_gaps),
+            "readiness": _critical_input_preflight_readiness_summary(after_readiness),
+        },
+        "deltas": {
+            "coverage_status_counts": _critical_input_count_delta(
+                before_gaps.get("coverage_counts") or {},
+                after_gaps.get("coverage_counts") or {},
+            ),
+            "readiness_counts": _critical_input_count_delta(
+                before_readiness.get("readiness_counts") or {},
+                after_readiness.get("readiness_counts") or {},
+            ),
+        },
+        "update_report": {key: value for key, value in update_report.items() if key != "updated_answers"},
+        "temp_apply_result": temp_apply_result,
+        "remaining_data_blockers": _critical_input_preflight_blocker_rows(after_gaps),
+        "policy": {
+            "temp_only": True,
+            "writes_real_profile_or_memory": False,
+            "writes_temp_profile_or_memory": True,
+            "submits_real_applications": False,
+            "real_platform_submission": False,
+            "high_risk_requires_user_confirmation": not bool(approve_high_risk),
+            "supervised_browser_review_only_skipped": True,
+            "final_submit_remains_supervised": True,
+        },
+        "next_commands": [
+            "python3 -m job_apply_agent critical-inputs-preflight --updates <confirmed_answers.json> --approve",
+            "python3 -m job_apply_agent critical-inputs-workflow --updates <confirmed_answers.json> --approve --apply",
+            "python3 -m job_apply_agent export-questions",
+        ],
+    }
+
+
+def write_critical_input_preflight(
+    approval_pack_path: str | Path,
+    answers_path: str | Path,
+    updates_payload: dict[str, Any] | list[Any],
+    research_path: str | Path,
+    profile_path: str | Path,
+    memory_path: str | Path,
+    json_output: str | Path,
+    markdown_output: str | Path,
+    html_output: str | Path,
+    closed_jobs: dict[str, Any] | None = None,
+    approve: bool = False,
+    approve_high_risk: bool = False,
+    source: str = "critical_input_preflight",
+) -> dict[str, Any]:
+    approval_pack = _read_json_file(Path(approval_pack_path))
+    answers_payload = _read_json_file(Path(answers_path))
+    research = _read_json_file(Path(research_path))
+    profile_payload = _read_json_file(Path(profile_path))
+    if not isinstance(approval_pack, dict):
+        raise ValueError("approval pack must be a JSON object")
+    if not isinstance(answers_payload, dict):
+        raise ValueError("critical input answers must be a JSON object")
+    if not isinstance(research, dict):
+        raise ValueError("research report must be a JSON object")
+    if not isinstance(profile_payload, dict):
+        raise ValueError("profile must be a JSON object")
+    preflight = build_critical_input_preflight(
+        approval_pack,
+        answers_payload,
+        updates_payload,
+        research,
+        profile_payload,
+        answer_memory=load_answer_memory(memory_path),
+        closed_jobs=closed_jobs,
+        approve=approve,
+        approve_high_risk=approve_high_risk,
+        source=source,
+    )
+    preflight["source_paths"] = {
+        "approval_pack": str(approval_pack_path),
+        "answers": str(answers_path),
+        "research": str(research_path),
+        "profile": str(profile_path),
+        "memory": str(memory_path),
+    }
+    preflight["outputs"] = {
+        "json": str(json_output),
+        "markdown": str(markdown_output),
+        "html": str(html_output),
+    }
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    html_path = Path(html_output)
+    for path in [json_path, markdown_path, html_path]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(preflight, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(render_critical_input_preflight_markdown(preflight), encoding="utf-8")
+    html_path.write_text(render_critical_input_preflight_html(preflight), encoding="utf-8")
+    return preflight
+
+
+def render_critical_input_preflight_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    lines = [
+        "# Critical Input Preflight",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        "Writes real profile or memory: false",
+        "Submits real applications: false",
+        "",
+        "## Summary",
+        "",
+        f"- matched updates: {summary.get('matched_updates', 0)}",
+        f"- unknown updates: {summary.get('unknown_updates', 0)}",
+        f"- high-risk approvals blocked: {summary.get('high_risk_approval_blocked', 0)}",
+        f"- supervised skipped: {summary.get('supervised_skipped', 0)}",
+        f"- critical ready: {summary.get('critical_ready_before', 0)} -> {summary.get('critical_ready_after', 0)}",
+        f"- critical waiting: {summary.get('critical_waiting_before', 0)} -> {summary.get('critical_waiting_after', 0)}",
+        f"- blocking prompts: {summary.get('blocking_prompts_before', 0)} -> {summary.get('blocking_prompts_after', 0)} ({summary.get('blocking_prompts_delta', 0)})",
+        f"- data-blocking prompts: {summary.get('data_blocking_prompts_before', 0)} -> {summary.get('data_blocking_prompts_after', 0)} ({summary.get('data_blocking_prompts_delta', 0)})",
+        f"- ready prompts: {summary.get('ready_prompts_before', 0)} -> {summary.get('ready_prompts_after', 0)} ({summary.get('ready_prompts_delta', 0)})",
+        f"- positions ready for autofill: {summary.get('positions_ready_for_autofill_before', 0)} -> {summary.get('positions_ready_for_autofill_after', 0)} ({summary.get('positions_ready_for_autofill_delta', 0)})",
+        f"- temp approved inputs: {summary.get('temp_approved_inputs', 0)}",
+        f"- temp profile updates: {summary.get('temp_profile_updates', 0)}",
+        f"- temp resume fact updates: {summary.get('temp_resume_fact_updates', 0)}",
+        f"- temp answer memory updates: {summary.get('temp_answer_memory_updates', 0)}",
+        "",
+        "## Remaining Data Blockers",
+        "",
+    ]
+    blockers = report.get("remaining_data_blockers") or []
+    if not blockers:
+        lines.append("- None")
+    for blocker in blockers[:40]:
+        lines.append(
+            "- {status}: {label} ({category}; observed {count}x; {platforms})".format(
+                status=blocker.get("coverage_status"),
+                label=blocker.get("label"),
+                category=blocker.get("category"),
+                count=blocker.get("observed_count", 0),
+                platforms=", ".join(blocker.get("platforms") or []),
+            )
+        )
+        lines.append(f"  next: {blocker.get('next_action')}")
+    lines.extend(["", "## Coverage Delta", ""])
+    for status, delta in sorted((report.get("deltas") or {}).get("coverage_status_counts", {}).items()):
+        lines.append(
+            "- {status}: {before} -> {after} ({delta})".format(
+                status=status,
+                before=delta.get("before", 0),
+                after=delta.get("after", 0),
+                delta=delta.get("delta", 0),
+            )
+        )
+    lines.extend(["", "## Policy", ""])
+    policy = report.get("policy") or {}
+    for key, value in sorted(policy.items()):
+        lines.append(f"- {key}: {str(value).lower() if isinstance(value, bool) else value}")
+    lines.extend(["", "## Next Commands", ""])
+    for command in report.get("next_commands") or []:
+        lines.append(f"- `{command}`")
+    return "\n".join(lines) + "\n"
+
+
+def render_critical_input_preflight_html(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    before = report.get("before") or {}
+    after = report.get("after") or {}
+    gap_before = before.get("gaps") or {}
+    gap_after = after.get("gaps") or {}
+    readiness_before = before.get("readiness") or {}
+    readiness_after = after.get("readiness") or {}
+    remaining_rows = [
+        [
+            row.get("coverage_status"),
+            row.get("label"),
+            row.get("category"),
+            row.get("observed_count", 0),
+            ", ".join(row.get("platforms") or []),
+            row.get("next_action"),
+        ]
+        for row in report.get("remaining_data_blockers") or []
+    ]
+    update_rows = [
+        [
+            row.get("input_id"),
+            row.get("status"),
+            row.get("reason"),
+            row.get("answer_updated"),
+            row.get("approval_updated"),
+            row.get("question"),
+        ]
+        for row in (report.get("update_report") or {}).get("rows") or []
+    ]
+    coverage_delta_rows = [
+        [status, value.get("before", 0), value.get("after", 0), value.get("delta", 0)]
+        for status, value in sorted(((report.get("deltas") or {}).get("coverage_status_counts") or {}).items())
+    ]
+    readiness_delta_rows = [
+        [status, value.get("before", 0), value.get("after", 0), value.get("delta", 0)]
+        for status, value in sorted(((report.get("deltas") or {}).get("readiness_counts") or {}).items())
+    ]
+    return "\n".join(
+        [
+            "<!doctype html>",
+            '<html lang="en">',
+            "<head>",
+            '<meta charset="utf-8">',
+            '<meta name="viewport" content="width=device-width, initial-scale=1">',
+            "<title>Critical Input Preflight</title>",
+            "<style>",
+            _question_export_css(),
+            "</style>",
+            "</head>",
+            "<body>",
+            "<main>",
+            "<h1>Critical Input Preflight</h1>",
+            f"<p class=\"muted\">Generated: {_html_escape(report.get('generated_at'))}</p>",
+            _html_kpis(
+                [
+                    ("Matched updates", summary.get("matched_updates", 0)),
+                    ("Critical ready", f"{summary.get('critical_ready_before', 0)} -> {summary.get('critical_ready_after', 0)}"),
+                    ("Data blockers", f"{summary.get('data_blocking_prompts_before', 0)} -> {summary.get('data_blocking_prompts_after', 0)}"),
+                    ("Autofill positions", f"{summary.get('positions_ready_for_autofill_before', 0)} -> {summary.get('positions_ready_for_autofill_after', 0)}"),
+                    ("Real writes", "no"),
+                    ("Real submits", "no"),
+                ]
+            ),
+            "<section><h2>Impact Summary</h2>",
+            _html_table(
+                ["Metric", "Before", "After", "Delta"],
+                [
+                    [
+                        "blocking prompts",
+                        gap_before.get("blocking_prompt_count", 0),
+                        gap_after.get("blocking_prompt_count", 0),
+                        summary.get("blocking_prompts_delta", 0),
+                    ],
+                    [
+                        "data-blocking prompts",
+                        gap_before.get("data_blocking_prompt_count", 0),
+                        gap_after.get("data_blocking_prompt_count", 0),
+                        summary.get("data_blocking_prompts_delta", 0),
+                    ],
+                    [
+                        "ready prompts",
+                        gap_before.get("ready_prompt_count", 0),
+                        gap_after.get("ready_prompt_count", 0),
+                        summary.get("ready_prompts_delta", 0),
+                    ],
+                    [
+                        "positions ready for autofill",
+                        readiness_before.get("ready_for_autofill_count", 0),
+                        readiness_after.get("ready_for_autofill_count", 0),
+                        summary.get("positions_ready_for_autofill_delta", 0),
+                    ],
+                ],
+            ),
+            "</section>",
+            "<section><h2>Update Rows</h2>",
+            _html_table(
+                ["Input ID", "Status", "Reason", "Answer updated", "Approval updated", "Question"],
+                update_rows,
+            ),
+            "</section>",
+            "<section><h2>Remaining Data Blockers</h2>",
+            _html_table(
+                ["Status", "Label", "Category", "Observed", "Platforms", "Next action"],
+                remaining_rows,
+            ),
+            "</section>",
+            "<section><h2>Coverage Delta</h2>",
+            _html_table(["Status", "Before", "After", "Delta"], coverage_delta_rows),
+            "</section>",
+            "<section><h2>Readiness Delta</h2>",
+            _html_table(["Readiness", "Before", "After", "Delta"], readiness_delta_rows),
+            "</section>",
+            "<section><h2>Policy</h2>",
+            _html_key_value_table(report.get("policy") or {}),
+            "</section>",
+            "</main>",
+            "</body>",
+            "</html>",
+        ]
+    )
+
+
+def _critical_input_preflight_summary(
+    update_report: dict[str, Any],
+    before_status: dict[str, Any],
+    after_status: dict[str, Any],
+    before_gaps: dict[str, Any],
+    after_gaps: dict[str, Any],
+    before_readiness: dict[str, Any],
+    after_readiness: dict[str, Any],
+    temp_apply_result: dict[str, Any],
+) -> dict[str, Any]:
+    update_summary = update_report.get("summary") or {}
+    before_status_summary = before_status.get("summary") or {}
+    after_status_summary = after_status.get("summary") or {}
+    before_data = _critical_input_data_blocker_count(before_gaps)
+    after_data = _critical_input_data_blocker_count(after_gaps)
+    before_autofill = _critical_input_ready_for_autofill_count(before_readiness)
+    after_autofill = _critical_input_ready_for_autofill_count(after_readiness)
+    return {
+        "matched_updates": int(update_summary.get("matched_update_count") or 0),
+        "unknown_updates": int(update_summary.get("unknown_update_count") or 0),
+        "high_risk_approval_blocked": int(update_summary.get("high_risk_approval_blocked_count") or 0),
+        "supervised_skipped": int(update_summary.get("supervised_skipped_count") or 0),
+        "critical_ready_before": int(before_status_summary.get("ready_to_apply_count") or 0),
+        "critical_ready_after": int(after_status_summary.get("ready_to_apply_count") or 0),
+        "critical_waiting_before": int(before_status_summary.get("waiting_count") or 0),
+        "critical_waiting_after": int(after_status_summary.get("waiting_count") or 0),
+        "critical_supervised_only": int(after_status_summary.get("supervised_only_count") or 0),
+        "blocking_prompts_before": int(before_gaps.get("blocking_prompt_count") or 0),
+        "blocking_prompts_after": int(after_gaps.get("blocking_prompt_count") or 0),
+        "blocking_prompts_delta": int(after_gaps.get("blocking_prompt_count") or 0)
+        - int(before_gaps.get("blocking_prompt_count") or 0),
+        "data_blocking_prompts_before": before_data,
+        "data_blocking_prompts_after": after_data,
+        "data_blocking_prompts_delta": after_data - before_data,
+        "ready_prompts_before": int(before_gaps.get("ready_prompt_count") or 0),
+        "ready_prompts_after": int(after_gaps.get("ready_prompt_count") or 0),
+        "ready_prompts_delta": int(after_gaps.get("ready_prompt_count") or 0)
+        - int(before_gaps.get("ready_prompt_count") or 0),
+        "positions_ready_for_autofill_before": before_autofill,
+        "positions_ready_for_autofill_after": after_autofill,
+        "positions_ready_for_autofill_delta": after_autofill - before_autofill,
+        "temp_approved_inputs": int(temp_apply_result.get("approved_input_count") or 0),
+        "temp_profile_updates": len(temp_apply_result.get("profile_updates", [])),
+        "temp_resume_fact_updates": len(temp_apply_result.get("resume_fact_updates", [])),
+        "temp_answer_memory_updates": len(temp_apply_result.get("answer_memory_updates", [])),
+        "temp_category_policy_updates": len(temp_apply_result.get("category_policy_updates", [])),
+    }
+
+
+def _critical_input_preflight_gap_summary(gaps: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "positions_observed_total": int(gaps.get("positions_observed_total") or 0),
+        "unique_prompts_observed": int(gaps.get("unique_prompts_observed") or 0),
+        "blocking_prompt_count": int(gaps.get("blocking_prompt_count") or 0),
+        "data_blocking_prompt_count": _critical_input_data_blocker_count(gaps),
+        "ready_prompt_count": int(gaps.get("ready_prompt_count") or 0),
+        "coverage_counts": gaps.get("coverage_counts") or {},
+    }
+
+
+def _critical_input_preflight_readiness_summary(readiness: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "positions_observed_total": int(readiness.get("positions_observed_total") or 0),
+        "ready_for_autofill_count": _critical_input_ready_for_autofill_count(readiness),
+        "learning_queue_count": int(readiness.get("learning_queue_count") or 0),
+        "minimal_learning_task_count": int(readiness.get("minimal_learning_task_count") or 0),
+        "manual_gate_count": int(readiness.get("manual_gate_count") or 0),
+        "readiness_counts": readiness.get("readiness_counts") or {},
+    }
+
+
+def _critical_input_preflight_blocker_rows(gaps: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = [
+        item
+        for item in gaps.get("blocking_prompts") or []
+        if item.get("coverage_status") in _CRITICAL_INPUT_PREFLIGHT_DATA_BLOCKER_STATUSES
+    ]
+    return [
+        {
+            "coverage_status": item.get("coverage_status"),
+            "label": item.get("label"),
+            "category": item.get("category"),
+            "automation_action": item.get("automation_action"),
+            "observed_count": item.get("observed_count", 0),
+            "required_count": item.get("required_count", 0),
+            "platforms": item.get("platforms") or [],
+            "next_action": item.get("next_action"),
+        }
+        for item in rows[:100]
+    ]
+
+
+def _critical_input_data_blocker_count(gaps: dict[str, Any]) -> int:
+    return sum(
+        int((gaps.get("coverage_counts") or {}).get(status) or 0)
+        for status in _CRITICAL_INPUT_PREFLIGHT_DATA_BLOCKER_STATUSES
+    )
+
+
+def _critical_input_ready_for_autofill_count(readiness: dict[str, Any]) -> int:
+    return sum(1 for row in readiness.get("positions") or [] if row.get("ready_for_autofill"))
+
+
+def _critical_input_count_delta(
+    before_counts: dict[str, Any],
+    after_counts: dict[str, Any],
+) -> dict[str, dict[str, int]]:
+    deltas: dict[str, dict[str, int]] = {}
+    for key in sorted(set(before_counts) | set(after_counts)):
+        before = int(before_counts.get(key) or 0)
+        after = int(after_counts.get(key) or 0)
+        deltas[key] = {"before": before, "after": after, "delta": after - before}
+    return deltas
+
+
+_CRITICAL_INPUT_PREFLIGHT_DATA_BLOCKER_STATUSES = {
+    "needs_answer_memory",
+    "needs_profile_field",
+    "needs_profile_material",
+    "needs_resume_facts",
+    "needs_user_confirmation",
+}
+
+
 def render_critical_input_answer_update_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") or {}
     lines = [
@@ -5725,13 +6230,21 @@ def _critical_input_update_entries(payload: dict[str, Any] | list[Any]) -> list[
     reserved = {
         "answers",
         "critical_inputs",
+        "compact_updates",
+        "compact_updates_template",
         "updates",
         "generated_at",
         "source",
         "instructions",
+        "answer_count",
+        "question_count",
+        "answerable_question_count",
+        "high_risk_question_count",
+        "supervised_only_count",
+        "workflow_command",
         "policy",
     }
-    for field in ["updates", "critical_inputs", "answers"]:
+    for field in ["updates", "compact_updates", "compact_updates_template", "critical_inputs", "answers"]:
         value = payload.get(field)
         if isinstance(value, list):
             for item in value:
@@ -5753,7 +6266,13 @@ def _critical_input_update_entries_from_mapping(mapping: dict[str, Any]) -> list
             entry = dict(value)
             entry.setdefault("match_key", key)
             entry.setdefault("input_id", key)
+            has_answer = any(str(entry.get(field) or "").strip() for field in ["user_answer", "answer", "value"])
+            has_approval = any(field in entry for field in ["approval_decision", "approve", "approved"])
+            if not has_answer and not has_approval:
+                continue
         else:
+            if value is None or not str(value).strip():
+                continue
             entry = {"match_key": key, "input_id": key, "user_answer": value}
         entries.append(entry)
     return entries

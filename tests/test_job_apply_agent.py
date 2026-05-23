@@ -21,6 +21,7 @@ from job_apply_agent.core import (
     build_collection_plan_from_coverage_gate,
     build_critical_input_answer_template,
     build_critical_input_answer_update,
+    build_critical_input_preflight,
     build_critical_input_questionnaire,
     build_critical_input_suggestion_packet,
     build_critical_input_status_report,
@@ -82,6 +83,8 @@ from job_apply_agent.core import (
     render_critical_input_answer_template_markdown,
     render_critical_input_answer_workflow_markdown,
     render_critical_input_answer_update_markdown,
+    render_critical_input_preflight_html,
+    render_critical_input_preflight_markdown,
     render_critical_input_questionnaire_html,
     render_critical_input_questionnaire_markdown,
     render_critical_input_suggestions_markdown,
@@ -120,6 +123,7 @@ from job_apply_agent.core import (
     write_critical_input_answer_template,
     write_critical_input_answer_workflow,
     write_critical_input_answer_update,
+    write_critical_input_preflight,
     write_critical_input_questionnaire,
     write_critical_input_suggestion_packet,
     write_critical_input_status_report,
@@ -4555,6 +4559,221 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(workflow_md.exists())
             self.assertTrue(status_json.exists())
             self.assertIn("Critical Input Answer Workflow", render_critical_input_answer_workflow_markdown(applied_workflow))
+
+    def test_critical_input_preflight_reports_temp_only_impact(self) -> None:
+        learning_tasks = {
+            "tasks": [
+                {
+                    "group_key": "profile:zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "recommended_storage": "profile",
+                    "labels": ["Zip Code"],
+                    "platforms": ["Ashby"],
+                    "required_count": 4,
+                    "persist_allowed": True,
+                },
+                {
+                    "group_key": "answer_memory:favorite_junk_food",
+                    "question": "What's your favorite junk food?",
+                    "recommended_storage": "answer_memory",
+                    "labels": ["What's your favorite junk food?"],
+                    "platforms": ["Greenhouse"],
+                    "required_count": 2,
+                    "persist_allowed": True,
+                },
+            ],
+        }
+        pack = build_learning_approval_pack(learning_tasks, {})
+        template = build_critical_input_answer_template(pack)
+        updates = {
+            "profile_zip_or_postal_code": "98004",
+            "answer_memory_favorite_junk_food": "Potato chips",
+        }
+        research = {
+            "positions_observed_total": 1,
+            "positions": [
+                {
+                    "position_key": "ashby:example:sre",
+                    "platform": "Ashby",
+                    "company": "Example",
+                    "title": "Site Reliability Engineer",
+                    "role_family": "SRE",
+                }
+            ],
+            "items": [
+                {
+                    "position_key": "ashby:example:sre",
+                    "normalized_label": "zip code",
+                    "label": "Zip Code",
+                    "category": "profile_identity",
+                    "automation_action": "auto_fill_from_profile",
+                    "required": True,
+                    "platform": "Ashby",
+                    "source_file": "test",
+                },
+                {
+                    "position_key": "ashby:example:sre",
+                    "normalized_label": "what s your favorite junk food",
+                    "label": "What's your favorite junk food?",
+                    "category": "standard_preference",
+                    "automation_action": "auto_answer_from_memory",
+                    "required": True,
+                    "platform": "Ashby",
+                    "source_file": "test",
+                },
+            ],
+        }
+        profile_payload = {
+            "candidate": {
+                "name": "Test User",
+                "email": "test@example.com",
+                "phone": "555-0100",
+                "location": "Bellevue, WA",
+            },
+            "preferences": {},
+            "resume_facts": {},
+            "question_answers": {},
+        }
+
+        preflight = build_critical_input_preflight(
+            pack,
+            template,
+            updates,
+            research,
+            profile_payload,
+            answer_memory={"version": 1, "answers": []},
+            approve=True,
+        )
+
+        summary = preflight["summary"]
+        self.assertEqual(summary["matched_updates"], 2)
+        self.assertEqual(summary["critical_ready_before"], 0)
+        self.assertEqual(summary["critical_ready_after"], 2)
+        self.assertEqual(summary["data_blocking_prompts_before"], 2)
+        self.assertEqual(summary["data_blocking_prompts_after"], 0)
+        self.assertEqual(summary["positions_ready_for_autofill_before"], 0)
+        self.assertEqual(summary["positions_ready_for_autofill_after"], 1)
+        self.assertEqual(summary["temp_profile_updates"], 1)
+        self.assertEqual(summary["temp_answer_memory_updates"], 1)
+        self.assertFalse(preflight["policy"]["writes_real_profile_or_memory"])
+        self.assertIn("Critical Input Preflight", render_critical_input_preflight_markdown(preflight))
+        self.assertIn("Impact Summary", render_critical_input_preflight_html(preflight))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            approval_pack_path = root / "pack.json"
+            answers_path = root / "answers.json"
+            updates_path = root / "updates.json"
+            research_path = root / "research.json"
+            profile_path = root / "profile.json"
+            memory_path = root / "memory.json"
+            json_output = root / "preflight.json"
+            markdown_output = root / "preflight.md"
+            html_output = root / "preflight.html"
+            approval_pack_path.write_text(json.dumps(pack), encoding="utf-8")
+            answers_path.write_text(json.dumps(template), encoding="utf-8")
+            updates_path.write_text(json.dumps(updates), encoding="utf-8")
+            research_path.write_text(json.dumps(research), encoding="utf-8")
+            profile_path.write_text(json.dumps(profile_payload), encoding="utf-8")
+
+            written = write_critical_input_preflight(
+                approval_pack_path,
+                answers_path,
+                json.loads(updates_path.read_text(encoding="utf-8")),
+                research_path,
+                profile_path,
+                memory_path,
+                json_output,
+                markdown_output,
+                html_output,
+                approve=True,
+            )
+
+            self.assertEqual(written["summary"]["data_blocking_prompts_after"], 0)
+            self.assertTrue(json_output.exists())
+            self.assertTrue(markdown_output.exists())
+            self.assertTrue(html_output.exists())
+            saved_profile = json.loads(profile_path.read_text(encoding="utf-8"))
+            self.assertEqual(saved_profile["question_answers"], {})
+            self.assertFalse(memory_path.exists())
+
+    def test_critical_input_preflight_keeps_unconfirmed_high_risk_waiting(self) -> None:
+        learning_tasks = {
+            "tasks": [
+                {
+                    "group_key": "answer_memory:citizenship_status:default_policy",
+                    "question": "What citizenship answers should automation use?",
+                    "recommended_storage": "answer_memory",
+                    "answer_scope": "category_default_policy",
+                    "suggested_answer_source": "requires_exact_user_confirmation",
+                    "approval_risk": "high",
+                    "labels": ["Are you a U.S. citizen?"],
+                    "platforms": ["Greenhouse"],
+                    "required_count": 2,
+                    "persist_allowed": True,
+                }
+            ],
+        }
+        pack = build_learning_approval_pack(learning_tasks, {})
+        template = build_critical_input_answer_template(pack)
+        updates = {
+            "answer_memory_citizenship_status_default_policy": {
+                "user_answer": "I am a U.S. citizen.",
+                "approval_decision": "approved",
+            }
+        }
+        research = {
+            "positions_observed_total": 1,
+            "positions": [
+                {
+                    "position_key": "greenhouse:example:sre",
+                    "platform": "Greenhouse",
+                    "company": "Example",
+                    "title": "Site Reliability Engineer",
+                    "role_family": "SRE",
+                }
+            ],
+            "items": [
+                {
+                    "position_key": "greenhouse:example:sre",
+                    "normalized_label": "are you a u s citizen",
+                    "label": "Are you a U.S. citizen?",
+                    "category": "standard_preference",
+                    "automation_action": "auto_answer_from_memory",
+                    "required": True,
+                    "platform": "Greenhouse",
+                    "source_file": "test",
+                }
+            ],
+        }
+        profile_payload = {
+            "candidate": {
+                "name": "Test User",
+                "email": "test@example.com",
+                "phone": "555-0100",
+                "location": "Bellevue, WA",
+            },
+            "preferences": {},
+            "resume_facts": {},
+            "question_answers": {},
+        }
+
+        preflight = build_critical_input_preflight(
+            pack,
+            template,
+            updates,
+            research,
+            profile_payload,
+            answer_memory={"version": 1, "answers": []},
+            approve=True,
+        )
+
+        summary = preflight["summary"]
+        self.assertEqual(summary["high_risk_approval_blocked"], 1)
+        self.assertEqual(summary["critical_ready_after"], 0)
+        self.assertEqual(summary["critical_waiting_after"], 1)
+        self.assertEqual(summary["temp_approved_inputs"], 0)
+        self.assertEqual(summary["data_blocking_prompts_after"], 1)
 
     def test_critical_input_status_report_groups_waiting_ready_and_supervised(self) -> None:
         learning_tasks = {
