@@ -34,11 +34,17 @@ CLOSED_APPLICATION_PHRASES = [
     "no longer accepting applicants",
     "no longer accepting candidates",
     "no longer accepting resumes",
+    "no longer accepting submissions",
     "not accepting applications",
+    "no longer taking applications",
+    "no longer receiving applications",
     "applications for this job are no longer being accepted",
     "applications are closed",
+    "applications have closed",
     "application window is closed",
     "application period is closed",
+    "application deadline has passed",
+    "application deadline has expired",
     "job posting is closed",
     "this job is closed",
     "this role is closed",
@@ -53,28 +59,40 @@ CLOSED_APPLICATION_PHRASES = [
     "this job posting has expired",
     "this job post is no longer active",
     "job is no longer available",
+    "this job is unavailable",
+    "this posting is unavailable",
     "this job is no longer available",
+    "this job is no longer posted",
     "this position is no longer available",
     "this role is no longer available",
+    "this role is no longer open",
     "position has been filled",
     "this position has been filled",
     "job posting has been removed",
     "this job has been removed",
     "this opening has been removed",
     "this listing has been removed",
+    "this posting has been archived",
+    "this job has been archived",
+    "this requisition has been cancelled",
+    "this requisition has been canceled",
     "posting has expired",
     "listing has expired",
 ]
 _CLOSED_APPLICATION_PATTERN_SPECS = [
     (
         "no longer accepting applications",
-        r"\b(?:we are |we re |we're )?no longer accepting (?:new )?"
-        r"(?:applications|applicants|candidates|resumes)\b",
+        r"\b(?:we are |we re |we're )?no longer (?:accepting|taking|receiving) (?:new )?"
+        r"(?:applications|applicants|candidates|resumes|submissions)\b",
     ),
     (
         "applications are closed",
         r"\bapplications?(?: for (?:this|the) (?:job|role|position))? "
-        r"(?:are|is) (?:now )?closed\b",
+        r"(?:are|is|have|has) (?:now )?closed\b",
+    ),
+    (
+        "application deadline has passed",
+        r"\bapplication (?:deadline|period|window) (?:has |have )?(?:passed|expired)\b",
     ),
     (
         "posting is closed",
@@ -84,7 +102,12 @@ _CLOSED_APPLICATION_PATTERN_SPECS = [
     (
         "job is no longer available",
         r"\b(?:job|posting|position|role|listing|opportunity|job post).{0,8}"
-        r"no longer (?:available|active|open)\b",
+        r"no longer (?:available|active|open|posted)\b",
+    ),
+    (
+        "job is unavailable",
+        r"\b(?:this|the)? ?(?:job|posting|position|role|listing|opportunity) "
+        r"(?:is|was) (?:currently )?unavailable\b",
     ),
     (
         "posting has expired",
@@ -98,6 +121,16 @@ _CLOSED_APPLICATION_PATTERN_SPECS = [
         "posting has been removed",
         r"\b(?:this|the)? ?(?:job(?: posting)?|posting|position|role|opening|listing) "
         r"(?:has been|was) removed\b",
+    ),
+    (
+        "posting has been archived",
+        r"\b(?:this|the)? ?(?:job(?: posting)?|posting|position|role|opening|listing) "
+        r"(?:has been|was) archived\b",
+    ),
+    (
+        "requisition has been cancelled",
+        r"\b(?:this|the)? ?(?:job|role|position|requisition|opening) "
+        r"(?:has been|was) cancell?ed\b",
     ),
 ]
 _CLOSED_APPLICATION_PATTERNS = [

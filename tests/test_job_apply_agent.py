@@ -1093,7 +1093,7 @@ class JobApplyAgentTests(unittest.TestCase):
             closed_application_phrase(
                 {"rendered_text": "We're sorry, this role is no longer open."}
             ),
-            "job is no longer available",
+            "this role is no longer open",
         )
         self.assertEqual(
             closed_application_phrase(
@@ -1113,12 +1113,42 @@ class JobApplyAgentTests(unittest.TestCase):
             closed_application_phrase({"page_text": "This opening has been removed by the employer."}),
             "this opening has been removed",
         )
+        self.assertEqual(
+            closed_application_phrase({"page_text": "This posting has been archived."}),
+            "this posting has been archived",
+        )
+        self.assertEqual(
+            closed_application_phrase({"page_text": "The application deadline has passed."}),
+            "application deadline has passed",
+        )
+        self.assertEqual(
+            closed_application_phrase({"page_text": "This job is unavailable."}),
+            "this job is unavailable",
+        )
+        self.assertEqual(
+            closed_application_phrase({"page_text": "We are no longer taking applications."}),
+            "no longer taking applications",
+        )
+        self.assertEqual(
+            closed_application_phrase({"page_text": "This requisition has been canceled."}),
+            "this requisition has been canceled",
+        )
         self.assertIsNone(
             closed_application_phrase(
                 {
                     "page_text": (
                         "The application window is expected to close on 06/12/2026. "
                         "Job posting may be removed earlier if the position is filled."
+                    )
+                }
+            )
+        )
+        self.assertIsNone(
+            closed_application_phrase(
+                {
+                    "page_text": (
+                        "The application deadline is 06/12/2026, and we review applications "
+                        "on a rolling basis."
                     )
                 }
             )
