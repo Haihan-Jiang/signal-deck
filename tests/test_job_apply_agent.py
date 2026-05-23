@@ -145,6 +145,7 @@ from job_apply_agent.core import (
     run_synthetic_apply_execution,
     run_synthetic_browser_action_execution,
     run_pipeline,
+    save_final_answer_intake_payload,
     score_job,
     select_candidate_topup,
     shorten_apply_url,
@@ -6589,6 +6590,7 @@ class JobApplyAgentTests(unittest.TestCase):
         template = build_final_answer_intake_template(unblockers)
         template_markdown = render_final_answer_intake_template_markdown(template)
         template_html = render_final_answer_intake_template_html(template)
+        server_template_html = render_final_answer_intake_template_html(template, save_endpoint="/save")
 
         self.assertEqual(template["answer_count"], 2)
         self.assertEqual(template["high_risk_count"], 1)
@@ -6600,6 +6602,9 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn('data-answer="zip_or_postal_code"', template_html)
         self.assertIn('data-confirm="citizenship_status"', template_html)
         self.assertIn("Generated JSON", template_html)
+        self.assertNotIn("Save and validate locally", template_html)
+        self.assertIn("Save and validate locally", server_template_html)
+        self.assertIn('fetch(SAVE_ENDPOINT', server_template_html)
         preserved_template = build_final_answer_intake_template(
             unblockers,
             existing_intake_payload={
@@ -6667,6 +6672,12 @@ class JobApplyAgentTests(unittest.TestCase):
             updates_json = root / "compact.json"
             report_json = root / "report.json"
             report_md = root / "report.md"
+            saved_template_json = root / "saved_template.json"
+            saved_template_md = root / "saved_template.md"
+            saved_template_html = root / "saved_template.html"
+            saved_updates_json = root / "saved_compact.json"
+            saved_report_json = root / "saved_report.json"
+            saved_report_md = root / "saved_report.md"
 
             written_template = write_final_answer_intake_template(
                 unblockers,
@@ -6695,6 +6706,41 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(compact_updates["profile_zip_or_postal_code"], "98004")
             self.assertTrue(
                 compact_updates["answer_memory_citizenship_status_default_policy"][
+                    "high_risk_user_confirmed"
+                ]
+            )
+            save_result = save_final_answer_intake_payload(
+                unblockers,
+                {
+                    "source": "final_answer_intake_template",
+                    "answers": {
+                        "zip_or_postal_code": "98004",
+                        "citizenship_status": {
+                            "answer": "U.S. citizen.",
+                            "high_risk_user_confirmed": True,
+                        },
+                    },
+                },
+                saved_template_json,
+                saved_template_md,
+                saved_template_html,
+                saved_updates_json,
+                saved_report_json,
+                saved_report_md,
+            )
+            self.assertTrue(save_result["ready_for_finalize"])
+            self.assertFalse(save_result["policy"]["writes_profile_or_memory"])
+            self.assertFalse(save_result["policy"]["submits_real_applications"])
+            self.assertTrue(saved_template_json.exists())
+            self.assertTrue(saved_template_md.exists())
+            self.assertTrue(saved_template_html.exists())
+            self.assertTrue(saved_updates_json.exists())
+            self.assertTrue(saved_report_json.exists())
+            self.assertTrue(saved_report_md.exists())
+            saved_compact_updates = json.loads(saved_updates_json.read_text(encoding="utf-8"))
+            self.assertEqual(saved_compact_updates["profile_zip_or_postal_code"], "98004")
+            self.assertTrue(
+                saved_compact_updates["answer_memory_citizenship_status_default_policy"][
                     "high_risk_user_confirmed"
                 ]
             )

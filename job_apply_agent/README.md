@@ -764,6 +764,15 @@ the same JSON shape, then convert it into the compact
 updates file used by the rest of the post-answer pipeline:
 
 ```bash
+python3 -m job_apply_agent final-answer-intake-server --open-browser
+```
+
+The local server version adds a Save and Validate button that writes the same
+template, compact-update, and intake-report artifacts after you fill the form.
+It still only writes outbox files; it does not write profile/memory and does
+not submit applications.
+
+```bash
 python3 -m job_apply_agent final-answer-intake \
   --answers job_apply_agent/outbox/final_answer_intake_template_latest.json \
   --finalize \

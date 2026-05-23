@@ -5111,6 +5111,96 @@ def write_final_answer_intake_update(
     return report
 
 
+def save_final_answer_intake_payload(
+    unblocker_packet: dict[str, Any],
+    intake_payload: dict[str, Any],
+    template_json_output: str | Path,
+    template_markdown_output: str | Path,
+    template_html_output: str | Path,
+    compact_updates_output: str | Path,
+    report_json_output: str | Path,
+    report_markdown_output: str | Path,
+    *,
+    unblockers_path: str | Path | None = None,
+    confirm_high_risk: bool = False,
+    finalize: bool = False,
+    full_template: str | Path | None = None,
+    confirmed_updates_output: str | Path | None = None,
+    confirmed_report_json_output: str | Path | None = None,
+    confirmed_report_markdown_output: str | Path | None = None,
+) -> dict[str, Any]:
+    template = write_final_answer_intake_template(
+        unblocker_packet,
+        template_json_output,
+        template_markdown_output,
+        template_html_output,
+        existing_intake_payload=intake_payload,
+    )
+    intake_report = write_final_answer_intake_update(
+        unblocker_packet,
+        template,
+        compact_updates_output,
+        report_json_output,
+        report_markdown_output,
+        confirm_high_risk=confirm_high_risk,
+    )
+    final_report: dict[str, Any] | None = None
+    finalize_status = "not_requested"
+    if finalize:
+        if not intake_report.get("ready_for_finalize"):
+            finalize_status = "skipped_not_ready"
+        else:
+            required_outputs = [
+                full_template,
+                unblockers_path,
+                confirmed_updates_output,
+                confirmed_report_json_output,
+                confirmed_report_markdown_output,
+            ]
+            if any(not value for value in required_outputs):
+                raise ValueError("finalize requires full template and confirmed update report output paths")
+            final_report = write_critical_input_unblocker_final_update(
+                compact_updates_output,
+                full_template,
+                unblockers_path,
+                confirmed_updates_output,
+                confirmed_report_json_output,
+                confirmed_report_markdown_output,
+            )
+            finalize_status = "ready" if final_report.get("ready_for_workflow") else "not_ready"
+    return {
+        "source": "final_answer_intake_save",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "ready_for_finalize": bool(intake_report.get("ready_for_finalize")),
+        "finalize_status": finalize_status,
+        "template_summary": {
+            "answer_count": template.get("answer_count", 0),
+            "high_risk_count": template.get("high_risk_count", 0),
+        },
+        "intake_report": {
+            key: value for key, value in intake_report.items() if key != "compact_updates"
+        },
+        "final_report": final_report or {},
+        "outputs": {
+            "template_json": str(template_json_output),
+            "template_markdown": str(template_markdown_output),
+            "template_html": str(template_html_output),
+            "compact_updates": str(compact_updates_output),
+            "report_json": str(report_json_output),
+            "report_markdown": str(report_markdown_output),
+            "confirmed_updates": str(confirmed_updates_output or ""),
+            "confirmed_report_json": str(confirmed_report_json_output or ""),
+            "confirmed_report_markdown": str(confirmed_report_markdown_output or ""),
+            "unblockers": str(unblockers_path or ""),
+        },
+        "policy": {
+            "writes_profile_or_memory": False,
+            "submits_real_applications": False,
+            "final_submit_remains_supervised": True,
+        },
+    }
+
+
 def render_final_answer_intake_template_markdown(template: dict[str, Any]) -> str:
     lines = [
         "# Final Answer Intake Template",
@@ -5141,7 +5231,11 @@ def render_final_answer_intake_template_markdown(template: dict[str, Any]) -> st
     return "\n".join(lines)
 
 
-def render_final_answer_intake_template_html(template: dict[str, Any]) -> str:
+def render_final_answer_intake_template_html(
+    template: dict[str, Any],
+    *,
+    save_endpoint: str | None = None,
+) -> str:
     field_cards = []
     answers = template.get("answers") if isinstance(template.get("answers"), dict) else {}
     for row in template.get("fields") or []:
@@ -5180,7 +5274,13 @@ def render_final_answer_intake_template_html(template: dict[str, Any]) -> str:
             )
         )
     initial_json = json.dumps({"answers": answers}, ensure_ascii=True, indent=2)
+    save_button = (
+        '<button type="button" id="save-json">Save and validate locally</button>'
+        if save_endpoint
+        else ""
+    )
     script = """
+const SAVE_ENDPOINT = __SAVE_ENDPOINT__;
 function buildPayload() {
   const answers = {};
   document.querySelectorAll("[data-answer]").forEach((field) => {
@@ -5204,10 +5304,49 @@ function buildPayload() {
 function refreshOutput() {
   document.getElementById("json-output").textContent = JSON.stringify(buildPayload(), null, 2);
 }
+async function copyPayload() {
+  const text = JSON.stringify(buildPayload(), null, 2);
+  await navigator.clipboard.writeText(text);
+  document.getElementById("form-status").textContent = "JSON copied.";
+}
+function downloadPayload() {
+  const text = JSON.stringify(buildPayload(), null, 2);
+  const blob = new Blob([text], { type: "application/json" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = "final_answer_intake_filled.json";
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+async function savePayload() {
+  if (!SAVE_ENDPOINT) {
+    return;
+  }
+  const status = document.getElementById("form-status");
+  status.textContent = "Saving...";
+  const response = await fetch(SAVE_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(buildPayload())
+  });
+  const data = await response.json();
+  status.textContent = data.ready_for_finalize
+    ? "Saved. Intake is ready for the post-answer pipeline."
+    : "Saved, but more answers or confirmations are still needed.";
+  document.getElementById("save-result").textContent = JSON.stringify(data, null, 2);
+}
 document.addEventListener("input", refreshOutput);
 document.addEventListener("change", refreshOutput);
 document.addEventListener("DOMContentLoaded", refreshOutput);
-"""
+document.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("copy-json").addEventListener("click", copyPayload);
+  document.getElementById("download-json").addEventListener("click", downloadPayload);
+  const saveButton = document.getElementById("save-json");
+  if (saveButton) {
+    saveButton.addEventListener("click", savePayload);
+  }
+});
+""".replace("__SAVE_ENDPOINT__", json.dumps(save_endpoint or ""))
     return "\n".join(
         [
             "<!doctype html>",
@@ -5239,7 +5378,14 @@ document.addEventListener("DOMContentLoaded", refreshOutput);
             *field_cards,
             "<section>",
             "<h2>Generated JSON</h2>",
+            '<div class="actions">',
+            '<button type="button" id="copy-json">Copy JSON</button>',
+            '<button type="button" id="download-json">Download JSON</button>',
+            save_button,
+            "</div>",
+            '<p id="form-status" class="muted"></p>',
             "<pre id=\"json-output\"></pre>",
+            "<pre id=\"save-result\"></pre>",
             "<h2>Initial JSON</h2>",
             f"<pre>{_html_escape(initial_json)}</pre>",
             "</section>",
@@ -5309,6 +5455,23 @@ textarea {
   display: block;
   margin: 4px 0 12px;
   font-weight: 600;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 8px 0 12px;
+}
+button {
+  border: 1px solid #94a3b8;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #1f2933;
+  padding: 8px 12px;
+  font-weight: 600;
+}
+button:hover {
+  background: #f1f5f9;
 }
 pre {
   white-space: pre-wrap;

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import threading
+import webbrowser
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from .core import (
@@ -12,6 +15,7 @@ from .core import (
     build_answer_gap_report,
     build_application_draft,
     build_application_research,
+    build_final_answer_intake_template,
     build_position_readiness_report,
     build_synthetic_learning_state,
     import_candidate_observations,
@@ -26,8 +30,10 @@ from .core import (
     open_apply_urls_in_browser,
     record_closed_job,
     render_critical_input_answer_workflow_markdown,
+    render_final_answer_intake_template_html,
     refresh_closed_jobs_from_live_pages,
     run_pipeline,
+    save_final_answer_intake_payload,
     write_answer_gap_report,
     write_apply_run_audit,
     write_apply_queue_autofill_packet,
@@ -884,6 +890,49 @@ def main() -> int:
         action="store_true",
         help="exit non-zero when answers are missing, high-risk confirmations are absent, or unknown keys exist",
     )
+
+    final_answer_intake_server_parser = subparsers.add_parser(
+        "final-answer-intake-server",
+        help="serve a local form that saves and validates the six final answers",
+    )
+    final_answer_intake_server_parser.add_argument("--unblockers", default=str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_JSON))
+    final_answer_intake_server_parser.add_argument("--template-output", default=str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON))
+    final_answer_intake_server_parser.add_argument(
+        "--template-markdown-output",
+        default=str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_MARKDOWN),
+    )
+    final_answer_intake_server_parser.add_argument(
+        "--template-html-output",
+        default=str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_HTML),
+    )
+    final_answer_intake_server_parser.add_argument(
+        "--compact-updates-output",
+        default=str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_UPDATES_JSON),
+    )
+    final_answer_intake_server_parser.add_argument("--json-output", default=str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_JSON))
+    final_answer_intake_server_parser.add_argument(
+        "--markdown-output",
+        default=str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_MARKDOWN),
+    )
+    final_answer_intake_server_parser.add_argument("--full-template", default=str(DEFAULT_CRITICAL_INPUT_FULL_UPDATES_JSON))
+    final_answer_intake_server_parser.add_argument(
+        "--confirmed-updates-output",
+        default=str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_JSON),
+    )
+    final_answer_intake_server_parser.add_argument(
+        "--confirmed-report-json-output",
+        default=str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_JSON),
+    )
+    final_answer_intake_server_parser.add_argument(
+        "--confirmed-report-markdown-output",
+        default=str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_MARKDOWN),
+    )
+    final_answer_intake_server_parser.add_argument("--host", default="127.0.0.1")
+    final_answer_intake_server_parser.add_argument("--port", type=int, default=8765)
+    final_answer_intake_server_parser.add_argument("--open-browser", action="store_true")
+    final_answer_intake_server_parser.add_argument("--once", action="store_true")
+    final_answer_intake_server_parser.add_argument("--finalize", action="store_true")
+    final_answer_intake_server_parser.add_argument("--confirm-high-risk", action="store_true")
 
     post_answer_pipeline_parser = subparsers.add_parser(
         "post-answer-pipeline",
@@ -2497,6 +2546,9 @@ def main() -> int:
             return 2
         return 0
 
+    if args.command == "final-answer-intake-server":
+        return _run_final_answer_intake_server(args)
+
     if args.command == "post-answer-pipeline":
         return _run_post_answer_pipeline(args)
 
@@ -3818,6 +3870,117 @@ def _load_optional_json(path_value: str | None) -> dict | None:
         return None
     payload = json.loads(path.read_text(encoding="utf-8"))
     return payload if isinstance(payload, dict) else None
+
+
+def _run_final_answer_intake_server(args: argparse.Namespace) -> int:
+    unblockers_path = Path(args.unblockers)
+    if not unblockers_path.exists():
+        raise FileNotFoundError(f"critical input unblockers not found: {args.unblockers}")
+    unblockers = json.loads(unblockers_path.read_text(encoding="utf-8"))
+    if not isinstance(unblockers, dict):
+        raise ValueError(f"critical input unblockers must be a JSON object: {args.unblockers}")
+
+    def current_template() -> dict:
+        return build_final_answer_intake_template(
+            unblockers,
+            existing_intake_payload=_load_optional_json(args.template_output),
+        )
+
+    def write_server_html(template: dict) -> str:
+        html = render_final_answer_intake_template_html(template, save_endpoint="/save")
+        html_path = Path(args.template_html_output)
+        html_path.parent.mkdir(parents=True, exist_ok=True)
+        html_path.write_text(html, encoding="utf-8")
+        return html
+
+    def write_response(handler: BaseHTTPRequestHandler, status: int, payload: dict[str, object]) -> None:
+        body = json.dumps(payload, ensure_ascii=True, indent=2).encode("utf-8")
+        handler.send_response(status)
+        handler.send_header("Content-Type", "application/json; charset=utf-8")
+        handler.send_header("Content-Length", str(len(body)))
+        handler.end_headers()
+        handler.wfile.write(body)
+
+    server_ref: dict[str, ThreadingHTTPServer] = {}
+
+    class IntakeHandler(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *values: object) -> None:  # noqa: A002
+            return
+
+        def do_GET(self) -> None:
+            request_path = self.path.split("?", 1)[0]
+            if request_path not in {"/", "/index.html"}:
+                write_response(self, 404, {"error": "not_found"})
+                return
+            template = current_template()
+            html = write_server_html(template)
+            body = html.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self) -> None:
+            request_path = self.path.split("?", 1)[0]
+            if request_path != "/save":
+                write_response(self, 404, {"error": "not_found"})
+                return
+            try:
+                size = int(self.headers.get("Content-Length", "0"))
+                if size <= 0 or size > 1_000_000:
+                    raise ValueError("request body must be between 1 byte and 1 MB")
+                payload = json.loads(self.rfile.read(size).decode("utf-8"))
+                if not isinstance(payload, dict):
+                    raise ValueError("request body must be a JSON object")
+                result = save_final_answer_intake_payload(
+                    unblockers,
+                    payload,
+                    args.template_output,
+                    args.template_markdown_output,
+                    args.template_html_output,
+                    args.compact_updates_output,
+                    args.json_output,
+                    args.markdown_output,
+                    unblockers_path=args.unblockers,
+                    confirm_high_risk=args.confirm_high_risk,
+                    finalize=args.finalize,
+                    full_template=args.full_template,
+                    confirmed_updates_output=args.confirmed_updates_output,
+                    confirmed_report_json_output=args.confirmed_report_json_output,
+                    confirmed_report_markdown_output=args.confirmed_report_markdown_output,
+                )
+                write_server_html(current_template())
+                write_response(self, 200, result)
+                if args.once and result.get("ready_for_finalize"):
+                    threading.Thread(target=server_ref["server"].shutdown, daemon=True).start()
+            except Exception as exc:  # pragma: no cover - exercised through manual local server use
+                write_response(self, 400, {"error": str(exc)})
+
+    write_final_answer_intake_template(
+        unblockers,
+        args.template_output,
+        args.template_markdown_output,
+        args.template_html_output,
+        existing_intake_payload=_load_optional_json(args.template_output),
+    )
+    write_server_html(current_template())
+    server = ThreadingHTTPServer((args.host, args.port), IntakeHandler)
+    server_ref["server"] = server
+    host, port = server.server_address
+    url = f"http://{host}:{port}/"
+    print(f"Serving final answer intake form at {url}")
+    print("Writes profile or memory: false")
+    print("Submits real applications: false")
+    if args.open_browser:
+        webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return 0
 
 
 def _same_path(path_value: str | Path, other_path: str | Path) -> bool:
