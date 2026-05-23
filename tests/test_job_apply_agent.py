@@ -7473,6 +7473,11 @@ class JobApplyAgentTests(unittest.TestCase):
             report["reply_template_lines"],
             ["citizenship_status\uff1a<fill>", "citizenship_status_confirmed\uff1a\u786e\u8ba4"],
         )
+        self.assertEqual(
+            report["minimal_reply_prompt_lines"],
+            ["\u6211\u7684\u516c\u6c11\u8eab\u4efd\u662f<fill>", "\u4ee5\u4e0a\u786e\u8ba4"],
+        )
+        self.assertIn("\u6211\u7684\u516c\u6c11\u8eab\u4efd\u662f<fill>", report["minimal_reply_prompt"])
         self.assertEqual(report["action_pack"]["blocking_step"], "truthful_answer_learning")
         self.assertEqual(report["action_pack"]["manual_answer_count"], 1)
         self.assertEqual(report["action_pack"]["high_risk_confirmation_count"], 1)
@@ -7514,6 +7519,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("watch and auto-run when filled", markdown)
         self.assertIn("watch, apply, live-check, and rebuild packet", markdown)
         self.assertIn("watch, apply, live-check, rebuild, and open verified pages", markdown)
+        self.assertIn("## Minimal Reply Prompt", markdown)
+        self.assertIn("\u6211\u7684\u516c\u6c11\u8eab\u4efd\u662f<fill>", markdown)
         self.assertIn("## Reply Template", markdown)
         self.assertIn("citizenship_status\uff1a<fill>", markdown)
         self.assertIn("\u786e\u8ba4", markdown)
@@ -7526,6 +7533,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("After-answer path ready: yes", alert)
         self.assertIn("citizenship_status", alert)
         self.assertIn("Shape:", alert)
+        self.assertIn("Shortest reply shape:", alert)
+        self.assertIn("\u6211\u7684\u516c\u6c11\u8eab\u4efd\u662f<fill>", alert)
         self.assertIn("Reply format:", alert)
         self.assertIn("citizenship_status\uff1a<fill>", alert)
         self.assertIn("citizenship_status_confirmed\uff1a\u786e\u8ba4", alert)

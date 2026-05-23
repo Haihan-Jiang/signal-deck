@@ -21753,6 +21753,7 @@ def build_final_answer_blocker_report(
         },
     }
     reply_template_lines = _final_answer_blocker_reply_template_lines(blocker_rows)
+    minimal_reply_prompt_lines = _final_answer_blocker_minimal_reply_prompt_lines(blocker_rows)
     action_pack = _final_answer_blocker_action_pack(
         blocker_rows,
         ready_after_truthful_answer_reply=ready_after_truthful_answer_reply,
@@ -21768,6 +21769,8 @@ def build_final_answer_blocker_report(
         "blockers": blocker_rows,
         "reply_template": "\n".join(reply_template_lines),
         "reply_template_lines": reply_template_lines,
+        "minimal_reply_prompt": "\n".join(minimal_reply_prompt_lines),
+        "minimal_reply_prompt_lines": minimal_reply_prompt_lines,
         "next_commands": [
             "python3 -m job_apply_agent rehearse-after-answers",
             "python3 -m job_apply_agent resume-after-answers --reply-text '<filled final-answer lines>' --validate-only",
@@ -22067,6 +22070,20 @@ def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
                 f"- final submit remains supervised: {str(bool(action_pack.get('final_submit_remains_supervised'))).lower()}",
             ]
         )
+    minimal_reply_prompt = str(report.get("minimal_reply_prompt") or "").strip()
+    lines.extend(["", "## Minimal Reply Prompt", ""])
+    if minimal_reply_prompt:
+        lines.extend(
+            [
+                "Paste this shape back to Codex after replacing every `<fill>` with truthful reusable text.",
+                "",
+                "```text",
+                minimal_reply_prompt,
+                "```",
+            ]
+        )
+    else:
+        lines.append("- None")
     reply_template = str(report.get("reply_template") or "").strip()
     lines.extend(["", "## Reply Template", ""])
     if reply_template:
@@ -22123,6 +22140,14 @@ def build_telegram_final_answer_blocker_alert(
     if len(blockers) > max_items:
         lines.append(f"... {len(blockers) - max_items} more in job_apply_agent/outbox")
     lines.append("")
+    minimal_reply_prompt_lines = report.get("minimal_reply_prompt_lines") or []
+    if minimal_reply_prompt_lines:
+        lines.append("Shortest reply shape:")
+        for line in minimal_reply_prompt_lines[: max(max_items + 1, 1)]:
+            lines.append(line)
+        if len(minimal_reply_prompt_lines) > max_items + 1:
+            lines.append("... full minimal prompt in job_apply_agent/outbox/final_answer_blockers_latest.md")
+        lines.append("")
     reply_template_lines = report.get("reply_template_lines") or []
     if reply_template_lines:
         lines.append("Reply format:")
@@ -22152,6 +22177,34 @@ def _final_answer_blocker_reply_template_lines(blockers: list[dict[str, Any]]) -
         lines.append(f"{alias}\uff1a<fill>")
         if row.get("high_risk"):
             lines.append(f"{alias}_confirmed\uff1a\u786e\u8ba4")
+    return lines
+
+
+FINAL_ANSWER_MINIMAL_REPLY_PREFIXES = {
+    "zip_or_postal_code": "\u6211\u7684\u90ae\u7f16\u662f",
+    "citizenship_status": "\u6211\u7684\u516c\u6c11\u8eab\u4efd\u662f",
+    "background_or_export_control": "\u80cc\u666f\u51fa\u53e3\u7ba1\u5236\u4e3a",
+    "country_work_permit": "\u5176\u4ed6\u56fd\u5bb6\u5de5\u4f5c\u8bb8\u53ef\u4e3a",
+    "interview_recording_consent": "\u9762\u8bd5\u5f55\u97f3\u662f",
+    "health_requirement": "\u5065\u5eb7\u75ab\u82d7\u662f",
+}
+
+
+def _final_answer_blocker_minimal_reply_prompt_lines(blockers: list[dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    has_high_risk = False
+    for row in blockers:
+        alias = str(row.get("alias") or "").strip()
+        if not alias:
+            continue
+        prefix = FINAL_ANSWER_MINIMAL_REPLY_PREFIXES.get(alias)
+        if prefix:
+            lines.append(f"{prefix}<fill>")
+        else:
+            lines.append(f"{alias}\uff1a<fill>")
+        has_high_risk = has_high_risk or bool(row.get("high_risk"))
+    if has_high_risk:
+        lines.append("\u4ee5\u4e0a\u786e\u8ba4")
     return lines
 
 
