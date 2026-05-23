@@ -21973,16 +21973,53 @@ def build_final_answer_blocker_report(
     position_remaining = int(goal_summary.get("position_execution_remaining_user_answers") or 0)
     global_remaining = int(goal_summary.get("position_execution_global_remaining_user_answers") or 0)
     selected_queue_ready = bool(goal_summary.get("selected_queue_supervised_autofill_ready"))
+    post_answer_intake_answer_count = int(goal_summary.get("post_answer_intake_answer_count") or 0)
+    post_answer_intake_missing_count = int(goal_summary.get("post_answer_intake_missing_unblocker_count") or 0)
+    post_answer_intake_unconfirmed_count = int(
+        goal_summary.get("post_answer_intake_unconfirmed_high_risk_count") or 0
+    )
+    post_answer_intake_specificity_count = int(
+        goal_summary.get("post_answer_intake_needs_more_specific_answer_count") or 0
+    )
+    post_answer_intake_unknown_count = int(goal_summary.get("post_answer_intake_unknown_answer_count") or 0)
+    post_answer_intake_problem_count = (
+        post_answer_intake_missing_count
+        + post_answer_intake_unconfirmed_count
+        + post_answer_intake_specificity_count
+        + post_answer_intake_unknown_count
+    )
+    post_answer_synthetic_selected_count = int(
+        goal_summary.get("post_answer_synthetic_autofill_selected_count") or 0
+    )
+    post_answer_synthetic_selector_miss_count = int(
+        goal_summary.get("post_answer_synthetic_selector_miss_count") or 0
+    )
+    post_answer_synthetic_final_submit_stop_count = int(
+        goal_summary.get("post_answer_synthetic_final_submit_stop_count") or 0
+    )
+    truthful_answer_only_blockers = all(
+        str(row.get("status") or "") in {"missing_answer", "high_risk_unconfirmed"}
+        for row in blocker_rows
+    )
+    post_answer_synthetic_100_ready = bool(
+        post_answer_synthetic_selected_count >= 100
+        and post_answer_synthetic_selector_miss_count == 0
+        and post_answer_synthetic_final_submit_stop_count >= 100
+        and post_answer_synthetic_final_submit_stop_count >= post_answer_synthetic_selected_count
+    )
     ready_after_truthful_answer_reply = bool(
         post_answer_text_reply_ready
         and post_answer_queue_ready
-        and selected_queue_ready
-        and position_remaining == 0
+        and truthful_answer_only_blockers
+        and post_answer_intake_answer_count >= len(blocker_rows)
+        and post_answer_intake_problem_count == 0
+        and post_answer_synthetic_100_ready
     )
     summary = {
         "field_count": len(template.get("fields") or []),
         "ready_count": ready_count,
         "blocker_count": len(blocker_rows),
+        "current_answers_blocking_count": len(blocker_rows),
         "missing_answer_count": missing_answer_count,
         "unconfirmed_high_risk_count": unconfirmed_high_risk_count,
         "high_risk_count": int(template.get("high_risk_count") or 0),
@@ -21995,30 +22032,20 @@ def build_final_answer_blocker_report(
         "position_execution_remaining_user_answers": position_remaining,
         "position_execution_global_remaining_user_answers": global_remaining,
         "selected_queue_supervised_autofill_ready": selected_queue_ready,
+        "selected_queue_currently_ready": selected_queue_ready,
+        "selected_queue_ready_after_truthful_reply": ready_after_truthful_answer_reply,
         "post_answer_synthetic_queue_rehearsal_ready": post_answer_queue_ready,
         "post_answer_text_reply_rehearsal_ready": post_answer_text_reply_ready,
-        "post_answer_intake_answer_count": int(goal_summary.get("post_answer_intake_answer_count") or 0),
-        "post_answer_intake_missing_unblocker_count": int(
-            goal_summary.get("post_answer_intake_missing_unblocker_count") or 0
-        ),
-        "post_answer_intake_unconfirmed_high_risk_count": int(
-            goal_summary.get("post_answer_intake_unconfirmed_high_risk_count") or 0
-        ),
-        "post_answer_intake_needs_more_specific_answer_count": int(
-            goal_summary.get("post_answer_intake_needs_more_specific_answer_count") or 0
-        ),
-        "post_answer_intake_unknown_answer_count": int(
-            goal_summary.get("post_answer_intake_unknown_answer_count") or 0
-        ),
-        "post_answer_synthetic_autofill_selected_count": int(
-            goal_summary.get("post_answer_synthetic_autofill_selected_count") or 0
-        ),
-        "post_answer_synthetic_selector_miss_count": int(
-            goal_summary.get("post_answer_synthetic_selector_miss_count") or 0
-        ),
-        "post_answer_synthetic_final_submit_stop_count": int(
-            goal_summary.get("post_answer_synthetic_final_submit_stop_count") or 0
-        ),
+        "post_answer_intake_answer_count": post_answer_intake_answer_count,
+        "post_answer_intake_missing_unblocker_count": post_answer_intake_missing_count,
+        "post_answer_intake_unconfirmed_high_risk_count": post_answer_intake_unconfirmed_count,
+        "post_answer_intake_needs_more_specific_answer_count": post_answer_intake_specificity_count,
+        "post_answer_intake_unknown_answer_count": post_answer_intake_unknown_count,
+        "post_answer_intake_problem_count": post_answer_intake_problem_count,
+        "post_answer_synthetic_autofill_selected_count": post_answer_synthetic_selected_count,
+        "post_answer_synthetic_selector_miss_count": post_answer_synthetic_selector_miss_count,
+        "post_answer_synthetic_final_submit_stop_count": post_answer_synthetic_final_submit_stop_count,
+        "post_answer_synthetic_100_ready": post_answer_synthetic_100_ready,
         "ready_after_truthful_answer_reply": ready_after_truthful_answer_reply,
         "observed_prompt_example_count": sum(
             len(row.get("observed_prompt_examples") or []) for row in blocker_rows
@@ -22028,14 +22055,17 @@ def build_final_answer_blocker_report(
         "status": (
             "ready_after_truthful_answer_reply"
             if ready_after_truthful_answer_reply
-            else "waiting_for_text_reply_rehearsal_or_selected_queue"
+            else "waiting_for_truthful_answers_or_after_answer_rehearsal"
         ),
         "truthful_answers_needed": len(blocker_rows),
+        "selected_queue_currently_ready": selected_queue_ready,
+        "selected_queue_ready_after_truthful_reply": ready_after_truthful_answer_reply,
         "selected_queue_supervised_autofill_ready": selected_queue_ready,
         "selected_queue_remaining_user_answers": position_remaining,
         "global_remaining_user_answers": global_remaining,
         "text_reply_rehearsal_ready": post_answer_text_reply_ready,
         "synthetic_queue_rehearsal_ready": post_answer_queue_ready,
+        "synthetic_100_ready": post_answer_synthetic_100_ready,
         "synthetic_selected_count": summary["post_answer_synthetic_autofill_selected_count"],
         "synthetic_selector_miss_count": summary["post_answer_synthetic_selector_miss_count"],
         "synthetic_final_submit_stop_count": summary["post_answer_synthetic_final_submit_stop_count"],
@@ -22045,6 +22075,7 @@ def build_final_answer_blocker_report(
             "unconfirmed_high_risk": summary["post_answer_intake_unconfirmed_high_risk_count"],
             "needs_more_specificity": summary["post_answer_intake_needs_more_specific_answer_count"],
             "unknown": summary["post_answer_intake_unknown_answer_count"],
+            "problem_count": summary["post_answer_intake_problem_count"],
         },
         "next_validate_command": "python3 -m job_apply_agent resume-after-answers --reply-stdin --validate-only",
         "next_run_command": "python3 -m job_apply_agent resume-after-answers --reply-stdin",
@@ -22407,11 +22438,13 @@ def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
             "## Automation After Answers",
             "",
             f"- status: {automation.get('status', '')}",
-            f"- selected queue ready: {str(bool(automation.get('selected_queue_supervised_autofill_ready'))).lower()}",
+            f"- selected queue ready now: {str(bool(automation.get('selected_queue_currently_ready'))).lower()}",
+            f"- selected queue ready after truthful reply: {str(bool(automation.get('selected_queue_ready_after_truthful_reply'))).lower()}",
             f"- selected queue remaining answers: {automation.get('selected_queue_remaining_user_answers', 0)}",
             f"- global remaining answers: {automation.get('global_remaining_user_answers', 0)}",
             f"- text reply rehearsal ready: {str(bool(automation.get('text_reply_rehearsal_ready'))).lower()}",
             f"- synthetic queue ready: {str(bool(automation.get('synthetic_queue_rehearsal_ready'))).lower()}",
+            f"- synthetic 100 ready: {str(bool(automation.get('synthetic_100_ready'))).lower()}",
             "- synthetic packet: "
             f"selected {automation.get('synthetic_selected_count', 0)}, "
             f"selector misses {automation.get('synthetic_selector_miss_count', 0)}, "
@@ -22421,7 +22454,8 @@ def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
             f"missing {validation.get('missing', 0)}, "
             f"unconfirmed {validation.get('unconfirmed_high_risk', 0)}, "
             f"specificity {validation.get('needs_more_specificity', 0)}, "
-            f"unknown {validation.get('unknown', 0)}",
+            f"unknown {validation.get('unknown', 0)}, "
+            f"problems {validation.get('problem_count', 0)}",
             f"- validate command: `{automation.get('next_validate_command', '')}`",
             f"- run command: `{automation.get('next_run_command', '')}`",
             f"- direct autopilot command: `{automation.get('next_autopilot_reply_text_command', '')}`",
@@ -22542,11 +22576,13 @@ def render_final_answer_blocker_report_html(report: dict[str, Any]) -> str:
                     ("Missing answers", summary.get("missing_answer_count", 0)),
                     ("High-risk answers", summary.get("high_risk_count", 0)),
                     ("Unconfirmed high-risk", summary.get("unconfirmed_high_risk_count", 0)),
-                    ("Selected queue ready", _yes_no(summary.get("selected_queue_supervised_autofill_ready"))),
+                    ("Current selected queue ready", _yes_no(summary.get("selected_queue_currently_ready"))),
+                    ("Ready after truthful reply", _yes_no(summary.get("selected_queue_ready_after_truthful_reply"))),
                     ("Position answers left", summary.get("position_execution_remaining_user_answers", 0)),
                     ("Global answers left", summary.get("position_execution_global_remaining_user_answers", 0)),
                     ("Text reply rehearsed", _yes_no(summary.get("post_answer_text_reply_rehearsal_ready"))),
                     ("Synthetic queue ready", _yes_no(summary.get("post_answer_synthetic_queue_rehearsal_ready"))),
+                    ("Synthetic 100 ready", _yes_no(summary.get("post_answer_synthetic_100_ready"))),
                     ("Synthetic selected", summary.get("post_answer_synthetic_autofill_selected_count", 0)),
                     ("Final-submit stops", summary.get("post_answer_synthetic_final_submit_stop_count", 0)),
                 ]
@@ -29852,11 +29888,14 @@ def _final_answer_blocker_summary_rows(report: dict[str, Any]) -> list[list[Any]
             [],
             ["Automation after answers", "Value"],
             ["status", automation.get("status")],
+            ["selected_queue_currently_ready", automation.get("selected_queue_currently_ready")],
+            ["selected_queue_ready_after_truthful_reply", automation.get("selected_queue_ready_after_truthful_reply")],
             ["selected_queue_supervised_autofill_ready", automation.get("selected_queue_supervised_autofill_ready")],
             ["selected_queue_remaining_user_answers", automation.get("selected_queue_remaining_user_answers")],
             ["global_remaining_user_answers", automation.get("global_remaining_user_answers")],
             ["text_reply_rehearsal_ready", automation.get("text_reply_rehearsal_ready")],
             ["synthetic_queue_rehearsal_ready", automation.get("synthetic_queue_rehearsal_ready")],
+            ["synthetic_100_ready", automation.get("synthetic_100_ready")],
             ["synthetic_selected_count", automation.get("synthetic_selected_count")],
             ["synthetic_selector_miss_count", automation.get("synthetic_selector_miss_count")],
             ["synthetic_final_submit_stop_count", automation.get("synthetic_final_submit_stop_count")],

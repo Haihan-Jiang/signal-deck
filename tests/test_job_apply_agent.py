@@ -7700,6 +7700,119 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(cli_markdown_output.exists())
             self.assertTrue(cli_reply_template_output.exists())
 
+    def test_final_answer_blocker_report_separates_current_blockers_from_after_reply_readiness(self) -> None:
+        unblockers = {
+            "unblockers": [
+                {
+                    "input_id": "profile_zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "high_risk": False,
+                    "required_count": 56,
+                    "platforms": ["LinkedIn"],
+                    "labels": ["Postal code"],
+                },
+                {
+                    "input_id": "answer_memory_citizenship_status_default_policy",
+                    "input_type": "high_risk_exact_confirmation",
+                    "question": "What citizenship answer should automation use?",
+                    "high_risk": True,
+                    "required_count": 57,
+                    "platforms": ["Greenhouse"],
+                    "labels": ["Are you a U.S. person?"],
+                },
+                {
+                    "input_id": "answer_memory_background_or_export_control_default_policy",
+                    "input_type": "high_risk_exact_confirmation",
+                    "question": "What background/export-control answer should automation use?",
+                    "high_risk": True,
+                    "required_count": 31,
+                    "platforms": ["Ashby"],
+                    "labels": ["Export control"],
+                },
+                {
+                    "input_id": "answer_memory_country_work_permit_default_policy",
+                    "input_type": "high_risk_exact_confirmation",
+                    "question": "What country work permit answer should automation use?",
+                    "high_risk": True,
+                    "required_count": 28,
+                    "platforms": ["Lever"],
+                    "labels": ["Country work authorization"],
+                },
+                {
+                    "input_id": "answer_memory_interview_recording_consent_default_policy",
+                    "input_type": "high_risk_exact_confirmation",
+                    "question": "Should automation consent to interview recording?",
+                    "high_risk": True,
+                    "required_count": 18,
+                    "platforms": ["Greenhouse"],
+                    "labels": ["Interview recording"],
+                },
+                {
+                    "input_id": "answer_memory_health_requirement_default_policy",
+                    "input_type": "high_risk_exact_confirmation",
+                    "question": "What health requirement answer should automation use?",
+                    "high_risk": True,
+                    "required_count": 2,
+                    "platforms": ["Workday"],
+                    "labels": ["Health requirements"],
+                },
+            ]
+        }
+        template = build_final_answer_intake_template(unblockers)
+        goal_audit = {
+            "status": "needs_user_answers",
+            "goal_complete": False,
+            "blocker_summary": {
+                "final_answer_waiting_count_after_drafts": 6,
+                "position_execution_remaining_user_answers": 6,
+                "position_execution_global_remaining_user_answers": 6,
+                "selected_queue_supervised_autofill_ready": False,
+                "post_answer_synthetic_queue_rehearsal_ready": True,
+                "post_answer_text_reply_rehearsal_ready": True,
+                "post_answer_intake_answer_count": 6,
+                "post_answer_intake_missing_unblocker_count": 0,
+                "post_answer_intake_unconfirmed_high_risk_count": 0,
+                "post_answer_intake_needs_more_specific_answer_count": 0,
+                "post_answer_intake_unknown_answer_count": 0,
+                "post_answer_synthetic_autofill_selected_count": 100,
+                "post_answer_synthetic_selector_miss_count": 0,
+                "post_answer_synthetic_final_submit_stop_count": 100,
+            },
+        }
+
+        report = build_final_answer_blocker_report(template, goal_audit=goal_audit)
+        markdown = render_final_answer_blocker_report_markdown(report)
+        html = render_final_answer_blocker_report_html(report)
+        summary = report["summary"]
+        automation = report["automation_after_answers"]
+
+        self.assertFalse(report["ready_for_post_answer_pipeline"])
+        self.assertTrue(report["ready_after_truthful_answer_reply"])
+        self.assertEqual(summary["current_answers_blocking_count"], 6)
+        self.assertFalse(summary["selected_queue_currently_ready"])
+        self.assertTrue(summary["selected_queue_ready_after_truthful_reply"])
+        self.assertTrue(summary["post_answer_synthetic_100_ready"])
+        self.assertEqual(summary["post_answer_intake_problem_count"], 0)
+        self.assertEqual(automation["status"], "ready_after_truthful_answer_reply")
+        self.assertFalse(automation["selected_queue_currently_ready"])
+        self.assertTrue(automation["selected_queue_ready_after_truthful_reply"])
+        self.assertFalse(automation["selected_queue_supervised_autofill_ready"])
+        self.assertEqual(automation["selected_queue_remaining_user_answers"], 6)
+        self.assertEqual(automation["global_remaining_user_answers"], 6)
+        self.assertTrue(automation["synthetic_100_ready"])
+        self.assertEqual(automation["synthetic_selected_count"], 100)
+        self.assertEqual(automation["synthetic_selector_miss_count"], 0)
+        self.assertEqual(automation["synthetic_final_submit_stop_count"], 100)
+        self.assertEqual(automation["intake_validation"]["problem_count"], 0)
+        self.assertIn("Ready for post-answer pipeline: false", markdown)
+        self.assertIn("Ready after truthful answer reply: true", markdown)
+        self.assertIn("selected queue ready now: false", markdown)
+        self.assertIn("selected queue ready after truthful reply: true", markdown)
+        self.assertIn("synthetic 100 ready: true", markdown)
+        self.assertIn("Current selected queue ready", html)
+        self.assertIn("Ready after truthful reply", html)
+        self.assertIn("Synthetic 100 ready", html)
+
     def test_final_answer_reply_text_builds_ready_intake_without_markdown_answer_text(self) -> None:
         unblockers = {
             "unblockers": [
