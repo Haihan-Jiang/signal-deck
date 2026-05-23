@@ -5113,6 +5113,8 @@ def build_critical_input_preflight(
     approve: bool = False,
     approve_high_risk: bool = False,
     source: str = "critical_input_preflight",
+    baseline_gaps: dict[str, Any] | None = None,
+    baseline_readiness: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not isinstance(approval_pack, dict):
         raise ValueError("approval pack must be a JSON object")
@@ -5136,17 +5138,21 @@ def build_critical_input_preflight(
     updated_answers = update_report.get("updated_answers") or answers_payload
     before_status = build_critical_input_status_report(approval_pack, answers_payload)
     after_status = build_critical_input_status_report(approval_pack, updated_answers)
-    before_profile = CandidateProfile.from_mapping(profile_payload_copy)
-    before_gaps = build_answer_gap_report(
-        research,
-        profile=before_profile,
-        answer_memory=memory_payload,
-    )
-    before_readiness = build_position_readiness_report(
-        research,
-        before_gaps,
-        closed_jobs=closed_jobs,
-    )
+    if baseline_gaps is not None and baseline_readiness is not None:
+        before_gaps = baseline_gaps
+        before_readiness = baseline_readiness
+    else:
+        before_profile = CandidateProfile.from_mapping(profile_payload_copy)
+        before_gaps = build_answer_gap_report(
+            research,
+            profile=before_profile,
+            answer_memory=memory_payload,
+        )
+        before_readiness = build_position_readiness_report(
+            research,
+            before_gaps,
+            closed_jobs=closed_jobs,
+        )
 
     with tempfile.TemporaryDirectory(prefix="job_apply_critical_preflight_") as temp_dir:
         temp_root = Path(temp_dir)
@@ -5615,6 +5621,18 @@ def build_critical_input_impact_report(
     closed_jobs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     rows = _critical_input_answer_rows(answers_payload)
+    baseline_memory = json.loads(json.dumps(answer_memory or {"version": 1, "answers": []}))
+    baseline_profile = CandidateProfile.from_mapping(json.loads(json.dumps(profile_payload)))
+    baseline_gaps = build_answer_gap_report(
+        research,
+        profile=baseline_profile,
+        answer_memory=baseline_memory,
+    )
+    baseline_readiness = build_position_readiness_report(
+        research,
+        baseline_gaps,
+        closed_jobs=closed_jobs,
+    )
     input_impacts: list[dict[str, Any]] = []
     combined_updates: dict[str, Any] = {}
     for index, item in enumerate(rows, start=1):
@@ -5633,6 +5651,8 @@ def build_critical_input_impact_report(
             approve=True,
             approve_high_risk=True,
             source="critical_input_impact_single",
+            baseline_gaps=baseline_gaps,
+            baseline_readiness=baseline_readiness,
         )
         summary = preflight.get("summary") or {}
         input_impacts.append(
@@ -5677,6 +5697,8 @@ def build_critical_input_impact_report(
         approve=True,
         approve_high_risk=True,
         source="critical_input_impact_combined",
+        baseline_gaps=baseline_gaps,
+        baseline_readiness=baseline_readiness,
     )
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
