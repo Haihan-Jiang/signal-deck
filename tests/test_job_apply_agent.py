@@ -11106,6 +11106,46 @@ class JobApplyAgentTests(unittest.TestCase):
                 }
             ],
         }
+        selected_answer_dependencies = {
+            "status": "waiting_for_truthful_answers_global_gate",
+            "summary": {
+                "selected_position_count": 100,
+                "known_unresolved_alias_count": 2,
+                "known_unresolved_aliases": ["zip_or_postal_code", "citizenship_status"],
+                "positions_with_final_answer_dependencies": 0,
+                "direct_dependency_prompt_count": 0,
+                "ready_after_truthful_answers_count": 100,
+                "all_selected_dependencies_accounted_for": True,
+                "unknown_dependency_aliases": [],
+                "global_blockers_not_seen_in_selected_positions": [
+                    "zip_or_postal_code",
+                    "citizenship_status",
+                ],
+            },
+            "blockers": [
+                {
+                    "alias": "citizenship_status",
+                    "high_risk": True,
+                    "required_count": 17,
+                    "platforms": ["Greenhouse", "Ashby"],
+                    "question": "What should automation answer for citizenship status questions?",
+                }
+            ],
+            "positions": [
+                {
+                    "index": 1,
+                    "status": "ready_after_confirmed_answers",
+                    "platform": "Lever",
+                    "company": "Example",
+                    "title": "SRE",
+                    "unresolved_final_answer_aliases": [],
+                    "unresolved_final_answer_prompt_count": 0,
+                    "ready_after_truthful_answers": True,
+                    "final_submit_supervised_gate": True,
+                    "apply_url": "https://jobs.lever.co/example/1",
+                }
+            ],
+        }
         submission_safety_audit = {
             "status": "safe",
             "safe": True,
@@ -11162,6 +11202,7 @@ class JobApplyAgentTests(unittest.TestCase):
             apply_queue_autofill_packet=apply_queue_autofill_packet,
             apply_queue_refresh=apply_queue_refresh,
             position_execution_audit=position_execution_audit,
+            selected_answer_dependencies=selected_answer_dependencies,
             submission_safety_audit=submission_safety_audit,
         )
         markdown = render_automation_handoff_markdown(report)
@@ -11193,6 +11234,15 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["summary"]["position_execution_selected_target_platform_count"], 2)
         self.assertEqual(report["summary"]["position_execution_missing_target_platforms"], [])
         self.assertEqual(report["summary"]["position_execution_target_platform_local_synthetic_submit_count"], 2)
+        self.assertEqual(
+            report["summary"]["selected_answer_dependency_status"],
+            "waiting_for_truthful_answers_global_gate",
+        )
+        self.assertEqual(report["summary"]["selected_answer_dependency_selected_count"], 100)
+        self.assertEqual(report["summary"]["selected_answer_dependency_known_alias_count"], 2)
+        self.assertEqual(report["summary"]["selected_answer_dependency_positions_with_direct_dependencies"], 0)
+        self.assertEqual(report["summary"]["selected_answer_dependency_ready_after_truthful_answers_count"], 100)
+        self.assertTrue(report["summary"]["selected_answer_dependency_all_accounted_for"])
         self.assertTrue(report["summary"]["submission_safety_safe"])
         self.assertEqual(report["summary"]["submission_safety_issue_count"], 0)
         self.assertEqual(report["summary"]["submission_safety_warning_count"], 1)
@@ -11226,6 +11276,13 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("--reply-stdin", report["summary"]["goal_completion_direct_autopilot_command"])
         self.assertEqual(report["goal_completion_verdict"]["status"], "waiting_for_truthful_user_answers")
         self.assertEqual(report["goal_completion_checklist"][1]["id"], "real_user_answer_learning")
+        self.assertEqual(
+            {
+                row["id"]: row["status"]
+                for row in report["completion_verdict"]
+            }["selected_answer_dependency_map"],
+            "achieved",
+        )
         self.assertEqual(
             {
                 row["id"]: row["status"]
@@ -11292,6 +11349,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("live_closed_identity_preflight", markdown)
         self.assertIn("autofill packet: waiting_for_confirmed_answers", markdown)
         self.assertIn("position platform coverage: 2 / 2 target platforms", markdown)
+        self.assertIn("selected answer dependency map: waiting_for_truthful_answers_global_gate", markdown)
         self.assertIn("Position Execution Platform Summary", markdown)
         self.assertIn("submission safety: safe", markdown)
         self.assertIn("final-answer fake/test markers: real 0, synthetic 5", markdown)
@@ -11309,6 +11367,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("rehearse-after-answers", markdown)
         self.assertIn("final-answer-reply --reply-file", markdown)
         self.assertIn("Final-Answer Intake", markdown)
+        self.assertIn("Selected 100 Answer Dependencies", markdown)
         self.assertIn("needs specificity 0", markdown)
         self.assertIn("100-Position Stop Actions", markdown)
         self.assertIn("position execution audit: ready_after_confirmed_answers", markdown)
@@ -11319,6 +11378,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Identity unverified", html)
         self.assertIn("Target platforms", html)
         self.assertIn("Position Execution Platform Summary", html)
+        self.assertIn("Answer dependency map", html)
+        self.assertIn("Selected 100 Answer Dependencies", html)
         self.assertIn("Safety audit", html)
         self.assertIn("Goal Completion Verdict", html)
         self.assertIn("waiting_for_truthful_user_answers", html)
@@ -11353,6 +11414,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 apply_queue_autofill_packet=apply_queue_autofill_packet,
                 apply_queue_refresh=apply_queue_refresh,
                 position_execution_audit=position_execution_audit,
+                selected_answer_dependencies=selected_answer_dependencies,
                 submission_safety_audit=submission_safety_audit,
             )
             self.assertEqual(written["status"], "waiting_for_confirmed_answers")

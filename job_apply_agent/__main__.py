@@ -773,6 +773,18 @@ def main() -> int:
         default=str(DEFAULT_POSITION_EXECUTION_AUDIT_HTML),
     )
     automation_handoff_parser.add_argument(
+        "--selected-answer-dependencies-json",
+        default=str(DEFAULT_SELECTED_ANSWER_DEPENDENCIES_JSON),
+    )
+    automation_handoff_parser.add_argument(
+        "--selected-answer-dependencies-markdown",
+        default=str(DEFAULT_SELECTED_ANSWER_DEPENDENCIES_MARKDOWN),
+    )
+    automation_handoff_parser.add_argument(
+        "--selected-answer-dependencies-html",
+        default=str(DEFAULT_SELECTED_ANSWER_DEPENDENCIES_HTML),
+    )
+    automation_handoff_parser.add_argument(
         "--review-queue-audit-json",
         default=str(DEFAULT_REVIEW_QUEUE_AUDIT_JSON),
     )
@@ -2887,6 +2899,7 @@ def main() -> int:
             apply_queue_autofill_packet=_load_optional_json(args.apply_queue_autofill_packet_json),
             apply_queue_refresh=_load_optional_json(args.apply_queue_refresh_json),
             position_execution_audit=_load_optional_json(args.position_execution_audit_json),
+            selected_answer_dependencies=_load_optional_json(args.selected_answer_dependencies_json),
             submission_safety_audit=_load_optional_json(args.submission_safety_audit_json),
             source_artifacts=_question_export_source_artifacts(
                 {
@@ -2907,6 +2920,9 @@ def main() -> int:
                     "Apply queue refresh": args.apply_queue_refresh_json,
                     "Position execution audit": args.position_execution_audit_json,
                     "Position execution audit HTML": args.position_execution_audit_html,
+                    "Selected answer dependencies": args.selected_answer_dependencies_json,
+                    "Selected answer dependencies Markdown": args.selected_answer_dependencies_markdown,
+                    "Selected answer dependencies HTML": args.selected_answer_dependencies_html,
                     "Browser review queue audit": args.review_queue_audit_json,
                     "Browser review queue audit Markdown": args.review_queue_audit_markdown,
                     "Submission safety audit": args.submission_safety_audit_json,
@@ -2931,6 +2947,11 @@ def main() -> int:
         print(f"Autofill selected: {summary.get('autofill_selected_count', 0)}")
         print(f"Position execution audit: {summary.get('position_execution_status') or 'missing'}")
         print(f"Positions audited: {summary.get('position_execution_audited_count', 0)}")
+        print(f"Answer dependency map: {summary.get('selected_answer_dependency_status') or 'missing'}")
+        print(
+            "Answer dependency selected: "
+            f"{summary.get('selected_answer_dependency_selected_count', 0)}"
+        )
         print(f"Submission safety: {summary.get('submission_safety_status') or 'missing'}")
         print(f"Submission safety issues: {summary.get('submission_safety_issue_count', 0)}")
         print(
@@ -4516,6 +4537,7 @@ def _final_answer_autopilot_audit_commands() -> list[tuple[str, list[str]]]:
     return [
         ("position_execution_audit", [sys.executable, "-m", "job_apply_agent", "position-execution-audit"]),
         ("goal_audit", [sys.executable, "-m", "job_apply_agent", "goal-audit"]),
+        ("selected_answer_dependencies", [sys.executable, "-m", "job_apply_agent", "selected-answer-dependencies"]),
         ("submission_safety_audit", [sys.executable, "-m", "job_apply_agent", "submission-safety-audit"]),
         ("automation_handoff", [sys.executable, "-m", "job_apply_agent", "automation-handoff"]),
     ]
@@ -5903,6 +5925,7 @@ def _run_apply_queue_refresh(args: argparse.Namespace) -> dict:
 
     platform_playbook = None
     position_execution = None
+    selected_answer_dependencies = None
     if DEFAULT_RESEARCH_JSON.exists():
         platform_playbook = write_platform_question_playbook(
             json.loads(DEFAULT_RESEARCH_JSON.read_text(encoding="utf-8")),
@@ -5930,6 +5953,16 @@ def _run_apply_queue_refresh(args: argparse.Namespace) -> dict:
             DEFAULT_POSITION_EXECUTION_AUDIT_HTML,
             target_count=100,
         )
+        if DEFAULT_RESEARCH_JSON.exists() and DEFAULT_FINAL_ANSWER_BLOCKERS_JSON.exists():
+            selected_answer_dependencies = write_selected_final_answer_dependency_report(
+                DEFAULT_RESEARCH_JSON,
+                DEFAULT_POSITION_EXECUTION_AUDIT_JSON,
+                DEFAULT_FINAL_ANSWER_BLOCKERS_JSON,
+                DEFAULT_SELECTED_ANSWER_DEPENDENCIES_JSON,
+                DEFAULT_SELECTED_ANSWER_DEPENDENCIES_MARKDOWN,
+                DEFAULT_SELECTED_ANSWER_DEPENDENCIES_HTML,
+                target_count=100,
+            )
     coverage = _load_optional_json(str(DEFAULT_COVERAGE_GATE_JSON))
     gaps = _load_optional_json(str(DEFAULT_GAPS_JSON))
     readiness = _load_optional_json(str(DEFAULT_READINESS_JSON))
@@ -5985,6 +6018,7 @@ def _run_apply_queue_refresh(args: argparse.Namespace) -> dict:
             "handoff": str(DEFAULT_APPLY_QUEUE_HANDOFF_JSON),
             "autofill_packet": str(DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_JSON),
             "position_execution_audit": str(DEFAULT_POSITION_EXECUTION_AUDIT_JSON),
+            "selected_answer_dependencies": str(DEFAULT_SELECTED_ANSWER_DEPENDENCIES_JSON),
             "goal_audit": str(DEFAULT_GOAL_AUDIT_JSON),
         },
         "policy": {
@@ -6492,6 +6526,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             include_values=False,
         )
     position_execution_audit = None
+    selected_answer_dependencies = None
     if (
         apply_queue_autofill_packet
         and DEFAULT_PLATFORM_QUESTION_PLAYBOOK_JSON.exists()
@@ -6507,6 +6542,16 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             DEFAULT_POSITION_EXECUTION_AUDIT_HTML,
             target_count=100,
         )
+        if DEFAULT_RESEARCH_JSON.exists() and DEFAULT_FINAL_ANSWER_BLOCKERS_JSON.exists():
+            selected_answer_dependencies = write_selected_final_answer_dependency_report(
+                DEFAULT_RESEARCH_JSON,
+                DEFAULT_POSITION_EXECUTION_AUDIT_JSON,
+                DEFAULT_FINAL_ANSWER_BLOCKERS_JSON,
+                DEFAULT_SELECTED_ANSWER_DEPENDENCIES_JSON,
+                DEFAULT_SELECTED_ANSWER_DEPENDENCIES_MARKDOWN,
+                DEFAULT_SELECTED_ANSWER_DEPENDENCIES_HTML,
+                target_count=100,
+            )
         goal = write_goal_readiness_audit(
             coverage,
             gaps,
@@ -6552,6 +6597,10 @@ def _refresh_application_automation_reports() -> dict[str, object]:
         apply_queue_autofill_packet=apply_queue_autofill_packet,
         apply_queue_refresh=_load_optional_json(str(DEFAULT_APPLY_QUEUE_REFRESH_JSON)),
         position_execution_audit=position_execution_audit,
+        selected_answer_dependencies=(
+            selected_answer_dependencies
+            or _load_optional_json(str(DEFAULT_SELECTED_ANSWER_DEPENDENCIES_JSON))
+        ),
         submission_safety_audit=submission_safety_audit,
         source_artifacts=_question_export_source_artifacts(
             {
@@ -6586,6 +6635,9 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                 "Apply queue refresh Markdown": str(DEFAULT_APPLY_QUEUE_REFRESH_MARKDOWN),
                 "Position execution audit": str(DEFAULT_POSITION_EXECUTION_AUDIT_JSON),
                 "Position execution audit HTML": str(DEFAULT_POSITION_EXECUTION_AUDIT_HTML),
+                "Selected answer dependencies": str(DEFAULT_SELECTED_ANSWER_DEPENDENCIES_JSON),
+                "Selected answer dependencies Markdown": str(DEFAULT_SELECTED_ANSWER_DEPENDENCIES_MARKDOWN),
+                "Selected answer dependencies HTML": str(DEFAULT_SELECTED_ANSWER_DEPENDENCIES_HTML),
                 "Browser review queue audit": str(DEFAULT_REVIEW_QUEUE_AUDIT_JSON),
                 "Browser review queue audit Markdown": str(DEFAULT_REVIEW_QUEUE_AUDIT_MARKDOWN),
                 "Submission safety audit": str(DEFAULT_SUBMISSION_SAFETY_AUDIT_JSON),

@@ -16705,6 +16705,7 @@ def build_automation_handoff_report(
     apply_queue_autofill_packet: dict[str, Any] | None = None,
     apply_queue_refresh: dict[str, Any] | None = None,
     position_execution_audit: dict[str, Any] | None = None,
+    selected_answer_dependencies: dict[str, Any] | None = None,
     submission_safety_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     goal = goal_readiness_audit or {}
@@ -16721,6 +16722,8 @@ def build_automation_handoff_report(
     queue_refresh_final = queue_refresh.get("final") or {}
     execution_audit = position_execution_audit or {}
     execution_summary = execution_audit.get("summary") or {}
+    dependency_report = selected_answer_dependencies or {}
+    dependency_summary = dependency_report.get("summary") if isinstance(dependency_report.get("summary"), dict) else {}
     safety_audit = submission_safety_audit or {}
     safety_summary = safety_audit.get("summary") if isinstance(safety_audit.get("summary"), dict) else {}
     final_intake_update = final_answer_intake_update or {}
@@ -16933,6 +16936,33 @@ def build_automation_handoff_report(
         "position_execution_target_platform_local_synthetic_submit_count": int(
             execution_summary.get("target_platform_local_synthetic_submit_count") or 0
         ),
+        "selected_answer_dependency_status": dependency_report.get("status", ""),
+        "selected_answer_dependency_selected_count": int(
+            dependency_summary.get("selected_position_count") or 0
+        ),
+        "selected_answer_dependency_known_alias_count": int(
+            dependency_summary.get("known_unresolved_alias_count") or 0
+        ),
+        "selected_answer_dependency_positions_with_direct_dependencies": int(
+            dependency_summary.get("positions_with_final_answer_dependencies") or 0
+        ),
+        "selected_answer_dependency_direct_prompt_count": int(
+            dependency_summary.get("direct_dependency_prompt_count") or 0
+        ),
+        "selected_answer_dependency_ready_after_truthful_answers_count": int(
+            dependency_summary.get("ready_after_truthful_answers_count") or 0
+        ),
+        "selected_answer_dependency_all_accounted_for": bool(dependency_report)
+        and bool(dependency_summary.get("all_selected_dependencies_accounted_for")),
+        "selected_answer_dependency_unknown_alias_count": len(
+            _string_list(dependency_summary.get("unknown_dependency_aliases"))
+        ),
+        "selected_answer_dependency_aliases": _string_list(
+            dependency_summary.get("known_unresolved_aliases")
+        ),
+        "selected_answer_dependency_global_blockers_not_seen": _string_list(
+            dependency_summary.get("global_blockers_not_seen_in_selected_positions")
+        ),
         "submission_safety_status": safety_audit.get("status", ""),
         "submission_safety_safe": bool(safety_audit.get("safe")) if safety_audit else False,
         "submission_safety_issue_count": _submission_safety_int(safety_audit.get("issue_count")),
@@ -16988,6 +17018,10 @@ def build_automation_handoff_report(
         "stop_action_samples": stop_samples[:250],
         "position_execution_audit": _automation_handoff_position_execution_rows(execution_audit),
         "position_execution_platform_summary": execution_audit.get("platform_summary") or [],
+        "selected_answer_dependencies": _automation_handoff_selected_answer_dependency_rows(
+            dependency_report
+        ),
+        "selected_answer_dependency_blockers": dependency_report.get("blockers") or [],
         "submission_safety": _automation_handoff_submission_safety_rows(safety_audit),
         "missing_profile_inputs": missing_profile_inputs,
         "source_artifacts": source_artifacts or [],
@@ -17021,6 +17055,7 @@ def write_automation_handoff_report(
     apply_queue_autofill_packet: dict[str, Any] | None = None,
     apply_queue_refresh: dict[str, Any] | None = None,
     position_execution_audit: dict[str, Any] | None = None,
+    selected_answer_dependencies: dict[str, Any] | None = None,
     submission_safety_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     report = build_automation_handoff_report(
@@ -17038,6 +17073,7 @@ def write_automation_handoff_report(
         apply_queue_autofill_packet=apply_queue_autofill_packet,
         apply_queue_refresh=apply_queue_refresh,
         position_execution_audit=position_execution_audit,
+        selected_answer_dependencies=selected_answer_dependencies,
         submission_safety_audit=submission_safety_audit,
     )
     json_path = Path(json_output)
@@ -17067,6 +17103,20 @@ def _automation_handoff_completion_verdict_rows(
         summary.get("position_execution_target_platform_local_synthetic_submit_count") or 0
     )
     missing_target_platforms = int(summary.get("position_execution_missing_target_platform_count") or 0)
+    dependency_status = str(summary.get("selected_answer_dependency_status") or "")
+    dependency_selected = int(summary.get("selected_answer_dependency_selected_count") or 0)
+    dependency_ready_after = int(
+        summary.get("selected_answer_dependency_ready_after_truthful_answers_count") or 0
+    )
+    dependency_unknown_aliases = int(summary.get("selected_answer_dependency_unknown_alias_count") or 0)
+    dependency_accounted = bool(summary.get("selected_answer_dependency_all_accounted_for"))
+    dependency_map_ready = bool(
+        dependency_selected >= target
+        and dependency_ready_after >= target
+        and dependency_unknown_aliases == 0
+        and dependency_accounted
+        and dependency_status
+    )
     local_synthetic_submits = int(
         summary.get("autofill_local_synthetic_submit_count")
         or summary.get("autofill_packet_local_synthetic_submit_count")
@@ -17123,6 +17173,22 @@ def _automation_handoff_completion_verdict_rows(
     ) == 0
     answer_learning_ready = final_missing == 0 and data_blockers_after == 0
     return [
+        {
+            "id": "selected_answer_dependency_map",
+            "status": "achieved" if dependency_map_ready else "needs_attention",
+            "blocking": not dependency_map_ready,
+            "evidence": (
+                f"status={dependency_status or 'missing'}; selected={dependency_selected}/{target}; "
+                f"ready_after_answers={dependency_ready_after}; "
+                f"unknown_aliases={dependency_unknown_aliases}; "
+                f"accounted={str(dependency_accounted).lower()}"
+            ),
+            "next_action": (
+                "run selected-answer-dependencies after position-execution-audit"
+                if not dependency_map_ready
+                else "none"
+            ),
+        },
         {
             "id": "selected_100_technical_path",
             "status": "achieved" if technical_ready else "needs_attention",
@@ -17215,6 +17281,7 @@ def render_automation_handoff_markdown(report: dict[str, Any]) -> str:
         f"- autofill packet: {summary.get('autofill_packet_status') or 'missing'}, selected {summary.get('autofill_packet_selected_count', 0)}, browser actions {summary.get('autofill_packet_browser_action_count', 0)}, final-submit stops {summary.get('autofill_packet_final_submit_stop_count', 0)}, selector misses {summary.get('autofill_packet_selector_miss_count', 0)}",
         f"- position execution audit: {summary.get('position_execution_status') or 'missing'}, audited {summary.get('position_execution_audited_count', 0)} / {summary.get('position_execution_target_count', 0)}, ready after answers {summary.get('position_execution_ready_after_answers_count', 0)}, selector misses {summary.get('position_execution_selector_miss_count', 0)}",
         f"- position platform coverage: {summary.get('position_execution_selected_target_platform_count', 0)} / {summary.get('position_execution_target_platform_count', 0)} target platforms, target-platform synthetic submits {summary.get('position_execution_target_platform_local_synthetic_submit_count', 0)}, missing {', '.join(summary.get('position_execution_missing_target_platforms') or []) or 'none'}",
+        f"- selected answer dependency map: {summary.get('selected_answer_dependency_status') or 'missing'}, selected {summary.get('selected_answer_dependency_selected_count', 0)}, known aliases {summary.get('selected_answer_dependency_known_alias_count', 0)}, direct positions {summary.get('selected_answer_dependency_positions_with_direct_dependencies', 0)}, ready after answers {summary.get('selected_answer_dependency_ready_after_truthful_answers_count', 0)}, accounted {str(bool(summary.get('selected_answer_dependency_all_accounted_for'))).lower()}",
         f"- submission safety: {summary.get('submission_safety_status') or 'missing'}, safe {str(bool(summary.get('submission_safety_safe'))).lower()}, issues {summary.get('submission_safety_issue_count', 0)}, warnings {summary.get('submission_safety_warning_count', 0)}",
         f"- final-answer fake/test markers: real {summary.get('submission_safety_real_final_answer_fake_marker_count', 0)}, synthetic {summary.get('submission_safety_synthetic_final_answer_fake_marker_count', 0)}, packet final-submit stops {summary.get('submission_safety_apply_packet_final_submit_stop_count', 0)}",
         "",
@@ -17337,6 +17404,41 @@ def render_automation_handoff_markdown(report: dict[str, Any]) -> str:
                     row.get("specificity_reason") or row.get("answer_specificity_hint"),
                 ]
                 for row in report.get("final_answer_intake", [])
+            ],
+        )
+    )
+    lines.extend(["", "## Selected 100 Answer Dependencies", ""])
+    lines.extend(
+        _simple_markdown_table(
+            ["Alias", "High risk", "Required count", "Platforms", "Question"],
+            [
+                [
+                    row.get("alias"),
+                    row.get("high_risk"),
+                    row.get("required_count"),
+                    ", ".join(_string_list(row.get("platforms"))),
+                    row.get("question"),
+                ]
+                for row in report.get("selected_answer_dependency_blockers", [])
+            ],
+        )
+    )
+    lines.extend(["", "Selected positions:"])
+    lines.extend(
+        _simple_markdown_table(
+            ["#", "Status", "Platform", "Company", "Title", "Aliases", "Prompts", "Ready after answers"],
+            [
+                [
+                    row.get("index"),
+                    row.get("status"),
+                    row.get("platform"),
+                    row.get("company"),
+                    row.get("title"),
+                    ", ".join(_string_list(row.get("unresolved_final_answer_aliases"))),
+                    row.get("unresolved_final_answer_prompt_count"),
+                    row.get("ready_after_truthful_answers"),
+                ]
+                for row in report.get("selected_answer_dependencies", [])[:120]
             ],
         )
     )
@@ -17537,6 +17639,21 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
                         "Missing platforms",
                         ", ".join(summary.get("position_execution_missing_target_platforms") or []) or "none",
                     ),
+                    ("Answer dependency map", summary.get("selected_answer_dependency_status") or "missing"),
+                    ("Dependency selected", summary.get("selected_answer_dependency_selected_count", 0)),
+                    ("Dependency aliases", summary.get("selected_answer_dependency_known_alias_count", 0)),
+                    (
+                        "Direct dependency rows",
+                        summary.get("selected_answer_dependency_positions_with_direct_dependencies", 0),
+                    ),
+                    (
+                        "Dependency ready",
+                        summary.get("selected_answer_dependency_ready_after_truthful_answers_count", 0),
+                    ),
+                    (
+                        "Dependencies accounted",
+                        str(bool(summary.get("selected_answer_dependency_all_accounted_for"))).lower(),
+                    ),
                     ("Safety audit", summary.get("submission_safety_status") or "missing"),
                     ("Safety safe", str(bool(summary.get("submission_safety_safe"))).lower()),
                     ("Safety issues", summary.get("submission_safety_issue_count", 0)),
@@ -17665,6 +17782,48 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
                         row.get("specificity_reason") or row.get("answer_specificity_hint"),
                     ]
                     for row in report.get("final_answer_intake", [])
+                ],
+            ),
+            "</section>",
+            "<section><h2>Selected 100 Answer Dependencies</h2>",
+            _html_table(
+                ["Alias", "High risk", "Required count", "Platforms", "Question"],
+                [
+                    [
+                        row.get("alias"),
+                        _yes_no(row.get("high_risk")),
+                        row.get("required_count"),
+                        ", ".join(_string_list(row.get("platforms"))),
+                        row.get("question"),
+                    ]
+                    for row in report.get("selected_answer_dependency_blockers", [])
+                ],
+            ),
+            _html_table(
+                [
+                    "#",
+                    "Status",
+                    "Platform",
+                    "Company",
+                    "Title",
+                    "Aliases",
+                    "Prompts",
+                    "Ready after answers",
+                    "Apply URL",
+                ],
+                [
+                    [
+                        row.get("index"),
+                        row.get("status"),
+                        row.get("platform"),
+                        row.get("company"),
+                        row.get("title"),
+                        ", ".join(_string_list(row.get("unresolved_final_answer_aliases"))),
+                        row.get("unresolved_final_answer_prompt_count"),
+                        _yes_no(row.get("ready_after_truthful_answers")),
+                        row.get("apply_url"),
+                    ]
+                    for row in report.get("selected_answer_dependencies", [])
                 ],
             ),
             "</section>",
@@ -18040,6 +18199,33 @@ def _automation_handoff_position_execution_rows(audit: dict[str, Any]) -> list[d
                 "final_submit_stop_count": int(row.get("final_submit_stop_count") or 0),
                 "selector_miss_count": int(row.get("selector_miss_count") or 0),
                 "blockers_or_gates": ", ".join(_string_list(row.get("blockers_or_gates"))),
+                "apply_url": row.get("apply_url"),
+            }
+        )
+    return rows
+
+
+def _automation_handoff_selected_answer_dependency_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for row in report.get("positions") or []:
+        if not isinstance(row, dict):
+            continue
+        rows.append(
+            {
+                "index": row.get("index"),
+                "status": row.get("status"),
+                "platform": row.get("platform"),
+                "company": row.get("company"),
+                "title": row.get("title"),
+                "role_family": row.get("role_family"),
+                "unresolved_final_answer_aliases": _string_list(
+                    row.get("unresolved_final_answer_aliases")
+                ),
+                "unresolved_final_answer_prompt_count": int(
+                    row.get("unresolved_final_answer_prompt_count") or 0
+                ),
+                "ready_after_truthful_answers": bool(row.get("ready_after_truthful_answers")),
+                "final_submit_supervised_gate": bool(row.get("final_submit_supervised_gate")),
                 "apply_url": row.get("apply_url"),
             }
         )
