@@ -3285,6 +3285,9 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertTrue(report["local_synthetic_submit_allowed"])
         self.assertEqual(report["actual_submit_count"], 4)
         self.assertEqual(report["would_submit_count"], 4)
+        self.assertEqual(report["eligible_submit_count"], 4)
+        self.assertEqual(report["eligible_submit_target_count"], 4)
+        self.assertTrue(report["eligible_submit_achieved"])
         self.assertEqual(report["outcome_counts"]["submitted_local_synthetic"], 4)
         self.assertGreater(report["synthetic_gate_answer_count"], 0)
 
@@ -3296,6 +3299,10 @@ class JobApplyAgentTests(unittest.TestCase):
 
         self.assertEqual(report["run_count"], 5)
         self.assertEqual(report["actual_submit_count"], 4)
+        self.assertEqual(report["eligible_submit_count"], 4)
+        self.assertEqual(report["eligible_submit_target_count"], 4)
+        self.assertEqual(report["expected_blocker_count"], 1)
+        self.assertTrue(report["eligible_submit_achieved"])
         self.assertEqual(report["policy_stop_counts"]["manual_security_step"], 1)
         self.assertFalse(report["real_platform_submission"])
 
@@ -3610,6 +3617,10 @@ class JobApplyAgentTests(unittest.TestCase):
             **without_submit,
             "actual_submit_count": 2,
             "would_submit_count": 2,
+            "eligible_submit_count": 2,
+            "eligible_submit_target_count": 2,
+            "eligible_submit_achieved": True,
+            "expected_blocker_count": 2,
             "local_synthetic_submit_allowed": True,
         }
 
@@ -3633,6 +3644,9 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertFalse(blocked_gate["ready_for_full_automation"])
         self.assertTrue(ready_gate["ready_for_full_automation"])
         self.assertEqual(ready_gate["synthetic"]["actual_submit_count"], 2)
+        self.assertEqual(ready_gate["synthetic"]["eligible_submit_count"], 2)
+        self.assertEqual(ready_gate["synthetic"]["eligible_submit_target_count"], 2)
+        self.assertTrue(ready_gate["synthetic"]["eligible_submit_achieved"])
         self.assertFalse(ready_gate["synthetic"]["real_platform_submission"])
 
     def test_write_research_coverage_gate_outputs_reports(self) -> None:

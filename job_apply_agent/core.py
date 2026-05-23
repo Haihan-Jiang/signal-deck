@@ -3534,6 +3534,20 @@ def run_synthetic_browser_action_execution(
         platform_role_counts,
         platform_role_target,
     )
+    expected_blocker_statuses = {"closed_posting", "manual_security_step"}
+    expected_blocker_count = sum(
+        1
+        for item in executions
+        if str(item.get("policy_stop") or "") in expected_blocker_statuses
+    )
+    eligible_submit_target_count = max(0, len(executions) - expected_blocker_count)
+    actual_submit_count = sum(int(item.get("actual_submit_count", 0)) for item in executions)
+    selector_miss_count = sum(int(item.get("selector_miss_count", 0)) for item in executions)
+    eligible_submit_achieved = (
+        bool(allow_local_synthetic_submit)
+        and selector_miss_count == 0
+        and actual_submit_count == eligible_submit_target_count
+    )
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "execution": "local_synthetic_browser_action_executor",
@@ -3557,15 +3571,20 @@ def run_synthetic_browser_action_execution(
         "run_count": len(executions),
         "real_platform_submission": False,
         "local_synthetic_submit_allowed": bool(allow_local_synthetic_submit),
-        "actual_submit_count": sum(int(item.get("actual_submit_count", 0)) for item in executions),
+        "actual_submit_count": actual_submit_count,
         "would_submit_count": sum(1 for item in executions if bool(item.get("would_submit"))),
+        "eligible_submit_target_count": eligible_submit_target_count,
+        "eligible_submit_count": actual_submit_count,
+        "eligible_submit_achieved": eligible_submit_achieved,
+        "expected_blocker_count": expected_blocker_count,
+        "expected_blocker_policy_stops": sorted(expected_blocker_statuses),
         "outcome_counts": _count_by(executions, "outcome"),
         "policy_stop_counts": _count_by(executions, "policy_stop"),
         "platform_counts": platform_counts,
         "role_variant_counts": role_variant_counts,
         "platform_role_counts": platform_role_counts,
         "executed_action_count": sum(int(item.get("executed_action_count", 0)) for item in executions),
-        "selector_miss_count": sum(int(item.get("selector_miss_count", 0)) for item in executions),
+        "selector_miss_count": selector_miss_count,
         "stop_action_count": sum(int(item.get("stop_action_count", 0)) for item in executions),
         "synthetic_gate_answer_count": sum(int(item.get("synthetic_gate_answer_count", 0)) for item in executions),
         "policy": {
@@ -4175,13 +4194,29 @@ def build_research_coverage_gate(
     synthetic_actual_submit_count = int(synthetic.get("actual_submit_count") or 0)
     synthetic_selector_miss_count = int(synthetic.get("selector_miss_count") or 0)
     synthetic_real_platform_submission = bool(synthetic.get("real_platform_submission"))
+    synthetic_eligible_target = _synthetic_eligible_submit_target(synthetic)
+    synthetic_eligible_count = int(
+        synthetic.get("eligible_submit_count")
+        if synthetic.get("eligible_submit_count") is not None
+        else synthetic_actual_submit_count
+    )
+    synthetic_eligible_achieved = (
+        bool(synthetic.get("eligible_submit_achieved"))
+        if synthetic.get("eligible_submit_achieved") is not None
+        else (
+            synthetic_eligible_target > 0
+            and synthetic_eligible_count == synthetic_eligible_target
+            and synthetic_selector_miss_count == 0
+            and not synthetic_real_platform_submission
+        )
+    )
     ready_for_full_automation = (
         real_platform_target_achieved
         and real_platform_role_target_achieved
         and synthetic_role_achieved
         and question_blocker_count == 0
         and synthetic_selector_miss_count == 0
-        and synthetic_actual_submit_count > 0
+        and synthetic_eligible_achieved
         and not synthetic_real_platform_submission
     )
 
@@ -4228,6 +4263,14 @@ def build_research_coverage_gate(
             "local_synthetic_submit_allowed": bool(synthetic.get("local_synthetic_submit_allowed")),
             "actual_submit_count": synthetic_actual_submit_count,
             "would_submit_count": int(synthetic.get("would_submit_count") or 0),
+            "eligible_submit_target_count": synthetic_eligible_target,
+            "eligible_submit_count": synthetic_eligible_count,
+            "eligible_submit_achieved": synthetic_eligible_achieved,
+            "expected_blocker_count": int(
+                synthetic.get("expected_blocker_count")
+                if synthetic.get("expected_blocker_count") is not None
+                else _synthetic_expected_blocker_count(synthetic)
+            ),
             "real_platform_submission": synthetic_real_platform_submission,
             "selector_miss_count": synthetic_selector_miss_count,
             "platform_role_counts": synthetic.get("platform_role_counts", {}),
@@ -4239,6 +4282,21 @@ def build_research_coverage_gate(
         "ready_for_full_automation": ready_for_full_automation,
         "next_collection_targets": next_collection_targets,
     }
+
+
+def _synthetic_expected_blocker_count(synthetic: dict[str, Any]) -> int:
+    policy_stop_counts = synthetic.get("policy_stop_counts") or {}
+    return sum(
+        int(policy_stop_counts.get(status) or 0)
+        for status in ["closed_posting", "manual_security_step"]
+    )
+
+
+def _synthetic_eligible_submit_target(synthetic: dict[str, Any]) -> int:
+    if synthetic.get("eligible_submit_target_count") is not None:
+        return int(synthetic.get("eligible_submit_target_count") or 0)
+    run_count = int(synthetic.get("run_count") or 0)
+    return max(0, run_count - _synthetic_expected_blocker_count(synthetic))
 
 
 def write_research_coverage_gate(
@@ -4304,6 +4362,9 @@ def render_research_coverage_gate_markdown(gate: dict[str, Any]) -> str:
             f"- platform-role target achieved: {str(synthetic.get('platform_role_target_achieved')).lower()}",
             f"- local synthetic submit allowed: {str(bool(synthetic.get('local_synthetic_submit_allowed'))).lower()}",
             f"- local synthetic submit count: {synthetic.get('actual_submit_count', 0)}",
+            f"- eligible synthetic submit count: {synthetic.get('eligible_submit_count', 0)} / {synthetic.get('eligible_submit_target_count', 0)}",
+            f"- eligible synthetic submit achieved: {str(bool(synthetic.get('eligible_submit_achieved'))).lower()}",
+            f"- expected blocker count: {synthetic.get('expected_blocker_count', 0)}",
             f"- real platform submission: {str(bool(synthetic.get('real_platform_submission'))).lower()}",
             f"- selector miss count: {synthetic.get('selector_miss_count', 0)}",
         ]
@@ -4977,6 +5038,16 @@ def build_question_export(
             (coverage_gate.get("synthetic") or {}).get("platform_role_target_achieved")
         ),
         "local_synthetic_submit_count": int((coverage_gate.get("synthetic") or {}).get("actual_submit_count") or 0),
+        "eligible_synthetic_submit_count": int((coverage_gate.get("synthetic") or {}).get("eligible_submit_count") or 0),
+        "eligible_synthetic_submit_target_count": int(
+            (coverage_gate.get("synthetic") or {}).get("eligible_submit_target_count") or 0
+        ),
+        "eligible_synthetic_submit_achieved": bool(
+            (coverage_gate.get("synthetic") or {}).get("eligible_submit_achieved")
+        ),
+        "expected_synthetic_blocker_count": int(
+            (coverage_gate.get("synthetic") or {}).get("expected_blocker_count") or 0
+        ),
         "real_submit_count": 0,
     }
     return {
@@ -5045,6 +5116,15 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                     _yes_no(summary.get("synthetic_platform_role_target_achieved")),
                 ],
                 ["Local synthetic submit count", summary.get("local_synthetic_submit_count", 0)],
+                [
+                    "Eligible synthetic submit count",
+                    "{count} / {target}".format(
+                        count=summary.get("eligible_synthetic_submit_count", 0),
+                        target=summary.get("eligible_synthetic_submit_target_count", 0),
+                    ),
+                ],
+                ["Eligible synthetic submit achieved", _yes_no(summary.get("eligible_synthetic_submit_achieved"))],
+                ["Expected synthetic blocker count", summary.get("expected_synthetic_blocker_count", 0)],
                 ["Actual real submit count", summary.get("real_submit_count", 0)],
             ],
         ),
@@ -6458,6 +6538,9 @@ def render_synthetic_browser_action_execution_markdown(report: dict[str, Any]) -
         f"Real platform submission: {str(bool(report.get('real_platform_submission'))).lower()}",
         f"Local synthetic submit allowed: {str(bool(report.get('local_synthetic_submit_allowed'))).lower()}",
         f"Local synthetic submit count: {report.get('actual_submit_count', 0)}",
+        f"Eligible synthetic submit count: {report.get('eligible_submit_count', 0)} / {report.get('eligible_submit_target_count', 0)}",
+        f"Eligible synthetic submit achieved: {str(bool(report.get('eligible_submit_achieved'))).lower()}",
+        f"Expected blocker count: {report.get('expected_blocker_count', 0)}",
         f"Would submit count: {report.get('would_submit_count', 0)}",
         f"Executed browser actions: {report.get('executed_action_count', 0)}",
         f"Synthetic gate answers: {report.get('synthetic_gate_answer_count', 0)}",
