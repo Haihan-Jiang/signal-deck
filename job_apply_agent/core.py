@@ -3032,6 +3032,7 @@ def write_browser_dom_harness(
 def execute_browser_action_manifest_locally(
     manifest: dict[str, Any],
     snapshot: dict[str, Any],
+    allow_local_synthetic_submit: bool = False,
 ) -> dict[str, Any]:
     fields = [
         {**field, "_item_type": "field"}
@@ -3045,6 +3046,8 @@ def execute_browser_action_manifest_locally(
     )
     executed_actions: list[dict[str, Any]] = []
     selector_misses: list[dict[str, Any]] = []
+    would_submit = False
+    actual_submit_count = 0
     if manifest.get("status") == "closed_skip":
         outcome = "closed_skip"
         policy_stop = "closed_posting"
@@ -3078,6 +3081,48 @@ def execute_browser_action_manifest_locally(
         if selector_misses:
             outcome = "selector_resolution_failed"
             policy_stop = "selector_resolution"
+        elif (
+            allow_local_synthetic_submit
+            and _only_final_submit_stop_actions(manifest.get("stop_actions", []))
+        ):
+            submit_actions = [
+                _browser_submit_action_for_stop_action(stop)
+                for stop in manifest.get("stop_actions", [])
+                if isinstance(stop, dict)
+            ]
+            for action in submit_actions:
+                target = _resolve_browser_action_target(action, fields)
+                if target is None:
+                    selector_misses.append(
+                        {
+                            "field_index": action.get("field_index"),
+                            "label": action.get("label"),
+                            "browser_action": action.get("browser_action"),
+                            "selector_candidates": action.get("selector_candidates", []),
+                        }
+                    )
+                    continue
+                executed_actions.append(
+                    {
+                        "field_index": target.get("i"),
+                        "label": _field_prompt_label(target),
+                        "browser_action": "click_submit",
+                        "plan_action": "submit_gate",
+                        "value_source": "local_synthetic_submit",
+                        "selector_strategy": target.get("_matched_strategy"),
+                        "selector": target.get("_matched_selector"),
+                        "result": "locally_clicked_synthetic_submit",
+                    }
+                )
+                actual_submit_count += 1
+            if selector_misses:
+                outcome = "selector_resolution_failed"
+                policy_stop = "selector_resolution"
+                actual_submit_count = 0
+            else:
+                outcome = "submitted_local_synthetic"
+                policy_stop = "local_synthetic_submit_allowed"
+                would_submit = True
         elif manifest.get("stop_actions"):
             outcome = "executed_to_policy_stop"
             policy_stop = str(manifest["stop_actions"][0].get("status") or "manual_gate")
@@ -3094,8 +3139,9 @@ def execute_browser_action_manifest_locally(
         "outcome": outcome,
         "policy_stop": policy_stop,
         "real_platform_submission": False,
-        "would_submit": False,
-        "actual_submit_count": 0,
+        "would_submit": would_submit,
+        "actual_submit_count": actual_submit_count,
+        "local_synthetic_submit_allowed": bool(allow_local_synthetic_submit),
         "manifest_action_count": manifest.get("action_count", 0),
         "executed_action_count": len(executed_actions),
         "selector_miss_count": len(selector_misses),
@@ -3168,6 +3214,30 @@ def execute_form_plan_offline(
             "manual_gate_count": audit.get("manual_gate_count"),
             "final_submit_allowed": audit.get("final_submit_allowed"),
         },
+    }
+
+
+def _only_final_submit_stop_actions(stop_actions: Any) -> bool:
+    stops = [stop for stop in (stop_actions or []) if isinstance(stop, dict)]
+    return bool(stops) and all(
+        str(stop.get("status") or "") == "final_submit_confirmation" for stop in stops
+    )
+
+
+def _browser_submit_action_for_stop_action(stop: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "field_index": stop.get("field_index"),
+        "item_type": stop.get("item_type"),
+        "browser_action": "click_submit",
+        "plan_action": "submit_gate",
+        "label": stop.get("label"),
+        "category": stop.get("category"),
+        "required": bool(stop.get("required")),
+        "selector_candidates": _selector_candidates_for_step(stop),
+        "value_source": "local_synthetic_submit",
+        "requires_file": False,
+        "safe_to_execute": True,
+        "guard": "local synthetic forms only; never use for real employer pages",
     }
 
 
@@ -3299,6 +3369,7 @@ def run_synthetic_browser_action_execution(
     include_values: bool = False,
     per_platform_target: int | None = None,
     per_platform_role_target: int | None = None,
+    allow_local_synthetic_submit: bool = False,
 ) -> dict[str, Any]:
     profile = build_synthetic_candidate_profile()
     executions: list[dict[str, Any]] = []
@@ -3341,7 +3412,11 @@ def run_synthetic_browser_action_execution(
             page_text=str(snapshot.get("page_text") or ""),
             include_values=include_values,
         )
-        execution = execute_browser_action_manifest_locally(manifest, snapshot)
+        execution = execute_browser_action_manifest_locally(
+            manifest,
+            snapshot,
+            allow_local_synthetic_submit=allow_local_synthetic_submit,
+        )
         execution.update(
             {
                 "index": index,
@@ -3388,6 +3463,7 @@ def run_synthetic_browser_action_execution(
         ),
         "run_count": len(executions),
         "real_platform_submission": False,
+        "local_synthetic_submit_allowed": bool(allow_local_synthetic_submit),
         "actual_submit_count": sum(int(item.get("actual_submit_count", 0)) for item in executions),
         "would_submit_count": sum(1 for item in executions if bool(item.get("would_submit"))),
         "outcome_counts": _count_by(executions, "outcome"),
@@ -3398,6 +3474,12 @@ def run_synthetic_browser_action_execution(
         "executed_action_count": sum(int(item.get("executed_action_count", 0)) for item in executions),
         "selector_miss_count": sum(int(item.get("selector_miss_count", 0)) for item in executions),
         "stop_action_count": sum(int(item.get("stop_action_count", 0)) for item in executions),
+        "policy": {
+            "local_synthetic_submit_only": bool(allow_local_synthetic_submit),
+            "real_platform_submission": False,
+            "submit_requires_only_final_submit_stop": True,
+            "closed_or_captcha_or_missing_inputs_never_submitted": True,
+        },
         "runs": executions,
     }
 
@@ -3409,12 +3491,14 @@ def write_synthetic_browser_action_execution(
     include_values: bool = False,
     per_platform_target: int | None = None,
     per_platform_role_target: int | None = None,
+    allow_local_synthetic_submit: bool = False,
 ) -> dict[str, Any]:
     report = run_synthetic_browser_action_execution(
         count=count,
         include_values=include_values,
         per_platform_target=per_platform_target,
         per_platform_role_target=per_platform_role_target,
+        allow_local_synthetic_submit=allow_local_synthetic_submit,
     )
     json_path = Path(json_output)
     markdown_path = Path(markdown_output)
@@ -3993,12 +4077,17 @@ def build_research_coverage_gate(
     )
     synthetic_role_achieved = bool(synthetic.get("platform_role_target_achieved"))
     question_blocker_count = int((gaps or {}).get("blocking_prompt_count") or 0)
+    synthetic_actual_submit_count = int(synthetic.get("actual_submit_count") or 0)
+    synthetic_selector_miss_count = int(synthetic.get("selector_miss_count") or 0)
+    synthetic_real_platform_submission = bool(synthetic.get("real_platform_submission"))
     ready_for_full_automation = (
         real_platform_target_achieved
         and real_platform_role_target_achieved
         and synthetic_role_achieved
         and question_blocker_count == 0
-        and int(synthetic.get("actual_submit_count") or 0) == 0
+        and synthetic_selector_miss_count == 0
+        and synthetic_actual_submit_count > 0
+        and not synthetic_real_platform_submission
     )
 
     next_collection_targets = [
@@ -4041,8 +4130,11 @@ def build_research_coverage_gate(
             "run_count": int(synthetic.get("run_count") or 0),
             "per_platform_role_target": int(synthetic.get("per_platform_role_target") or 0),
             "platform_role_target_achieved": synthetic.get("platform_role_target_achieved"),
-            "actual_submit_count": int(synthetic.get("actual_submit_count") or 0),
-            "selector_miss_count": int(synthetic.get("selector_miss_count") or 0),
+            "local_synthetic_submit_allowed": bool(synthetic.get("local_synthetic_submit_allowed")),
+            "actual_submit_count": synthetic_actual_submit_count,
+            "would_submit_count": int(synthetic.get("would_submit_count") or 0),
+            "real_platform_submission": synthetic_real_platform_submission,
+            "selector_miss_count": synthetic_selector_miss_count,
             "platform_role_counts": synthetic.get("platform_role_counts", {}),
         },
         "questions": {
@@ -4115,7 +4207,9 @@ def render_research_coverage_gate_markdown(gate: dict[str, Any]) -> str:
             f"- runs: {synthetic.get('run_count', 0)}",
             f"- per-platform-role target: {synthetic.get('per_platform_role_target', 0)}",
             f"- platform-role target achieved: {str(synthetic.get('platform_role_target_achieved')).lower()}",
-            f"- actual submit count: {synthetic.get('actual_submit_count', 0)}",
+            f"- local synthetic submit allowed: {str(bool(synthetic.get('local_synthetic_submit_allowed'))).lower()}",
+            f"- local synthetic submit count: {synthetic.get('actual_submit_count', 0)}",
+            f"- real platform submission: {str(bool(synthetic.get('real_platform_submission'))).lower()}",
             f"- selector miss count: {synthetic.get('selector_miss_count', 0)}",
         ]
     )
@@ -4787,7 +4881,8 @@ def build_question_export(
         "synthetic_platform_role_target_achieved": bool(
             (coverage_gate.get("synthetic") or {}).get("platform_role_target_achieved")
         ),
-        "actual_submit_count": int((coverage_gate.get("synthetic") or {}).get("actual_submit_count") or 0),
+        "local_synthetic_submit_count": int((coverage_gate.get("synthetic") or {}).get("actual_submit_count") or 0),
+        "real_submit_count": 0,
     }
     return {
         "generated_at": summary["generated_at"],
@@ -4854,7 +4949,8 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                     "Synthetic platform-role target achieved",
                     _yes_no(summary.get("synthetic_platform_role_target_achieved")),
                 ],
-                ["Actual real submit count", summary.get("actual_submit_count", 0)],
+                ["Local synthetic submit count", summary.get("local_synthetic_submit_count", 0)],
+                ["Actual real submit count", summary.get("real_submit_count", 0)],
             ],
         ),
         "</section>",
@@ -6265,7 +6361,8 @@ def render_synthetic_browser_action_execution_markdown(report: dict[str, Any]) -
         f"Per-platform-role target: {report.get('per_platform_role_target', 0)}",
         f"Platform-role target achieved: {str(report.get('platform_role_target_achieved')).lower()}",
         f"Real platform submission: {str(bool(report.get('real_platform_submission'))).lower()}",
-        f"Actual submit count: {report.get('actual_submit_count', 0)}",
+        f"Local synthetic submit allowed: {str(bool(report.get('local_synthetic_submit_allowed'))).lower()}",
+        f"Local synthetic submit count: {report.get('actual_submit_count', 0)}",
         f"Would submit count: {report.get('would_submit_count', 0)}",
         f"Executed browser actions: {report.get('executed_action_count', 0)}",
         f"Selector misses: {report.get('selector_miss_count', 0)}",
@@ -8132,15 +8229,40 @@ def _minimal_learning_group_key(item: dict[str, Any]) -> str:
     status = str(item.get("coverage_status") or "")
     category = str(item.get("category") or "")
     storage = str(item.get("recommended_storage") or "")
+    label = str(item.get("label") or "")
+    normalized_label = str(item.get("normalized_label") or _normalize(label))
     if storage == "local_material" and category in {"resume_upload", "file_upload"}:
         return "local_material:resume_file"
     if storage == "profile" and category == "profile_link":
         return "profile:profile_links"
+    if storage == "profile" and category == "profile_identity" and any(
+        term in normalized_label for term in ["zip code", "zipcode", "postal code"]
+    ):
+        return "profile:zip_or_postal_code"
+    if storage == "resume_facts" and category == "education_grading":
+        return "resume_facts:education_grading"
     if category == "communication_consent":
         return "answer_memory:communication_consent"
     if category == "policy_acknowledgement":
         return "supervised_confirmation:policy_acknowledgement"
-    return f"{storage}:{status}:{item.get('normalized_label') or item.get('label')}"
+    if status == "needs_user_confirmation" and category in {
+        "background_or_export_control",
+        "citizenship_status",
+        "conflict_of_interest",
+        "country_work_permit",
+        "device_policy",
+        "employment_history",
+        "government_employment",
+        "health_requirement",
+        "interview_recording_consent",
+        "language_ability",
+        "location_constraint",
+        "professional_license",
+        "schedule_constraint",
+        "security_clearance",
+    }:
+        return f"answer_memory:{category}:default_policy"
+    return f"{storage}:{status}:{normalized_label or label}"
 
 
 def _minimal_learning_question(item: dict[str, Any]) -> str:
@@ -8150,10 +8272,34 @@ def _minimal_learning_question(item: dict[str, Any]) -> str:
         return "What approved local resume PDF/path should automation upload?"
     if storage == "profile" and category == "profile_link":
         return "What LinkedIn profile URL should automation use?"
+    if storage == "profile" and category == "profile_identity":
+        label = _normalize(str(item.get("label") or ""))
+        if any(term in label for term in ["zip code", "zipcode", "postal code"]):
+            return "What ZIP/postal code should automation use for profile and remote-work fields?"
+    if storage == "resume_facts" and category == "education_grading":
+        return "What GPA, grading system, ACT/SAT score, or 'not applicable' answer should automation use for education grading fields?"
     if category == "communication_consent":
         return "For recruiting updates, should automation answer yes or no to SMS/WhatsApp consent?"
     if category == "policy_acknowledgement":
         return "May automation mark applicant privacy acknowledgement after you review the policy?"
+    category_questions = {
+        "background_or_export_control": "What default answer and exceptions should automation use for background, export-control, indictment, debarment, substance, firearm, felony, or legal-eligibility questions?",
+        "citizenship_status": "What citizenship, U.S. person, permanent-resident, and restricted-country answers should automation use?",
+        "conflict_of_interest": "Should automation answer no to employee-relative, referral, outside-employment, non-compete, and conflict-of-interest questions unless an exception is listed?",
+        "country_work_permit": "What default answer and country-specific exceptions should automation use for non-U.S. work permit/right-to-work questions?",
+        "device_policy": "Should automation accept bring-your-own-device or own-computer requirements?",
+        "employment_history": "Should automation answer no to prior-employer, prior-application, contractor, or interview-history questions unless an employer exception is listed?",
+        "government_employment": "What default answer should automation use for current or prior government, military, or UN employment questions?",
+        "health_requirement": "What answer should automation use for health or vaccination requirement questions?",
+        "interview_recording_consent": "Should automation consent to interview recording, transcription, AI notetakers, or interview analysis?",
+        "language_ability": "Which non-English languages, if any, should automation claim for spoken and written proficiency?",
+        "location_constraint": "What default rule should automation use for onsite, hybrid, travel, timezone, and city/country location constraints?",
+        "professional_license": "What professional or medical licenses should automation claim, if any?",
+        "schedule_constraint": "What default answer should automation use for fixed schedule, internship schedule, or unusual-hours constraints?",
+        "security_clearance": "What security clearance level, eligibility, SCIF availability, and clearance exceptions should automation use?",
+    }
+    if category in category_questions:
+        return category_questions[category]
     return str(item.get("label") or "")
 
 
@@ -8713,9 +8859,14 @@ def _apply_stop_step(step: dict[str, Any]) -> dict[str, Any]:
     return {
         "field_index": step.get("field_index"),
         "item_type": step.get("item_type"),
+        "tag": step.get("tag"),
+        "type": step.get("type"),
+        "name": step.get("name"),
+        "id": step.get("id"),
         "action": step.get("action"),
         "label": step.get("label"),
         "category": step.get("category"),
+        "required": bool(step.get("required")),
         "status": status,
         "reason": step.get("reason"),
         "next_action": step.get("next_action"),

@@ -2129,6 +2129,68 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Application Automation Readiness", markdown)
         self.assertIn("needs_learning", markdown)
 
+    def test_position_readiness_groups_repeated_confirmation_prompts(self) -> None:
+        research = {
+            "generated_at": "2026-05-22T00:00:00+00:00",
+            "positions": [{"position_key": "greenhouse:1", "platform": "Greenhouse"}],
+            "items": [],
+        }
+        gaps = {
+            "generated_at": "2026-05-22T00:00:00+00:00",
+            "prompt_statuses": [
+                {
+                    "label": "Have you worked with us before?",
+                    "normalized_label": "have worked with us before",
+                    "category": "employment_history",
+                    "coverage_status": "needs_user_confirmation",
+                    "observed_count": 3,
+                    "required_count": 3,
+                    "platforms": ["Greenhouse"],
+                    "next_action": "ask user",
+                },
+                {
+                    "label": "Have you previously worked at Natera?",
+                    "normalized_label": "have previously worked at natera",
+                    "category": "employment_history",
+                    "coverage_status": "needs_user_confirmation",
+                    "observed_count": 2,
+                    "required_count": 2,
+                    "platforms": ["Greenhouse"],
+                    "next_action": "ask user",
+                },
+                {
+                    "label": "Do you know anyone currently at Glean?",
+                    "normalized_label": "do know anyone currently at glean",
+                    "category": "conflict_of_interest",
+                    "coverage_status": "needs_user_confirmation",
+                    "observed_count": 4,
+                    "required_count": 4,
+                    "platforms": ["Greenhouse"],
+                    "next_action": "ask user",
+                },
+                {
+                    "label": "Do you currently have a relative employed with Verisign?",
+                    "normalized_label": "do currently have relative employed with verisign",
+                    "category": "conflict_of_interest",
+                    "coverage_status": "needs_user_confirmation",
+                    "observed_count": 1,
+                    "required_count": 1,
+                    "platforms": ["Greenhouse"],
+                    "next_action": "ask user",
+                },
+            ],
+        }
+
+        report = build_position_readiness_report(research, gaps)
+        tasks = {task["group_key"]: task for task in report["minimal_learning_tasks"]}
+
+        self.assertEqual(report["learning_queue_count"], 4)
+        self.assertEqual(report["minimal_learning_task_count"], 2)
+        self.assertEqual(tasks["answer_memory:employment_history:default_policy"]["related_prompt_count"], 2)
+        self.assertEqual(tasks["answer_memory:conflict_of_interest:default_policy"]["related_prompt_count"], 2)
+        self.assertIn("prior-employer", tasks["answer_memory:employment_history:default_policy"]["question"])
+        self.assertIn("conflict-of-interest", tasks["answer_memory:conflict_of_interest:default_policy"]["question"])
+
     def test_write_position_readiness_report_outputs_json_and_markdown(self) -> None:
         research = {
             "generated_at": "2026-05-22T00:00:00+00:00",
@@ -2896,6 +2958,107 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertFalse(execution["would_submit"])
         self.assertEqual(execution["executed_actions"][0]["selector"], "#email")
 
+    def test_local_browser_manifest_executor_can_submit_local_synthetic_only(self) -> None:
+        snapshot = {
+            "title": "Application",
+            "url": "https://www.linkedin.com/jobs/view/900001/",
+            "fields": [
+                {"i": 1, "tag": "INPUT", "type": "email", "id": "email", "label": "Email"},
+            ],
+            "buttons": [
+                {"i": 99, "tag": "BUTTON", "text": "Submit application"},
+            ],
+        }
+        plan = {
+            "title": snapshot["title"],
+            "url": snapshot["url"],
+            "platform": "LinkedIn",
+            "steps": [
+                {
+                    "field_index": 1,
+                    "item_type": "field",
+                    "tag": "INPUT",
+                    "type": "email",
+                    "id": "email",
+                    "action": "fill",
+                    "status": "ready",
+                    "label": "Email",
+                    "category": "profile_identity",
+                    "value_source": "profile.email",
+                },
+                {
+                    "field_index": 99,
+                    "item_type": "button",
+                    "tag": "BUTTON",
+                    "action": "submit_gate",
+                    "status": "final_submit_confirmation",
+                    "label": "Submit application",
+                    "category": "final_submit",
+                },
+            ],
+        }
+        manifest = build_browser_action_manifest(plan)
+
+        execution = execute_browser_action_manifest_locally(
+            manifest,
+            snapshot,
+            allow_local_synthetic_submit=True,
+        )
+
+        self.assertEqual(execution["outcome"], "submitted_local_synthetic")
+        self.assertEqual(execution["policy_stop"], "local_synthetic_submit_allowed")
+        self.assertEqual(execution["actual_submit_count"], 1)
+        self.assertTrue(execution["would_submit"])
+        self.assertFalse(execution["real_platform_submission"])
+        self.assertEqual(execution["executed_actions"][-1]["browser_action"], "click_submit")
+
+    def test_local_synthetic_submit_does_not_bypass_other_stop_gates(self) -> None:
+        snapshot = {
+            "title": "Application",
+            "url": "https://www.linkedin.com/jobs/view/900001/",
+            "fields": [{"i": 1, "tag": "INPUT", "type": "email", "id": "email", "label": "Email"}],
+            "buttons": [{"i": 99, "tag": "BUTTON", "text": "Submit application"}],
+        }
+        plan = {
+            "title": snapshot["title"],
+            "url": snapshot["url"],
+            "platform": "LinkedIn",
+            "steps": [
+                {
+                    "field_index": 1,
+                    "item_type": "field",
+                    "tag": "INPUT",
+                    "type": "email",
+                    "id": "email",
+                    "action": "fill",
+                    "status": "missing_answer",
+                    "label": "Email",
+                    "category": "profile_identity",
+                },
+                {
+                    "field_index": 99,
+                    "item_type": "button",
+                    "tag": "BUTTON",
+                    "action": "submit_gate",
+                    "status": "final_submit_confirmation",
+                    "label": "Submit application",
+                    "category": "final_submit",
+                },
+            ],
+        }
+        manifest = build_browser_action_manifest(plan)
+
+        execution = execute_browser_action_manifest_locally(
+            manifest,
+            snapshot,
+            allow_local_synthetic_submit=True,
+        )
+
+        self.assertEqual(execution["outcome"], "executed_to_policy_stop")
+        self.assertEqual(execution["policy_stop"], "missing_answer")
+        self.assertEqual(execution["actual_submit_count"], 0)
+        self.assertFalse(execution["would_submit"])
+
     def test_local_browser_manifest_executor_does_not_fill_closed_postings(self) -> None:
         snapshot = {
             "title": "Closed role",
@@ -3011,7 +3174,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertGreater(report["executed_action_count"], 0)
         markdown = render_synthetic_browser_action_execution_markdown(report)
         self.assertIn("Synthetic Browser Action Execution", markdown)
-        self.assertIn("Actual submit count: 0", markdown)
+        self.assertIn("Local synthetic submit count: 0", markdown)
 
     def test_synthetic_browser_action_execution_targets_each_platform_role_pair(self) -> None:
         report = run_synthetic_browser_action_execution(per_platform_role_target=2)
@@ -3027,6 +3190,19 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["selector_miss_count"], 0)
         markdown = render_synthetic_browser_action_execution_markdown(report)
         self.assertIn("Platform-role target achieved: true", markdown)
+
+    def test_synthetic_browser_action_execution_can_submit_fake_local_final_gates(self) -> None:
+        report = run_synthetic_browser_action_execution(
+            count=1,
+            allow_local_synthetic_submit=True,
+        )
+
+        self.assertEqual(report["run_count"], 1)
+        self.assertFalse(report["real_platform_submission"])
+        self.assertTrue(report["local_synthetic_submit_allowed"])
+        self.assertEqual(report["actual_submit_count"], 1)
+        self.assertEqual(report["would_submit_count"], 1)
+        self.assertEqual(report["outcome_counts"]["submitted_local_synthetic"], 1)
 
     def test_write_synthetic_browser_action_execution_outputs_reports(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -3313,6 +3489,56 @@ class JobApplyAgentTests(unittest.TestCase):
         markdown = render_research_coverage_gate_markdown(gate)
         self.assertIn("Research Coverage Gate", markdown)
         self.assertIn("Synthetic platform-role target achieved: true", markdown)
+
+    def test_research_coverage_gate_requires_local_synthetic_submit_evidence(self) -> None:
+        research = {
+            "positions_observed_total": 4,
+            "platforms": {
+                "LinkedIn": {"positions_observed": 2},
+                "Greenhouse": {"positions_observed": 2},
+            },
+            "coverage_groups": {
+                "LinkedIn::Site Reliability": {"positions_observed": 2},
+                "Greenhouse::Site Reliability": {"positions_observed": 2},
+            },
+        }
+        gaps = {"blocking_prompt_count": 0, "coverage_counts": {}}
+        without_submit = {
+            "run_count": 4,
+            "per_platform_role_target": 2,
+            "platform_role_target_achieved": True,
+            "actual_submit_count": 0,
+            "selector_miss_count": 0,
+            "real_platform_submission": False,
+        }
+        with_submit = {
+            **without_submit,
+            "actual_submit_count": 2,
+            "would_submit_count": 2,
+            "local_synthetic_submit_allowed": True,
+        }
+
+        blocked_gate = build_research_coverage_gate(
+            research,
+            synthetic=without_submit,
+            gaps=gaps,
+            position_target=2,
+            target_platforms=["LinkedIn", "Greenhouse"],
+            target_role_families=["Site Reliability"],
+        )
+        ready_gate = build_research_coverage_gate(
+            research,
+            synthetic=with_submit,
+            gaps=gaps,
+            position_target=2,
+            target_platforms=["LinkedIn", "Greenhouse"],
+            target_role_families=["Site Reliability"],
+        )
+
+        self.assertFalse(blocked_gate["ready_for_full_automation"])
+        self.assertTrue(ready_gate["ready_for_full_automation"])
+        self.assertEqual(ready_gate["synthetic"]["actual_submit_count"], 2)
+        self.assertFalse(ready_gate["synthetic"]["real_platform_submission"])
 
     def test_write_research_coverage_gate_outputs_reports(self) -> None:
         research = {

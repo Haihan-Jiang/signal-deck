@@ -394,6 +394,11 @@ def main() -> int:
         help="run this many synthetic browser executions for each platform and role-title pair",
     )
     synthetic_browser_exec_parser.add_argument("--include-values", action="store_true")
+    synthetic_browser_exec_parser.add_argument(
+        "--allow-local-synthetic-submit",
+        action="store_true",
+        help="allow final submit only inside the local fake-form executor when no other stop gate is present",
+    )
     synthetic_browser_exec_parser.add_argument("--json-output", default=str(DEFAULT_SYNTHETIC_BROWSER_EXEC_JSON))
     synthetic_browser_exec_parser.add_argument("--markdown-output", default=str(DEFAULT_SYNTHETIC_BROWSER_EXEC_MARKDOWN))
 
@@ -913,6 +918,7 @@ def main() -> int:
             include_values=args.include_values,
             per_platform_target=args.per_platform_target,
             per_platform_role_target=args.per_platform_role_target,
+            allow_local_synthetic_submit=args.allow_local_synthetic_submit,
         )
         print(f"Wrote synthetic browser action execution JSON to {args.json_output}")
         print(f"Wrote synthetic browser action execution Markdown to {args.markdown_output}")
