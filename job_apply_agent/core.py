@@ -4902,6 +4902,28 @@ FINAL_ANSWER_INTAKE_FORMAT_HINTS = {
 }
 
 
+FINAL_ANSWER_INTAKE_SPECIFICITY_HINTS = {
+    "zip_or_postal_code": "Use an exact ZIP/postal code, not a city name or placeholder.",
+    "citizenship_status": "Do not use a bare yes/no; mention citizenship, U.S. person/permanent resident, and restricted-country status explicitly.",
+    "background_or_export_control": "Do not use a bare yes/no; state the default for the listed legal/background/export-control prompts and any exceptions.",
+    "country_work_permit": "Do not use a bare yes/no; name the countries or regions where the answer applies and list exceptions.",
+    "interview_recording_consent": "Use an explicit consent sentence, such as yes/no for recording, transcription, AI notetakers, and analysis.",
+    "health_requirement": "Use an explicit sentence for health, vaccination, or client-site requirements, plus exceptions if any.",
+}
+
+
+FINAL_ANSWER_INTAKE_PLACEHOLDER_ANSWERS = {
+    "na",
+    "n/a",
+    "none",
+    "null",
+    "placeholder",
+    "tbd",
+    "todo",
+    "unknown",
+}
+
+
 def build_final_answer_intake_template(
     unblocker_packet: dict[str, Any],
     existing_intake_payload: dict[str, Any] | None = None,
@@ -4948,6 +4970,7 @@ def build_final_answer_intake_template(
                 "labels": row.get("labels") or [],
                 "why_not_inferred": row.get("why_not_inferred"),
                 "answer_format_hint": _final_answer_intake_answer_format_hint(alias, high_risk),
+                "answer_specificity_hint": _final_answer_intake_specificity_hint(alias, high_risk),
             }
         )
     return {
@@ -4988,6 +5011,7 @@ def build_final_answer_intake_update(
     compact_updates: dict[str, Any] = {}
     missing_ids: list[str] = []
     unconfirmed_high_risk_ids: list[str] = []
+    needs_more_specific_ids: list[str] = []
     alias_to_input_id: dict[str, str] = {}
     input_ids: set[str] = set()
     used_answer_keys: set[str] = set()
@@ -5007,6 +5031,11 @@ def build_final_answer_intake_update(
         if answer_key:
             used_answer_keys.add(answer_key)
         answer_text, high_risk_confirmed = _final_answer_intake_answer_text(raw_value)
+        specific_enough, specificity_reason = _final_answer_intake_answer_specificity(
+            alias,
+            answer_text,
+            high_risk,
+        )
         if not answer_text:
             missing_ids.append(input_id)
             fields.append(
@@ -5015,6 +5044,20 @@ def build_final_answer_intake_update(
                     "input_id": input_id,
                     "status": "missing",
                     "high_risk": high_risk,
+                }
+            )
+            continue
+        if not specific_enough:
+            needs_more_specific_ids.append(input_id)
+            if high_risk and not bool(high_risk_confirmed or confirm_high_risk):
+                unconfirmed_high_risk_ids.append(input_id)
+            fields.append(
+                {
+                    "alias": alias,
+                    "input_id": input_id,
+                    "status": "needs_more_specific_answer",
+                    "high_risk": high_risk,
+                    "specificity_reason": specificity_reason,
                 }
             )
             continue
@@ -5032,13 +5075,14 @@ def build_final_answer_intake_update(
                 status = "ready"
         else:
             compact_updates[input_id] = answer_text
-            status = "ready"
+            status = "needs_more_specific_answer" if not specific_enough else "ready"
         fields.append(
             {
                 "alias": alias,
                 "input_id": input_id,
                 "status": status,
                 "high_risk": high_risk,
+                "specificity_reason": specificity_reason,
             }
         )
 
@@ -5048,7 +5092,12 @@ def build_final_answer_intake_update(
         for key, value in answers.items()
         if str(key) not in valid_answer_keys and not _critical_update_value_is_blank(value)
     )
-    ready_for_finalize = bool(not missing_ids and not unconfirmed_high_risk_ids and not unknown_answer_ids)
+    ready_for_finalize = bool(
+        not missing_ids
+        and not unconfirmed_high_risk_ids
+        and not needs_more_specific_ids
+        and not unknown_answer_ids
+    )
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source": "final_answer_intake_update",
@@ -5061,11 +5110,13 @@ def build_final_answer_intake_update(
             "unblocker_count": len(input_ids),
             "missing_unblocker_count": len(missing_ids),
             "unconfirmed_high_risk_count": len(unconfirmed_high_risk_ids),
+            "needs_more_specific_answer_count": len(needs_more_specific_ids),
             "unknown_answer_count": len(unknown_answer_ids),
             "confirm_high_risk_flag": bool(confirm_high_risk),
         },
         "missing_unblocker_ids": missing_ids,
         "unconfirmed_high_risk_ids": unconfirmed_high_risk_ids,
+        "needs_more_specific_answer_ids": needs_more_specific_ids,
         "unknown_answer_ids": unknown_answer_ids,
         "compact_updates": compact_updates,
         "fields": fields,
@@ -5246,12 +5297,21 @@ def render_final_answer_intake_template_markdown(template: dict[str, Any]) -> st
             row.get("required_count", 0),
             row.get("question"),
             row.get("answer_format_hint"),
+            row.get("answer_specificity_hint"),
         ]
         for row in template.get("fields") or []
     ]
     lines.extend(
         _simple_markdown_table(
-            ["Alias", "Input ID", "High risk", "Prompts", "Question", "Answer format hint"],
+            [
+                "Alias",
+                "Input ID",
+                "High risk",
+                "Prompts",
+                "Question",
+                "Answer format hint",
+                "Specificity check",
+            ],
             rows,
         )
     )
@@ -5276,6 +5336,7 @@ def render_final_answer_intake_template_html(
         labels = "\n".join(_string_list(row.get("labels"))[:12])
         platforms = ", ".join(_string_list(row.get("platforms")))
         format_hint = str(row.get("answer_format_hint") or "")
+        specificity_hint = str(row.get("answer_specificity_hint") or "")
         checkbox = (
             '<label class="confirm"><input type="checkbox" data-confirm="{alias}" {checked}> '
             "I confirm this high-risk answer is exact and truthful.</label>"
@@ -5296,6 +5357,7 @@ def render_final_answer_intake_template_html(
                     f"<p><strong>Needed:</strong> {_html_escape(row.get('required_user_response'))}</p>",
                     f"<p><strong>Why not inferred:</strong> {_html_escape(row.get('why_not_inferred'))}</p>",
                     f"<p><strong>Answer format hint:</strong> {_html_escape(format_hint)}</p>",
+                    f"<p><strong>Specificity check:</strong> {_html_escape(specificity_hint)}</p>",
                     f"<p><strong>Platforms:</strong> {_html_escape(platforms)}</p>",
                     f"<p><strong>Observed prompts:</strong> {_html_escape(row.get('required_count'))}</p>",
                     (
@@ -5578,6 +5640,7 @@ def render_final_answer_intake_update_markdown(report: dict[str, Any]) -> str:
         f"- final unblockers: {summary.get('unblocker_count', 0)}",
         f"- missing unblockers: {summary.get('missing_unblocker_count', 0)}",
         f"- unconfirmed high-risk answers: {summary.get('unconfirmed_high_risk_count', 0)}",
+        f"- answers needing more specificity: {summary.get('needs_more_specific_answer_count', 0)}",
         f"- unknown answers: {summary.get('unknown_answer_count', 0)}",
         "",
         "## Field Status",
@@ -5589,10 +5652,11 @@ def render_final_answer_intake_update_markdown(report: dict[str, Any]) -> str:
             row.get("input_id"),
             row.get("status"),
             "yes" if row.get("high_risk") else "no",
+            row.get("specificity_reason"),
         ]
         for row in report.get("fields") or []
     ]
-    lines.extend(_simple_markdown_table(["Alias", "Input ID", "Status", "High risk"], rows))
+    lines.extend(_simple_markdown_table(["Alias", "Input ID", "Status", "High risk", "Specificity reason"], rows))
     lines.extend(["", "## Next Commands", ""])
     for command in report.get("next_commands") or []:
         lines.append(f"- `{command}`")
@@ -5619,6 +5683,56 @@ def _final_answer_intake_answer_format_hint(alias: str, high_risk: bool) -> str:
     if high_risk:
         return "Provide the exact truthful answer and list exceptions; high-risk fields also need explicit confirmation."
     return "Provide the exact stable value automation should reuse for matching prompts."
+
+
+def _final_answer_intake_specificity_hint(alias: str, high_risk: bool) -> str:
+    hint = FINAL_ANSWER_INTAKE_SPECIFICITY_HINTS.get(alias)
+    if hint:
+        return hint
+    if high_risk:
+        return "Avoid placeholders or bare yes/no answers unless the field explicitly asks only for yes/no."
+    return "Avoid placeholders; provide the stable value exactly as it should be reused."
+
+
+def _final_answer_intake_answer_specificity(
+    alias: str,
+    answer_text: str,
+    high_risk: bool,
+) -> tuple[bool, str]:
+    answer = str(answer_text or "").strip()
+    if not answer:
+        return True, ""
+    normalized = re.sub(r"\s+", " ", answer.lower()).strip(" .,!;:")
+    if normalized in FINAL_ANSWER_INTAKE_PLACEHOLDER_ANSWERS:
+        return False, "placeholder answer"
+    if "placeholder" in normalized or normalized in {"yes", "no", "ok", "okay"}:
+        if alias == "zip_or_postal_code":
+            return False, "not an exact postal code"
+        return False, "too brief for reusable high-risk answer"
+    if alias == "zip_or_postal_code":
+        if not re.search(r"[A-Za-z0-9]", answer) or len(answer) < 3:
+            return False, "postal code is too short"
+        return True, ""
+    if alias == "citizenship_status":
+        if len(answer) < 12 or not re.search(
+            r"\b(citizen|citizenship|permanent|resident|green card|u\.s\.|us person|restricted|country|countries)\b",
+            normalized,
+        ):
+            return False, "citizenship answer must mention citizenship/residency/restricted-country status"
+    elif alias in {"background_or_export_control", "country_work_permit"}:
+        if len(answer) < 20:
+            return False, "answer must include default and exceptions"
+        if alias == "country_work_permit" and not re.search(
+            r"\b(us|u\.s\.|united states|canada|uk|united kingdom|australia|singapore|china|taiwan|country|countries|permit|visa|work authorization)\b",
+            normalized,
+        ):
+            return False, "country work permit answer must name country, permit, visa, or work authorization scope"
+    elif alias in {"interview_recording_consent", "health_requirement"}:
+        if len(answer) < 8:
+            return False, "answer must be an explicit sentence, not a bare yes/no"
+    elif high_risk and len(answer) < 8:
+        return False, "high-risk answer is too brief"
+    return True, ""
 
 
 def _final_answer_intake_raw_answer(
@@ -14150,9 +14264,13 @@ def build_automation_handoff_report(
         final_intake_unconfirmed_high_risk_count = int(
             final_intake_summary.get("unconfirmed_high_risk_count") or 0
         )
+        final_intake_needs_more_specific_count = int(
+            final_intake_summary.get("needs_more_specific_answer_count") or 0
+        )
     else:
         final_intake_missing_count = final_intake_count
         final_intake_unconfirmed_high_risk_count = 0
+        final_intake_needs_more_specific_count = 0
     answer_queue = _automation_handoff_answer_queue_rows(questionnaire, impact)
     selected_stop_summary = _automation_handoff_stop_summary_rows(
         batch.get("selected_stop_action_counts") or {},
@@ -14234,6 +14352,7 @@ def build_automation_handoff_report(
         "final_answer_intake_ready_for_finalize": bool(final_intake_update.get("ready_for_finalize")),
         "final_answer_intake_missing_count": final_intake_missing_count,
         "final_answer_intake_unconfirmed_high_risk_count": final_intake_unconfirmed_high_risk_count,
+        "final_answer_intake_needs_more_specific_count": final_intake_needs_more_specific_count,
         "apply_queue_handoff_status": queue_handoff.get("status", ""),
         "apply_queue_open_ready_count": int(queue_handoff.get("open_ready_count") or 0),
         "apply_queue_open_after_answers_count": int(queue_handoff.get("open_after_answers_count") or 0),
@@ -14384,6 +14503,7 @@ def render_automation_handoff_markdown(report: dict[str, Any]) -> str:
         f"- synthetic final unblocker proof: {str(bool(summary.get('synthetic_unblocker_proof_complete'))).lower()}, final blanks {summary.get('synthetic_final_unblocker_update_count', 0)}, prefilled drafts {summary.get('synthetic_unblocker_existing_draft_update_count', 0)}, blockers after {summary.get('synthetic_unblocker_data_blocking_prompts_after', 0)}",
         f"- updates readiness: {str(bool(summary.get('updates_ready_for_apply'))).lower()}, waiting {summary.get('updates_waiting_after_update_count', 0)}, high-risk unconfirmed {summary.get('updates_high_risk_unconfirmed_count', 0)}, blockers after {summary.get('updates_data_blocking_prompts_after', 0)}",
         f"- final-answer intake: {summary.get('final_answer_intake_count', 0)} answers, {summary.get('final_answer_intake_high_risk_count', 0)} high-risk, ready for finalize {str(bool(summary.get('final_answer_intake_ready_for_finalize'))).lower()}",
+        f"- final-answer blockers: missing {summary.get('final_answer_intake_missing_count', 0)}, unconfirmed high-risk {summary.get('final_answer_intake_unconfirmed_high_risk_count', 0)}, needs specificity {summary.get('final_answer_intake_needs_more_specific_count', 0)}",
         f"- apply queue handoff: {summary.get('apply_queue_handoff_status') or 'missing'}, open ready {summary.get('apply_queue_open_ready_count', 0)}, open after answers {summary.get('apply_queue_open_after_answers_count', 0)}, manual live checks {summary.get('apply_queue_manual_live_check_count', 0)}",
         f"- autofill packet: {summary.get('autofill_packet_status') or 'missing'}, selected {summary.get('autofill_packet_selected_count', 0)}, browser actions {summary.get('autofill_packet_browser_action_count', 0)}, final-submit stops {summary.get('autofill_packet_final_submit_stop_count', 0)}, selector misses {summary.get('autofill_packet_selector_miss_count', 0)}",
         f"- position execution audit: {summary.get('position_execution_status') or 'missing'}, audited {summary.get('position_execution_audited_count', 0)} / {summary.get('position_execution_target_count', 0)}, ready after answers {summary.get('position_execution_ready_after_answers_count', 0)}, selector misses {summary.get('position_execution_selector_miss_count', 0)}",
@@ -14429,7 +14549,7 @@ def render_automation_handoff_markdown(report: dict[str, Any]) -> str:
     lines.extend(["", "## Final-Answer Intake", ""])
     lines.extend(
         _simple_markdown_table(
-            ["Alias", "Input ID", "Status", "High risk", "Prompts", "Question"],
+            ["Alias", "Input ID", "Status", "High risk", "Prompts", "Question", "Specificity"],
             [
                 [
                     row.get("alias"),
@@ -14438,6 +14558,7 @@ def render_automation_handoff_markdown(report: dict[str, Any]) -> str:
                     row.get("high_risk"),
                     row.get("required_count"),
                     row.get("question"),
+                    row.get("specificity_reason") or row.get("answer_specificity_hint"),
                 ]
                 for row in report.get("final_answer_intake", [])
             ],
@@ -14569,6 +14690,7 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
                     ("Final intake", summary.get("final_answer_intake_count", 0)),
                     ("Intake high risk", summary.get("final_answer_intake_high_risk_count", 0)),
                     ("Intake ready", str(bool(summary.get("final_answer_intake_ready_for_finalize"))).lower()),
+                    ("Intake specificity", summary.get("final_answer_intake_needs_more_specific_count", 0)),
                     ("Queue handoff", summary.get("apply_queue_handoff_status") or "missing"),
                     ("Open after answers", summary.get("apply_queue_open_after_answers_count", 0)),
                     ("Packet status", summary.get("autofill_packet_status") or "missing"),
@@ -14620,7 +14742,16 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
             "</section>",
             "<section><h2>Final-Answer Intake</h2>",
             _html_table(
-                ["Alias", "Input ID", "Status", "High risk", "Prompts", "Question", "Required response"],
+                [
+                    "Alias",
+                    "Input ID",
+                    "Status",
+                    "High risk",
+                    "Prompts",
+                    "Question",
+                    "Required response",
+                    "Specificity",
+                ],
                 [
                     [
                         row.get("alias"),
@@ -14630,6 +14761,7 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
                         row.get("required_count"),
                         row.get("question"),
                         row.get("required_user_response"),
+                        row.get("specificity_reason") or row.get("answer_specificity_hint"),
                     ]
                     for row in report.get("final_answer_intake", [])
                 ],
@@ -24977,8 +25109,8 @@ def _final_answer_intake_export_rows(
 ) -> list[dict[str, Any]]:
     if not final_answer_intake_template and not final_answer_intake_update:
         return []
-    update_status_by_id = {
-        str(row.get("input_id") or ""): row.get("status", "")
+    update_fields_by_id = {
+        str(row.get("input_id") or ""): row
         for row in (final_answer_intake_update or {}).get("fields", [])
         if isinstance(row, dict)
     }
@@ -24987,16 +25119,20 @@ def _final_answer_intake_export_rows(
         if not isinstance(item, dict):
             continue
         input_id = str(item.get("input_id") or "")
+        update_field = update_fields_by_id.get(input_id) or {}
         rows.append(
             {
                 "alias": item.get("alias"),
                 "input_id": input_id,
-                "status": update_status_by_id.get(input_id, "waiting_for_answer"),
+                "status": update_field.get("status", "waiting_for_answer"),
                 "high_risk": item.get("high_risk"),
                 "required_count": item.get("required_count", 0),
                 "question": item.get("question"),
                 "required_user_response": item.get("required_user_response"),
                 "why_not_inferred": item.get("why_not_inferred"),
+                "answer_format_hint": item.get("answer_format_hint"),
+                "answer_specificity_hint": item.get("answer_specificity_hint"),
+                "specificity_reason": update_field.get("specificity_reason", ""),
                 "platforms": ", ".join(_string_list(item.get("platforms"))),
                 "labels": "\n".join(_string_list(item.get("labels"))),
             }
@@ -25015,6 +25151,9 @@ def _final_answer_intake_export_rows(
                     "question": "",
                     "required_user_response": "",
                     "why_not_inferred": "",
+                    "answer_format_hint": "",
+                    "answer_specificity_hint": "",
+                    "specificity_reason": item.get("specificity_reason", ""),
                     "platforms": "",
                     "labels": "",
                 }

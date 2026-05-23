@@ -6603,16 +6603,19 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(template["high_risk_count"], 1)
         self.assertEqual(template["aliases"]["zip_or_postal_code"], "profile_zip_or_postal_code")
         self.assertIn("answer_format_hint", template["fields"][0])
+        self.assertIn("answer_specificity_hint", template["fields"][0])
         self.assertIn("citizenship_status", template["answers"])
         self.assertIn("Final Answer Intake Template", template_markdown)
         self.assertIn("zip_or_postal_code", template_markdown)
         self.assertIn("Answer format hint", template_markdown)
+        self.assertIn("Specificity check", template_markdown)
         self.assertIn("Final Answer Intake", template_html)
         self.assertIn('data-answer="zip_or_postal_code"', template_html)
         self.assertIn('data-high-risk="false"', template_html)
         self.assertIn('data-confirm="citizenship_status"', template_html)
         self.assertIn("readiness-summary", template_html)
         self.assertIn("answer(s) missing", template_html)
+        self.assertIn("Specificity check", template_html)
         self.assertIn("Generated JSON", template_html)
         self.assertNotIn("Save and validate locally", template_html)
         self.assertIn("Save and validate locally", server_template_html)
@@ -6650,6 +6653,26 @@ class JobApplyAgentTests(unittest.TestCase):
             unconfirmed["unconfirmed_high_risk_ids"],
             ["answer_memory_citizenship_status_default_policy"],
         )
+        vague = build_final_answer_intake_update(
+            unblockers,
+            {
+                "answers": {
+                    "zip_or_postal_code": "98004",
+                    "citizenship_status": {
+                        "answer": "yes",
+                        "high_risk_user_confirmed": True,
+                    },
+                }
+            },
+        )
+        self.assertFalse(vague["ready_for_finalize"])
+        self.assertEqual(vague["summary"]["needs_more_specific_answer_count"], 1)
+        self.assertEqual(
+            vague["needs_more_specific_answer_ids"],
+            ["answer_memory_citizenship_status_default_policy"],
+        )
+        self.assertNotIn("answer_memory_citizenship_status_default_policy", vague["compact_updates"])
+        self.assertEqual(vague["fields"][1]["status"], "needs_more_specific_answer")
 
         ready = build_final_answer_intake_update(
             unblockers,
@@ -6667,6 +6690,7 @@ class JobApplyAgentTests(unittest.TestCase):
 
         self.assertTrue(ready["ready_for_finalize"])
         self.assertEqual(ready["summary"]["compact_update_count"], 2)
+        self.assertEqual(ready["summary"]["needs_more_specific_answer_count"], 0)
         self.assertEqual(ready["compact_updates"]["profile_zip_or_postal_code"], "98004")
         self.assertTrue(
             ready["compact_updates"]["answer_memory_citizenship_status_default_policy"][
@@ -6674,6 +6698,7 @@ class JobApplyAgentTests(unittest.TestCase):
             ]
         )
         self.assertIn("Ready for finalize: true", update_markdown)
+        self.assertIn("answers needing more specificity: 0", update_markdown)
         self.assertIn("critical-input-unblockers-finalize", update_markdown)
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -8422,6 +8447,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["summary"]["final_answer_intake_high_risk_count"], 5)
         self.assertFalse(report["summary"]["final_answer_intake_ready_for_finalize"])
         self.assertEqual(report["summary"]["final_answer_intake_missing_count"], 6)
+        self.assertEqual(report["summary"]["final_answer_intake_needs_more_specific_count"], 0)
         self.assertTrue(report["summary"]["synthetic_unblocker_proof_complete"])
         self.assertEqual(report["summary"]["synthetic_final_unblocker_update_count"], 6)
         self.assertEqual(report["confirmed_answer_runbook"][0]["status"], "waiting_for_user")
@@ -8454,6 +8480,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("One-Command Resume", markdown)
         self.assertIn("final-answer-intake-server", markdown)
         self.assertIn("Final-Answer Intake", markdown)
+        self.assertIn("needs specificity 0", markdown)
         self.assertIn("100-Position Stop Actions", markdown)
         self.assertIn("position execution audit: ready_after_confirmed_answers", markdown)
         self.assertIn("100-Position Execution Audit", markdown)
