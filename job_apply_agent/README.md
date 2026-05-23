@@ -402,6 +402,24 @@ After filling `critical_inputs[].user_answer` and setting
 The `answers` field is kept as a legacy mirror; the status and apply commands
 accept edits made in either list.
 
+To reduce manual work, generate a suggestion packet first:
+
+```bash
+python3 -m job_apply_agent critical-input-suggestions
+```
+
+This writes:
+
+```text
+job_apply_agent/outbox/critical_input_suggestions_latest.json
+job_apply_agent/outbox/critical_input_suggestions_latest.md
+```
+
+The suggestion packet is read-only: it does not write profile or answer memory.
+Copy only truthful reviewed values into `critical_input_answers_latest.json`;
+high-risk legal, citizenship, work-permit, health, and recording-consent rows
+still require exact user confirmation.
+
 ```bash
 python3 -m job_apply_agent critical-inputs-status
 ```

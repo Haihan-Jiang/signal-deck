@@ -4299,6 +4299,111 @@ def write_critical_input_answer_template(
     return template
 
 
+def build_critical_input_suggestion_packet(
+    answers_payload: dict[str, Any],
+    profile: CandidateProfile | None = None,
+    answer_memory: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for item in _critical_input_answer_rows(answers_payload):
+        suggestion = _critical_input_suggestion(item, profile, answer_memory)
+        rows.append({**item, **suggestion})
+    direct_suggestions = [
+        row
+        for row in rows
+        if row.get("suggested_answer") and row.get("suggestion_confidence") in {"high", "medium"}
+    ]
+    exact_required = [
+        row
+        for row in rows
+        if row.get("recommended_action") == "user_exact_answer_required"
+    ]
+    supervised_only = [
+        row
+        for row in rows
+        if row.get("input_type") == "supervised_browser_review_only"
+    ]
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "critical_input_suggestions",
+        "input_count": len(rows),
+        "direct_suggestion_count": len(direct_suggestions),
+        "exact_user_answer_required_count": len(exact_required),
+        "supervised_only_count": len(supervised_only),
+        "instructions": (
+            "Review suggested_answer values, then copy only truthful approved values into "
+            "critical_input_answers_latest.json critical_inputs[].user_answer and set "
+            "approval_decision=approved. High-risk rows require exact user confirmation."
+        ),
+        "critical_inputs": rows,
+        "policy": {
+            "writes_profile_or_memory": False,
+            "submits_real_applications": False,
+            "high_risk_requires_user_confirmation": True,
+            "final_submit_remains_supervised": True,
+        },
+    }
+
+
+def write_critical_input_suggestion_packet(
+    answers_payload: dict[str, Any],
+    json_output: str | Path,
+    markdown_output: str | Path,
+    profile: CandidateProfile | None = None,
+    answer_memory: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    packet = build_critical_input_suggestion_packet(
+        answers_payload,
+        profile=profile,
+        answer_memory=answer_memory,
+    )
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(packet, ensure_ascii=True, indent=2), encoding="utf-8")
+    markdown_path.write_text(render_critical_input_suggestions_markdown(packet), encoding="utf-8")
+    return packet
+
+
+def render_critical_input_suggestions_markdown(packet: dict[str, Any]) -> str:
+    lines = [
+        "# Critical Input Suggestions",
+        "",
+        f"Generated: {packet.get('generated_at')}",
+        f"Inputs: {packet.get('input_count', 0)}",
+        f"Direct suggestions: {packet.get('direct_suggestion_count', 0)}",
+        f"Exact user answers required: {packet.get('exact_user_answer_required_count', 0)}",
+        f"Supervised only: {packet.get('supervised_only_count', 0)}",
+        "",
+        str(packet.get("instructions") or ""),
+        "",
+        "## Review Rows",
+        "",
+    ]
+    rows = packet.get("critical_inputs") or []
+    if not rows:
+        lines.append("- None")
+        return "\n".join(lines) + "\n"
+    for row in rows:
+        lines.append(
+            "- {input_id} [{risk}; {action}]".format(
+                input_id=row.get("input_id"),
+                risk=row.get("approval_risk"),
+                action=row.get("recommended_action"),
+            )
+        )
+        lines.append(f"  question: {row.get('question')}")
+        if row.get("suggested_answer"):
+            lines.append(f"  suggested_answer: {row.get('suggested_answer')}")
+        lines.append(f"  suggestion_source: {row.get('suggestion_source')}")
+        lines.append(f"  confidence: {row.get('suggestion_confidence')}")
+        lines.append(f"  note: {row.get('suggestion_note')}")
+        if row.get("review_context"):
+            lines.append(f"  context: {row.get('review_context')}")
+    return "\n".join(lines) + "\n"
+
+
 def render_critical_input_answer_template_markdown(template: dict[str, Any]) -> str:
     lines = [
         "# Critical Input Answer Template",
@@ -4331,6 +4436,190 @@ def render_critical_input_answer_template_markdown(template: dict[str, Any]) -> 
         if labels:
             lines.append(f"  labels: {'; '.join(str(label) for label in labels[:3])}")
     return "\n".join(lines) + "\n"
+
+
+def _critical_input_suggestion(
+    item: dict[str, Any],
+    profile: CandidateProfile | None,
+    answer_memory: dict[str, Any] | None,
+) -> dict[str, Any]:
+    input_id = str(item.get("input_id") or "")
+    input_type = str(item.get("input_type") or "")
+    question = str(item.get("question") or "")
+    labels = _string_list(item.get("labels"))
+    existing = str(item.get("user_answer") or "").strip()
+    base = {
+        "suggested_answer": "",
+        "suggestion_source": "needs_user",
+        "suggestion_confidence": "none",
+        "suggestion_note": "No reusable answer is stored; user must provide the truthful value.",
+        "recommended_action": "user_exact_answer_required",
+        "review_context": "",
+        "can_copy_to_user_answer_after_review": False,
+    }
+    if existing:
+        return {
+            **base,
+            "suggested_answer": existing,
+            "suggestion_source": "existing_user_answer",
+            "suggestion_confidence": "high",
+            "suggestion_note": "Existing user_answer is present; verify approval_decision before applying.",
+            "recommended_action": "review_existing_answer",
+            "can_copy_to_user_answer_after_review": False,
+        }
+    if input_type == "supervised_browser_review_only":
+        policy_ack = (profile.question_answers.get("policy_acknowledgement") if profile else "") or ""
+        return {
+            **base,
+            "suggested_answer": policy_ack,
+            "suggestion_source": "profile.question_answers.policy_acknowledgement"
+            if policy_ack
+            else "supervised_only",
+            "suggestion_confidence": "medium" if policy_ack else "none",
+            "suggestion_note": (
+                "This stays a supervised browser step even if a default acknowledgement exists."
+            ),
+            "recommended_action": "supervised_browser_review_only",
+            "can_copy_to_user_answer_after_review": False,
+        }
+
+    memory_match = _critical_input_memory_match(item, answer_memory)
+    if memory_match:
+        return {
+            **base,
+            "suggested_answer": memory_match.answer,
+            "suggestion_source": memory_match.source,
+            "suggestion_confidence": "high" if memory_match.confidence >= 0.85 else "medium",
+            "suggestion_note": "Existing approved answer memory matches this critical input.",
+            "recommended_action": "review_then_copy_to_user_answer",
+            "can_copy_to_user_answer_after_review": True,
+        }
+
+    if input_id == "resume_facts_education_grading":
+        answer = _suggest_resume_fact_learning_answer("resume_facts:education_grading", profile)
+        if answer:
+            return {
+                **base,
+                "suggested_answer": answer,
+                "suggestion_source": "profile.resume_facts",
+                "suggestion_confidence": "medium",
+                "suggestion_note": "Resume fact exists; verify exact grading wording before approving.",
+                "recommended_action": "review_then_copy_to_user_answer",
+                "can_copy_to_user_answer_after_review": True,
+            }
+        education = (profile.resume_facts.get("education") if profile else "") or ""
+        return {
+            **base,
+            "suggestion_source": "profile.resume_facts.education_without_grade"
+            if education
+            else "needs_user",
+            "suggestion_note": (
+                "Education is stored but no GPA, grading system, ACT, or SAT value is stored; "
+                "enter the exact value or a truthful not-applicable answer."
+            ),
+            "review_context": education,
+        }
+
+    if input_id == "profile_zip_or_postal_code":
+        answer = _suggest_profile_learning_answer("profile:zip_or_postal_code", profile)
+        if answer:
+            return {
+                **base,
+                "suggested_answer": answer,
+                "suggestion_source": "profile.question_answers",
+                "suggestion_confidence": "high",
+                "suggestion_note": "Existing profile ZIP/postal code can be reused after review.",
+                "recommended_action": "review_then_copy_to_user_answer",
+                "can_copy_to_user_answer_after_review": True,
+            }
+        location = profile.location if profile else ""
+        return {
+            **base,
+            "suggestion_source": "profile.location_without_zip" if location else "needs_user",
+            "suggestion_note": "Profile has a city/location but no exact ZIP/postal code; do not infer it.",
+            "review_context": location,
+        }
+
+    high_risk_context = _critical_input_high_risk_context(input_id, profile)
+    if high_risk_context:
+        return {
+            **base,
+            "suggestion_source": high_risk_context["source"],
+            "suggestion_note": high_risk_context["note"],
+            "review_context": high_risk_context["context"],
+            "approval_risk": "high",
+        }
+
+    prompt_text = _normalize(" ".join([question, *labels]))
+    direct = _direct_answer(profile, prompt_text) if profile else ""
+    if direct:
+        return {
+            **base,
+            "suggested_answer": direct,
+            "suggestion_source": "profile.question_answers",
+            "suggestion_confidence": "medium",
+            "suggestion_note": "Profile answer may match this prompt; verify exact wording before approving.",
+            "recommended_action": "review_then_copy_to_user_answer",
+            "can_copy_to_user_answer_after_review": True,
+        }
+
+    return base
+
+
+def _critical_input_memory_match(
+    item: dict[str, Any],
+    answer_memory: dict[str, Any] | None,
+) -> AnswerMemoryMatch | None:
+    if not answer_memory:
+        return None
+    prompts = [str(item.get("question") or ""), *_string_list(item.get("labels"))]
+    for prompt in prompts:
+        match = find_learned_answer(answer_memory, prompt)
+        if match:
+            return match
+    return None
+
+
+def _critical_input_high_risk_context(
+    input_id: str,
+    profile: CandidateProfile | None,
+) -> dict[str, str] | None:
+    if input_id == "answer_memory_citizenship_status_default_policy":
+        authorization = (profile.question_answers.get("authorization") if profile else "") or ""
+        sponsorship = (profile.question_answers.get("sponsorship") if profile else "") or ""
+        return {
+            "source": "profile.question_answers.authorization_and_sponsorship",
+            "note": (
+                "US work authorization and sponsorship answers are stored, but citizenship, "
+                "permanent-residency, and restricted-country answers still need exact confirmation."
+            ),
+            "context": "; ".join(part for part in [authorization, sponsorship] if part),
+        }
+    if input_id == "answer_memory_country_work_permit_default_policy":
+        authorization = (profile.question_answers.get("authorization") if profile else "") or ""
+        return {
+            "source": "profile.question_answers.authorization",
+            "note": (
+                "US work authorization is stored, but country-specific work permits outside the US "
+                "must be answered explicitly."
+            ),
+            "context": authorization,
+        }
+    high_risk_notes = {
+        "answer_memory_background_or_export_control_default_policy": (
+            "No background/export-control/legal default is stored. Answer exact legal prompts explicitly."
+        ),
+        "answer_memory_interview_recording_consent_default_policy": (
+            "No interview recording or AI-notetaker consent default is stored. Confirm yes/no explicitly."
+        ),
+        "answer_memory_health_requirement_default_policy": (
+            "No health or vaccination requirement default is stored. Confirm exact truthful answer explicitly."
+        ),
+    }
+    note = high_risk_notes.get(input_id)
+    if note:
+        return {"source": "requires_exact_user_confirmation", "note": note, "context": ""}
+    return None
 
 
 def build_critical_input_status_report(
@@ -7402,6 +7691,7 @@ def write_question_export(
     fake_critical_input_probe: dict[str, Any] | None = None,
     fake_position_rehearsal: dict[str, Any] | None = None,
     goal_readiness_audit: dict[str, Any] | None = None,
+    critical_input_suggestions: dict[str, Any] | None = None,
     learning_approval_pack: dict[str, Any] | None = None,
     answer_memory: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
@@ -7418,6 +7708,7 @@ def write_question_export(
         fake_critical_input_probe=fake_critical_input_probe,
         fake_position_rehearsal=fake_position_rehearsal,
         goal_readiness_audit=goal_readiness_audit,
+        critical_input_suggestions=critical_input_suggestions,
         learning_approval_pack=learning_approval_pack,
         answer_memory=answer_memory,
         closed_jobs=closed_jobs,
@@ -7444,6 +7735,7 @@ def build_question_export(
     fake_critical_input_probe: dict[str, Any] | None = None,
     fake_position_rehearsal: dict[str, Any] | None = None,
     goal_readiness_audit: dict[str, Any] | None = None,
+    critical_input_suggestions: dict[str, Any] | None = None,
     learning_approval_pack: dict[str, Any] | None = None,
     answer_memory: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
@@ -7482,6 +7774,7 @@ def build_question_export(
     fake_critical_input_probe_rows = _fake_critical_input_probe_export_rows(fake_critical_input_probe)
     fake_position_rehearsal_rows = _fake_position_rehearsal_export_rows(fake_position_rehearsal)
     goal_audit_rows = _goal_audit_export_rows(goal_readiness_audit)
+    critical_suggestion_rows = _critical_input_suggestion_export_rows(critical_input_suggestions)
     answer_memory_rows = _answer_memory_export_rows(answer_memory)
     closed_posting_rows = _closed_posting_export_rows(closed_jobs)
     collection_targets = [
@@ -7608,6 +7901,15 @@ def build_question_export(
         "goal_audit_missing_requirement_count": int(
             (goal_readiness_audit or {}).get("missing_requirement_count") or 0
         ),
+        "critical_input_suggestion_count": int(
+            (critical_input_suggestions or {}).get("input_count") or len(critical_suggestion_rows)
+        ),
+        "critical_input_direct_suggestion_count": int(
+            (critical_input_suggestions or {}).get("direct_suggestion_count") or 0
+        ),
+        "critical_input_exact_user_answer_required_count": int(
+            (critical_input_suggestions or {}).get("exact_user_answer_required_count") or 0
+        ),
     }
     return {
         "generated_at": summary["generated_at"],
@@ -7620,6 +7922,7 @@ def build_question_export(
         "fake_critical_input_probe": fake_critical_input_probe_rows,
         "fake_position_rehearsal": fake_position_rehearsal_rows,
         "goal_audit": goal_audit_rows,
+        "critical_input_suggestions": critical_suggestion_rows,
         "answer_memory": answer_memory_rows,
         "closed_postings": closed_posting_rows,
         "coverage_counts": gaps.get("coverage_counts", {}),
@@ -7734,6 +8037,17 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                 [
                     "Fake critical recheck ready",
                     _yes_no(summary.get("fake_critical_input_ready_for_autofill_recheck")),
+                ],
+                [
+                    "Critical input suggestions",
+                    "{direct} / {total}".format(
+                        direct=summary.get("critical_input_direct_suggestion_count", 0),
+                        total=summary.get("critical_input_suggestion_count", 0),
+                    ),
+                ],
+                [
+                    "Critical exact answers required",
+                    summary.get("critical_input_exact_user_answer_required_count", 0),
                 ],
                 [
                     "Fake observed-position submit count",
@@ -7863,6 +8177,33 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                     row.get("recommended_action"),
                 ]
                 for row in export.get("learning_approval_buckets", [])
+            ],
+        ),
+        "</section>",
+        "<section><h2>Critical Input Suggestions</h2>",
+        _html_table(
+            [
+                "Input ID",
+                "Risk",
+                "Recommended action",
+                "Question",
+                "Suggested answer",
+                "Source",
+                "Confidence",
+                "Note",
+            ],
+            [
+                [
+                    row.get("input_id"),
+                    row.get("approval_risk"),
+                    row.get("recommended_action"),
+                    row.get("question"),
+                    row.get("suggested_answer"),
+                    row.get("suggestion_source"),
+                    row.get("suggestion_confidence"),
+                    row.get("suggestion_note"),
+                ]
+                for row in export.get("critical_input_suggestions", [])
             ],
         ),
         "</section>",
@@ -14879,6 +15220,35 @@ def _goal_audit_export_rows(goal_readiness_audit: dict[str, Any] | None) -> list
     return rows
 
 
+def _critical_input_suggestion_export_rows(
+    critical_input_suggestions: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if not critical_input_suggestions:
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in critical_input_suggestions.get("critical_inputs") or []:
+        if not isinstance(item, dict):
+            continue
+        rows.append(
+            {
+                "input_id": item.get("input_id"),
+                "input_type": item.get("input_type"),
+                "question": item.get("question"),
+                "approval_risk": item.get("approval_risk"),
+                "recommended_action": item.get("recommended_action"),
+                "suggested_answer": item.get("suggested_answer"),
+                "suggestion_source": item.get("suggestion_source"),
+                "suggestion_confidence": item.get("suggestion_confidence"),
+                "suggestion_note": item.get("suggestion_note"),
+                "can_copy_to_user_answer_after_review": item.get(
+                    "can_copy_to_user_answer_after_review"
+                ),
+                "required_count": item.get("required_count", 0),
+            }
+        )
+    return rows
+
+
 def _answer_memory_export_rows(answer_memory: dict[str, Any] | None) -> list[dict[str, Any]]:
     if not answer_memory:
         return []
@@ -15191,6 +15561,7 @@ def _write_question_export_xlsx(export: dict[str, Any], path: Path) -> None:
         ("Approval Tasks", _table_rows(export.get("learning_approval_tasks", []))),
         ("Approval Manual Gates", _table_rows(export.get("learning_approval_manual_gates", []))),
         ("Goal Audit", _table_rows(export.get("goal_audit", []))),
+        ("Critical Suggestions", _table_rows(export.get("critical_input_suggestions", []))),
     ]
     sheet_names = [_safe_sheet_name(name) for name, _rows in sheets]
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:

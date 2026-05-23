@@ -20,6 +20,7 @@ from job_apply_agent.core import (
     build_application_research,
     build_collection_plan_from_coverage_gate,
     build_critical_input_answer_template,
+    build_critical_input_suggestion_packet,
     build_critical_input_status_report,
     build_question_export,
     build_browser_action_manifest,
@@ -77,6 +78,7 @@ from job_apply_agent.core import (
     render_browser_action_manifest_markdown,
     render_closed_posting_preflight_markdown,
     render_critical_input_answer_template_markdown,
+    render_critical_input_suggestions_markdown,
     render_critical_input_status_markdown,
     render_browser_dom_execution_plan_markdown,
     render_form_fill_plan_markdown,
@@ -110,6 +112,7 @@ from job_apply_agent.core import (
     write_closed_posting_preflight,
     write_collection_plan,
     write_critical_input_answer_template,
+    write_critical_input_suggestion_packet,
     write_critical_input_status_report,
     write_question_export,
     write_browser_dom_harness,
@@ -4346,6 +4349,89 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(json_output.exists())
             self.assertTrue(markdown_output.exists())
 
+    def test_critical_input_suggestions_make_review_packet_without_writing_profile(self) -> None:
+        learning_tasks = {
+            "tasks": [
+                {
+                    "group_key": "profile:zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "recommended_storage": "profile",
+                    "labels": ["Zip Code"],
+                    "platforms": ["Ashby"],
+                    "required_count": 4,
+                    "persist_allowed": True,
+                },
+                {
+                    "group_key": "answer_memory:citizenship_status:default_policy",
+                    "question": "What citizenship answers should automation use?",
+                    "recommended_storage": "answer_memory",
+                    "answer_scope": "category_default_policy",
+                    "suggested_answer_source": "requires_exact_user_confirmation",
+                    "approval_risk": "high",
+                    "labels": ["Are you a U.S. citizen?"],
+                    "platforms": ["Greenhouse"],
+                    "required_count": 2,
+                    "persist_allowed": True,
+                },
+                {
+                    "group_key": "supervised_confirmation:policy_acknowledgement",
+                    "question": "May automation mark applicant privacy acknowledgement?",
+                    "recommended_storage": "supervised_confirmation",
+                    "answer_scope": "supervised_only",
+                    "labels": ["Privacy policy"],
+                    "platforms": ["Lever"],
+                    "required_count": 1,
+                    "persist_allowed": False,
+                },
+            ],
+        }
+        profile = CandidateProfile.from_mapping(
+            {
+                "candidate": {"name": "Test User", "location": "Bellevue, WA"},
+                "question_answers": {
+                    "zip_code": "98004",
+                    "authorization": "I am authorized to work in the United States.",
+                    "sponsorship": "Yes, I require sponsorship.",
+                    "policy_acknowledgement": "Yes, I acknowledge.",
+                },
+                "preferences": {},
+                "resume_facts": {},
+            }
+        )
+        pack = build_learning_approval_pack(learning_tasks, {})
+        template = build_critical_input_answer_template(pack)
+
+        packet = build_critical_input_suggestion_packet(template, profile=profile, answer_memory=None)
+        rows = {row["input_id"]: row for row in packet["critical_inputs"]}
+        markdown = render_critical_input_suggestions_markdown(packet)
+
+        self.assertEqual(packet["input_count"], 3)
+        self.assertEqual(packet["direct_suggestion_count"], 2)
+        self.assertFalse(packet["policy"]["writes_profile_or_memory"])
+        self.assertEqual(rows["profile_zip_or_postal_code"]["suggested_answer"], "98004")
+        self.assertTrue(rows["profile_zip_or_postal_code"]["can_copy_to_user_answer_after_review"])
+        self.assertIn("sponsorship", rows["answer_memory_citizenship_status_default_policy"]["review_context"])
+        self.assertEqual(
+            rows["supervised_confirmation_policy_acknowledgement"]["recommended_action"],
+            "supervised_browser_review_only",
+        )
+        self.assertIn("Critical Input Suggestions", markdown)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            json_output = Path(temp_dir) / "suggestions.json"
+            markdown_output = Path(temp_dir) / "suggestions.md"
+            written = write_critical_input_suggestion_packet(
+                template,
+                json_output,
+                markdown_output,
+                profile=profile,
+            )
+
+            self.assertEqual(written["input_count"], 3)
+            self.assertTrue(json_output.exists())
+            self.assertTrue(markdown_output.exists())
+            self.assertIn("98004", markdown_output.read_text())
+
     def test_fake_critical_input_probe_is_dry_run_only(self) -> None:
         learning_tasks = {
             "tasks": [
@@ -6562,6 +6648,26 @@ class JobApplyAgentTests(unittest.TestCase):
             ],
             "next_actions": ["Fill critical input answers."],
         }
+        critical_input_suggestions = {
+            "input_count": 1,
+            "direct_suggestion_count": 1,
+            "exact_user_answer_required_count": 0,
+            "critical_inputs": [
+                {
+                    "input_id": "profile_zip_or_postal_code",
+                    "input_type": "profile_or_resume_fact",
+                    "question": "What ZIP/postal code should automation use?",
+                    "approval_risk": "needs_review",
+                    "recommended_action": "review_then_copy_to_user_answer",
+                    "suggested_answer": "98004",
+                    "suggestion_source": "profile.question_answers",
+                    "suggestion_confidence": "high",
+                    "suggestion_note": "Existing profile ZIP/postal code can be reused after review.",
+                    "can_copy_to_user_answer_after_review": True,
+                    "required_count": 4,
+                }
+            ],
+        }
         answer_memory = {
             "answers": [
                 {
@@ -6600,6 +6706,7 @@ class JobApplyAgentTests(unittest.TestCase):
             fake_critical_input_probe=fake_critical_input_probe,
             fake_position_rehearsal=fake_position_rehearsal,
             goal_readiness_audit=goal_readiness_audit,
+            critical_input_suggestions=critical_input_suggestions,
             answer_memory=answer_memory,
             closed_jobs=closed_jobs,
         )
@@ -6611,6 +6718,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Synthetic Browser Execution", html)
         self.assertIn("Goal Readiness Audit", html)
         self.assertIn("needs_user_answers", html)
+        self.assertIn("Critical Input Suggestions", html)
+        self.assertIn("profile_zip_or_postal_code", html)
         self.assertIn("Fake Learning Probe", html)
         self.assertIn("Fake Critical Input Probe", html)
         self.assertIn("Fake Position Rehearsal", html)
@@ -6649,6 +6758,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 fake_critical_input_probe=fake_critical_input_probe,
                 fake_position_rehearsal=fake_position_rehearsal,
                 goal_readiness_audit=goal_readiness_audit,
+                critical_input_suggestions=critical_input_suggestions,
                 answer_memory=answer_memory,
                 closed_jobs=closed_jobs,
             )
@@ -6661,6 +6771,7 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(len(result["learning_approval_tasks"]), 1)
             self.assertEqual(result["summary"]["fake_critical_input_ready_count"], 10)
             self.assertEqual(result["summary"]["goal_audit_status"], "needs_user_answers")
+            self.assertEqual(result["summary"]["critical_input_direct_suggestion_count"], 1)
             self.assertEqual(result["summary"]["answer_memory_count"], 1)
             self.assertEqual(result["summary"]["closed_posting_count"], 1)
             self.assertTrue(xlsx_output.exists())
@@ -6676,6 +6787,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 self.assertIn("xl/worksheets/sheet23.xml", names)
                 self.assertIn("xl/worksheets/sheet24.xml", names)
                 self.assertIn("xl/worksheets/sheet25.xml", names)
+                self.assertIn("xl/worksheets/sheet26.xml", names)
                 critical_inputs = workbook.read("xl/worksheets/sheet2.xml").decode("utf-8")
                 self.assertIn("exact_prompt_answer", critical_inputs)
                 self.assertIn("user_answer", critical_inputs)
@@ -6704,6 +6816,8 @@ class JobApplyAgentTests(unittest.TestCase):
                 self.assertIn("Have you worked at DoorDash?", approval_tasks)
                 goal_audit = workbook.read("xl/worksheets/sheet25.xml").decode("utf-8")
                 self.assertIn("needs_user_answers", goal_audit)
+                critical_suggestions = workbook.read("xl/worksheets/sheet26.xml").decode("utf-8")
+                self.assertIn("profile_zip_or_postal_code", critical_suggestions)
 
 
 if __name__ == "__main__":

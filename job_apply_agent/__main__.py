@@ -41,6 +41,7 @@ from .core import (
     write_fake_critical_input_probe,
     write_fake_position_rehearsal,
     write_goal_readiness_audit,
+    write_critical_input_suggestion_packet,
     write_learning_approval_pack,
     write_learning_task_template,
     write_critical_input_answer_template,
@@ -89,6 +90,8 @@ DEFAULT_CRITICAL_INPUT_ANSWERS_JSON = Path(__file__).with_name("outbox") / "crit
 DEFAULT_CRITICAL_INPUT_ANSWERS_MARKDOWN = Path(__file__).with_name("outbox") / "critical_input_answers_latest.md"
 DEFAULT_CRITICAL_INPUT_STATUS_JSON = Path(__file__).with_name("outbox") / "critical_input_status_latest.json"
 DEFAULT_CRITICAL_INPUT_STATUS_MARKDOWN = Path(__file__).with_name("outbox") / "critical_input_status_latest.md"
+DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON = Path(__file__).with_name("outbox") / "critical_input_suggestions_latest.json"
+DEFAULT_CRITICAL_INPUT_SUGGESTIONS_MARKDOWN = Path(__file__).with_name("outbox") / "critical_input_suggestions_latest.md"
 DEFAULT_FAKE_CRITICAL_INPUT_PROBE_JSON = Path(__file__).with_name("outbox") / "fake_critical_input_probe_latest.json"
 DEFAULT_FAKE_CRITICAL_INPUT_PROBE_MARKDOWN = Path(__file__).with_name("outbox") / "fake_critical_input_probe_latest.md"
 DEFAULT_FAKE_CRITICAL_INPUT_ANSWERS_JSON = Path(__file__).with_name("outbox") / "fake_critical_input_answers_latest.json"
@@ -395,6 +398,19 @@ def main() -> int:
         default=str(DEFAULT_CRITICAL_INPUT_STATUS_MARKDOWN),
     )
 
+    critical_inputs_suggestions_parser = subparsers.add_parser(
+        "critical-input-suggestions",
+        help="draft a review packet with suggested answers and exact-confirmation notes",
+    )
+    critical_inputs_suggestions_parser.add_argument("--answers", default=str(DEFAULT_CRITICAL_INPUT_ANSWERS_JSON))
+    critical_inputs_suggestions_parser.add_argument("--profile", default=str(DEFAULT_PERSONAL_PROFILE))
+    critical_inputs_suggestions_parser.add_argument("--memory", default=str(DEFAULT_MEMORY))
+    critical_inputs_suggestions_parser.add_argument("--json-output", default=str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON))
+    critical_inputs_suggestions_parser.add_argument(
+        "--markdown-output",
+        default=str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_MARKDOWN),
+    )
+
     apply_learning_parser = subparsers.add_parser(
         "apply-learning",
         help="apply approved learning-template answers to profile and answer memory",
@@ -652,6 +668,10 @@ def main() -> int:
     export_questions_parser.add_argument("--answer-memory-json", default=str(DEFAULT_MEMORY))
     export_questions_parser.add_argument("--closed-jobs-json", default=str(DEFAULT_CLOSED_JOBS))
     export_questions_parser.add_argument("--goal-audit-json", default=str(DEFAULT_GOAL_AUDIT_JSON))
+    export_questions_parser.add_argument(
+        "--critical-input-suggestions-json",
+        default=str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON),
+    )
     export_questions_parser.add_argument("--xlsx-output", default=str(DEFAULT_QUESTION_EXPORT_XLSX))
     export_questions_parser.add_argument("--html-output", default=str(DEFAULT_QUESTION_EXPORT_HTML))
 
@@ -813,6 +833,7 @@ def main() -> int:
                     "Answer memory": args.answer_memory_json,
                     "Closed postings": args.closed_jobs_json,
                     "Goal readiness audit": args.goal_audit_json,
+                    "Critical input suggestions": args.critical_input_suggestions_json,
                 }
             ),
             synthetic_browser_execution=_load_optional_json(args.synthetic_browser_exec_json),
@@ -820,6 +841,7 @@ def main() -> int:
             fake_critical_input_probe=_load_optional_json(args.fake_critical_input_probe_json),
             fake_position_rehearsal=_load_optional_json(args.fake_position_rehearsal_json),
             goal_readiness_audit=_load_optional_json(args.goal_audit_json),
+            critical_input_suggestions=_load_optional_json(args.critical_input_suggestions_json),
             learning_approval_pack=_load_optional_json(args.learning_approval_pack_json),
             answer_memory=_load_optional_json(args.answer_memory_json),
             closed_jobs=_load_optional_json(args.closed_jobs_json),
@@ -1136,6 +1158,25 @@ def main() -> int:
         print(f"Waiting: {summary.get('waiting_count', 0)}")
         print(f"Supervised only: {summary.get('supervised_only_count', 0)}")
         print(f"Ready for autofill recheck: {str(bool(summary.get('ready_for_autofill_recheck'))).lower()}")
+        return 0
+
+    if args.command == "critical-input-suggestions":
+        answers_path = Path(args.answers)
+        if not answers_path.exists():
+            raise FileNotFoundError(f"critical input answers not found: {args.answers}")
+        packet = write_critical_input_suggestion_packet(
+            json.loads(answers_path.read_text(encoding="utf-8")),
+            args.json_output,
+            args.markdown_output,
+            profile=load_profile(args.profile) if Path(args.profile).exists() else None,
+            answer_memory=load_answer_memory(args.memory) if Path(args.memory).exists() else None,
+        )
+        print(f"Wrote critical input suggestions JSON to {args.json_output}")
+        print(f"Wrote critical input suggestions Markdown to {args.markdown_output}")
+        print(f"Inputs: {packet.get('input_count', 0)}")
+        print(f"Direct suggestions: {packet.get('direct_suggestion_count', 0)}")
+        print(f"Exact user answers required: {packet.get('exact_user_answer_required_count', 0)}")
+        print(f"Supervised only: {packet.get('supervised_only_count', 0)}")
         return 0
 
     if args.command == "apply-learning":
