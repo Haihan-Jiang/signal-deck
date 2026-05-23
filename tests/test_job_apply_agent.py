@@ -4503,6 +4503,146 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["positions"][0]["position_key"], "lever:clean:1")
         self.assertEqual(report["stop_action_count"], 1)
 
+    def test_autofill_batch_can_exclude_unresolved_final_answer_positions(self) -> None:
+        profile = CandidateProfile(
+            name="Alan Jiang",
+            email="alan@example.com",
+            phone="555-0100",
+            location="Bellevue, WA",
+            target_titles=["SRE"],
+            target_locations=["United States"],
+            remote_ok=True,
+            keywords=[],
+            blocklist=[],
+            min_score=1,
+            resume_facts={"professional_summary": "SRE"},
+            question_answers={},
+        )
+        positions = [
+            {
+                "position_key": "ashby:citizenship:1",
+                "platform": "Ashby",
+                "company": "A Co",
+                "title": "Site Reliability Engineer",
+                "role_family": "SRE",
+                "apply_url": "https://jobs.ashbyhq.com/a/1",
+            },
+            {
+                "position_key": "greenhouse:zip:1",
+                "platform": "Greenhouse",
+                "company": "B Co",
+                "title": "Platform Engineer",
+                "role_family": "Platform",
+                "apply_url": "https://job-boards.greenhouse.io/b/jobs/1",
+            },
+            {
+                "position_key": "lever:clean:1",
+                "platform": "Lever",
+                "company": "C Co",
+                "title": "DevOps Engineer",
+                "role_family": "DevOps",
+                "apply_url": "https://jobs.lever.co/c/1",
+            },
+        ]
+        research = {
+            "positions": positions,
+            "items": [
+                {
+                    "position_key": "ashby:citizenship:1",
+                    "label": "Are you a U.S. Citizen?",
+                    "category": "citizenship_status",
+                    "automation_action": "human_review_required",
+                    "required": True,
+                    "platform": "Ashby",
+                    "source_file": "test",
+                },
+                {
+                    "position_key": "ashby:citizenship:1",
+                    "label": "Submit application",
+                    "category": "final_submit",
+                    "automation_action": "submit_gate",
+                    "required": True,
+                    "platform": "Ashby",
+                    "source_file": "test",
+                },
+                {
+                    "position_key": "greenhouse:zip:1",
+                    "label": "Zip Code",
+                    "category": "profile_identity",
+                    "automation_action": "auto_fill_from_profile",
+                    "required": True,
+                    "platform": "Greenhouse",
+                    "source_file": "test",
+                },
+                {
+                    "position_key": "greenhouse:zip:1",
+                    "label": "Submit application",
+                    "category": "final_submit",
+                    "automation_action": "submit_gate",
+                    "required": True,
+                    "platform": "Greenhouse",
+                    "source_file": "test",
+                },
+                {
+                    "position_key": "lever:clean:1",
+                    "label": "Email",
+                    "category": "profile_identity",
+                    "automation_action": "auto_fill_from_profile",
+                    "required": True,
+                    "platform": "Lever",
+                    "source_file": "test",
+                },
+                {
+                    "position_key": "lever:clean:1",
+                    "label": "Submit application",
+                    "category": "final_submit",
+                    "automation_action": "submit_gate",
+                    "required": True,
+                    "platform": "Lever",
+                    "source_file": "test",
+                },
+            ],
+        }
+        readiness = {
+            "positions": [
+                {
+                    **position,
+                    "readiness": "supervised_ready",
+                    "ready_for_autofill": True,
+                    "required_prompt_count": 2,
+                    "covered_prompt_count": 1,
+                }
+                for position in positions
+            ]
+        }
+
+        report = build_autofill_batch_plan(
+            research,
+            readiness,
+            profile=profile,
+            answer_memory={"version": 1, "answers": []},
+            closed_jobs={"version": 1, "jobs": []},
+            limit=2,
+            avoid_final_answer_aliases=["citizenship_status", "zip_or_postal_code"],
+        )
+
+        self.assertEqual(report["requested_count"], 2)
+        self.assertEqual(report["selected_count"], 1)
+        self.assertEqual(report["positions"][0]["position_key"], "lever:clean:1")
+        self.assertEqual(report["excluded_unresolved_final_answer_position_count"], 2)
+        self.assertEqual(
+            report["excluded_unresolved_final_answer_alias_counts"],
+            {"citizenship_status": 1, "zip_or_postal_code": 1},
+        )
+        self.assertEqual(
+            {
+                row["position_key"]
+                for row in report["excluded_unresolved_final_answer_positions"]
+            },
+            {"ashby:citizenship:1", "greenhouse:zip:1"},
+        )
+        self.assertIn("Unresolved final-answer positions excluded: 2", render_autofill_batch_plan_markdown(report))
+
     def test_write_browser_action_manifest_outputs_reports(self) -> None:
         plan = {
             "title": "Application",
@@ -9742,6 +9882,63 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(live_jobs_output.exists())
             live_payload = json.loads(live_jobs_output.read_text(encoding="utf-8"))
             self.assertEqual(len(live_payload["jobs"]), 100)
+
+    def test_apply_queue_allows_filtered_batch_that_avoids_unresolved_answers(self) -> None:
+        positions = []
+        for index in range(1, 101):
+            positions.append(
+                {
+                    "index": index,
+                    "position_key": f"url:https://jobs.lever.co/example/{index}",
+                    "platform": "Lever",
+                    "company": "Example",
+                    "title": f"SRE {index}",
+                    "role_family": "SRE",
+                    "apply_url": f"https://jobs.lever.co/example/{index}",
+                    "readiness": "autofill_ready",
+                    "manifest_status": "autofill_ready_with_supervised_gates",
+                    "autofill_allowed": True,
+                    "browser_action_count": 5,
+                    "stop_action_count": 1,
+                    "stop_action_statuses": ["final_submit_confirmation"],
+                    "local_check_selector_miss_count": 0,
+                    "local_synthetic_submit_count": 1,
+                }
+            )
+        autofill_batch = {
+            "selected_count": 100,
+            "selected_autofill_allowed_count": 100,
+            "selector_miss_count": 0,
+            "local_synthetic_submit_count": 100,
+            "local_synthetic_submit_achieved": True,
+            "avoid_unresolved_final_answers": True,
+            "avoid_final_answer_aliases": ["citizenship_status", "zip_or_postal_code"],
+            "excluded_unresolved_final_answer_position_count": 0,
+            "positions": positions,
+        }
+        updates_readiness = {
+            "ready_for_apply": False,
+            "summary": {
+                "waiting_after_update_count": 6,
+                "data_blocking_prompts_after": 49,
+                "high_risk_unconfirmed_count": 5,
+            },
+        }
+
+        report = build_apply_queue_readiness(
+            autofill_batch,
+            critical_input_updates_readiness=updates_readiness,
+            goal_readiness_audit={"status": "needs_user_answers", "goal_complete": False},
+            closed_jobs={"version": 1, "jobs": []},
+        )
+
+        self.assertEqual(report["status"], "ready_for_live_closed_preflight")
+        self.assertTrue(report["ready_for_supervised_autofill"])
+        self.assertEqual(report["global_blockers"], [])
+        self.assertTrue(report["summary"]["filtered_batch_clears_unresolved_final_answers"])
+        self.assertFalse(report["summary"]["updates_ready_for_apply"])
+        self.assertTrue(report["summary"]["effective_updates_ready_for_queue"])
+        self.assertEqual(report["queue_status_counts"], {"ready_for_live_closed_preflight": 100})
 
     def test_apply_queue_handoff_waits_for_answers_and_keeps_uncertain_closed(self) -> None:
         apply_queue = {

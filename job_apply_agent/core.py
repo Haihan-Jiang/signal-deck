@@ -4963,6 +4963,15 @@ FINAL_ANSWER_INTAKE_ALIASES = {
 }
 
 
+FINAL_ANSWER_ALIAS_CATEGORIES = {
+    "background_or_export_control": {"background_or_export_control"},
+    "citizenship_status": {"citizenship_status"},
+    "country_work_permit": {"country_work_permit"},
+    "health_requirement": {"health_requirement"},
+    "interview_recording_consent": {"interview_recording_consent"},
+}
+
+
 FINAL_ANSWER_REPLY_ALIAS_SYNONYMS = {
     "zip_or_postal_code": [
         "zip",
@@ -6215,6 +6224,34 @@ def _final_answer_intake_alias(input_id: str) -> str:
     if alias.startswith("profile_"):
         alias = alias[len("profile_") :]
     return alias
+
+
+def unresolved_final_answer_aliases_from_blocker_report(report: dict[str, Any] | None) -> list[str]:
+    if not isinstance(report, dict):
+        return []
+    aliases: list[str] = []
+    for row in report.get("blockers") or report.get("fields") or []:
+        if not isinstance(row, dict):
+            continue
+        answer_text = ""
+        raw_answer = row.get("answer")
+        if isinstance(raw_answer, dict):
+            answer_text = str(
+                raw_answer.get("answer")
+                or raw_answer.get("user_answer")
+                or raw_answer.get("value")
+                or ""
+            ).strip()
+        else:
+            answer_text = str(raw_answer or row.get("user_answer") or row.get("value") or "").strip()
+        if answer_text:
+            continue
+        alias = str(row.get("alias") or "").strip()
+        if not alias and row.get("input_id"):
+            alias = _final_answer_intake_alias(str(row.get("input_id") or ""))
+        if alias:
+            aliases.append(alias)
+    return sorted(set(aliases))
 
 
 def _final_answer_intake_answer_format_hint(alias: str, high_risk: bool) -> str:
@@ -10257,13 +10294,16 @@ def build_autofill_batch_plan(
     closed_jobs: dict[str, Any] | None = None,
     limit: int = 100,
     include_values: bool = False,
+    avoid_final_answer_aliases: list[str] | None = None,
 ) -> dict[str, Any]:
     items_by_position = _research_items_by_position(research)
+    normalized_avoid_aliases = _normalized_final_answer_aliases(avoid_final_answer_aliases)
     selection = _select_autofill_batch_positions(
         readiness,
         items_by_position,
         limit=len(readiness.get("positions", []) or []),
         closed_jobs=closed_jobs,
+        avoid_final_answer_aliases=normalized_avoid_aliases,
     )
     selected_runs: list[dict[str, Any]] = []
     blocked_candidates: list[dict[str, Any]] = []
@@ -10396,9 +10436,22 @@ def build_autofill_batch_plan(
         "source_position_count": len(readiness.get("positions", []) or []),
         "ready_source_position_count": int(selection.get("ready_source_position_count") or 0),
         "excluded_closed_position_count": len(selection["excluded_closed_positions"]),
+        "excluded_unresolved_final_answer_position_count": len(
+            selection["excluded_unresolved_final_answer_positions"]
+        ),
+        "excluded_unresolved_final_answer_prompt_count": sum(
+            int(row.get("unresolved_final_answer_prompt_count") or 0)
+            for row in selection["excluded_unresolved_final_answer_positions"]
+        ),
+        "skipped_no_apply_url_position_count": len(selection["skipped_no_apply_url_positions"]),
         "skipped_no_prompt_position_count": len(selection["skipped_no_prompt_positions"]),
         "skipped_not_ready_position_count": int(selection.get("skipped_not_ready_position_count") or 0),
         "include_values": bool(include_values),
+        "avoid_unresolved_final_answers": bool(normalized_avoid_aliases),
+        "avoid_final_answer_aliases": normalized_avoid_aliases,
+        "excluded_unresolved_final_answer_alias_counts": _final_answer_alias_counts(
+            selection["excluded_unresolved_final_answer_positions"]
+        ),
         "platform_counts": _count_by(runs, "platform"),
         "role_family_counts": _count_by(runs, "role_family"),
         "platform_role_family_counts": _platform_role_family_counts(runs),
@@ -10424,6 +10477,10 @@ def build_autofill_batch_plan(
         "positions": runs,
         "blocked_candidates": blocked_candidates[:100],
         "excluded_closed_positions": selection["excluded_closed_positions"][:100],
+        "excluded_unresolved_final_answer_positions": selection[
+            "excluded_unresolved_final_answer_positions"
+        ][:250],
+        "skipped_no_apply_url_positions": selection["skipped_no_apply_url_positions"][:100],
         "skipped_no_prompt_positions": selection["skipped_no_prompt_positions"][:100],
         "policy": {
             "real_platform_submission": False,
@@ -10434,10 +10491,11 @@ def build_autofill_batch_plan(
             "captcha_or_security_not_bypassed": True,
             "closed_jobs_excluded_before_batch": True,
             "include_values": bool(include_values),
+            "unresolved_final_answer_positions_excluded": bool(normalized_avoid_aliases),
         },
         "next_commands": [
             "python3 -m job_apply_agent critical-inputs-workflow --updates <confirmed_answers.json> --approve --apply",
-            "python3 -m job_apply_agent autofill-batch --limit 100",
+            "python3 -m job_apply_agent autofill-batch --limit 100 --avoid-unresolved-final-answers",
             "python3 -m job_apply_agent pre-submit-review --outbox-dir job_apply_agent/outbox",
         ],
     }
@@ -10508,6 +10566,7 @@ def write_autofill_batch_plan(
     closed_jobs: dict[str, Any] | None = None,
     limit: int = 100,
     include_values: bool = False,
+    avoid_final_answer_aliases: list[str] | None = None,
 ) -> dict[str, Any]:
     report = build_autofill_batch_plan(
         research,
@@ -10517,6 +10576,7 @@ def write_autofill_batch_plan(
         closed_jobs=closed_jobs,
         limit=limit,
         include_values=include_values,
+        avoid_final_answer_aliases=avoid_final_answer_aliases,
     )
     json_path = Path(json_output)
     markdown_path = Path(markdown_output)
@@ -10539,6 +10599,8 @@ def render_autofill_batch_plan_markdown(report: dict[str, Any]) -> str:
         f"Blocked candidates skipped: {report.get('blocked_candidate_count', 0)}",
         f"Autofill allowed positions: {report.get('selected_autofill_allowed_count', 0)}",
         f"Blocked missing-input positions: {report.get('blocked_missing_input_position_count', 0)}",
+        f"Unresolved final-answer positions excluded: {report.get('excluded_unresolved_final_answer_position_count', 0)}",
+        f"No-apply-URL positions skipped: {report.get('skipped_no_apply_url_position_count', 0)}",
         f"Supervised-gate positions: {report.get('supervised_gate_position_count', 0)}",
         f"Browser actions: {report.get('browser_action_count', 0)}",
         f"Stop actions: {report.get('stop_action_count', 0)}",
@@ -10562,6 +10624,15 @@ def render_autofill_batch_plan_markdown(report: dict[str, Any]) -> str:
         lines.extend(["", "## Blocked Candidate Stop Actions", ""])
         for label, count in sorted((report.get("blocked_stop_action_counts") or {}).items()):
             lines.append(f"- {label}: {count}")
+    if report.get("avoid_final_answer_aliases"):
+        lines.extend(["", "## Unresolved Final-Answer Exclusions", ""])
+        lines.append(
+            "- avoided aliases: {aliases}".format(
+                aliases=", ".join(report.get("avoid_final_answer_aliases") or [])
+            )
+        )
+        for alias, count in sorted((report.get("excluded_unresolved_final_answer_alias_counts") or {}).items()):
+            lines.append(f"- {alias}: {count}")
     lines.extend(["", "## Platform Counts", ""])
     for platform, count in sorted((report.get("platform_counts") or {}).items()):
         lines.append(f"- {platform}: {count}")
@@ -10648,6 +10719,11 @@ def render_autofill_batch_plan_html(report: dict[str, Any]) -> str:
                     ("Evaluated", report.get("candidate_evaluated_count", 0)),
                     ("Skipped blocked", report.get("blocked_candidate_count", 0)),
                     ("Autofill allowed", report.get("selected_autofill_allowed_count", 0)),
+                    (
+                        "Unresolved answers excluded",
+                        report.get("excluded_unresolved_final_answer_position_count", 0),
+                    ),
+                    ("No apply URL skipped", report.get("skipped_no_apply_url_position_count", 0)),
                     ("Browser actions", report.get("browser_action_count", 0)),
                     ("Stop actions", report.get("stop_action_count", 0)),
                     ("Selector misses", report.get("selector_miss_count", 0)),
@@ -10711,6 +10787,8 @@ def build_apply_queue_readiness(
         position for position in autofill_batch.get("positions", []) if isinstance(position, dict)
     ]
     updates_ready = bool(updates.get("ready_for_apply"))
+    filtered_batch_clears_unresolved_answers = _autofill_batch_clears_unresolved_final_answers(autofill_batch)
+    effective_updates_ready = bool(updates_ready or filtered_batch_clears_unresolved_answers)
     update_summary = updates.get("summary") or {}
     selected_count = int(autofill_batch.get("selected_count") or len(positions))
     target_count = int(autofill_batch.get("target_count") or autofill_batch.get("requested_count") or 100)
@@ -10724,7 +10802,7 @@ def build_apply_queue_readiness(
         selector_miss_count=selector_miss_count,
         local_synthetic_submit_count=local_synthetic_submit_count,
         local_synthetic_submit_achieved=local_synthetic_submit_achieved,
-        updates_ready=updates_ready,
+        updates_ready=effective_updates_ready,
         update_summary=update_summary,
     )
     queue_positions: list[dict[str, Any]] = []
@@ -10733,7 +10811,7 @@ def build_apply_queue_readiness(
         row = _apply_queue_position_row(
             index,
             position,
-            updates_ready=updates_ready,
+            updates_ready=effective_updates_ready,
             closed_jobs=closed_jobs,
         )
         queue_positions.append(row)
@@ -10747,7 +10825,7 @@ def build_apply_queue_readiness(
         and selector_miss_count == 0
         and local_synthetic_submit_count >= 100
         and local_synthetic_submit_achieved
-        and updates_ready
+        and effective_updates_ready
         and not any(
             row.get("queue_status") in {"closed_registry", "blocked_selector_miss", "blocked_not_autofill_allowed"}
             for row in queue_positions
@@ -10760,7 +10838,7 @@ def build_apply_queue_readiness(
         "status": "ready_for_live_closed_preflight"
         if ready_for_supervised_autofill
         else "waiting_for_confirmed_answers"
-        if not updates_ready
+        if not effective_updates_ready
         else "not_ready",
         "ready_for_supervised_autofill": ready_for_supervised_autofill,
         "ready_for_unattended_real_submit": False,
@@ -10778,6 +10856,8 @@ def build_apply_queue_readiness(
             "local_synthetic_submit_count": local_synthetic_submit_count,
             "local_synthetic_submit_achieved": local_synthetic_submit_achieved,
             "updates_ready_for_apply": updates_ready,
+            "effective_updates_ready_for_queue": effective_updates_ready,
+            "filtered_batch_clears_unresolved_final_answers": filtered_batch_clears_unresolved_answers,
             "updates_waiting_after_update_count": int(update_summary.get("waiting_after_update_count") or 0),
             "updates_data_blocking_prompts_after": int(update_summary.get("data_blocking_prompts_after") or 0),
             "updates_high_risk_unconfirmed_count": int(update_summary.get("high_risk_unconfirmed_count") or 0),
@@ -10800,6 +10880,7 @@ def build_apply_queue_readiness(
             "final_submit_remains_supervised": True,
             "captcha_or_security_not_bypassed": True,
             "real_platform_submission": False,
+            "filtered_batch_can_skip_global_unresolved_answer_gate": filtered_batch_clears_unresolved_answers,
         },
     }
 
@@ -12138,6 +12219,8 @@ def render_apply_queue_readiness_markdown(report: dict[str, Any]) -> str:
         f"- local synthetic submits: {summary.get('local_synthetic_submit_count', 0)}",
         f"- local synthetic submit achieved: {str(bool(summary.get('local_synthetic_submit_achieved'))).lower()}",
         f"- critical updates ready: {str(bool(summary.get('updates_ready_for_apply'))).lower()}",
+        f"- effective updates ready for this queue: {str(bool(summary.get('effective_updates_ready_for_queue'))).lower()}",
+        f"- filtered batch clears unresolved final answers: {str(bool(summary.get('filtered_batch_clears_unresolved_final_answers'))).lower()}",
         f"- critical updates waiting: {summary.get('updates_waiting_after_update_count', 0)}",
         f"- data blockers after updates: {summary.get('updates_data_blocking_prompts_after', 0)}",
         f"- high-risk confirmations missing: {summary.get('updates_high_risk_unconfirmed_count', 0)}",
@@ -12284,13 +12367,21 @@ def _apply_queue_global_blockers(
         blockers.append("local_synthetic_100_submit_proof_missing")
     if not updates_ready:
         blockers.append("critical_input_updates_not_ready")
-    if int(update_summary.get("waiting_after_update_count") or 0):
-        blockers.append("critical_inputs_waiting")
-    if int(update_summary.get("data_blocking_prompts_after") or 0):
-        blockers.append("data_blockers_remaining_after_updates")
-    if int(update_summary.get("high_risk_unconfirmed_count") or 0):
-        blockers.append("high_risk_confirmations_missing")
+        if int(update_summary.get("waiting_after_update_count") or 0):
+            blockers.append("critical_inputs_waiting")
+        if int(update_summary.get("data_blocking_prompts_after") or 0):
+            blockers.append("data_blockers_remaining_after_updates")
+        if int(update_summary.get("high_risk_unconfirmed_count") or 0):
+            blockers.append("high_risk_confirmations_missing")
     return blockers
+
+
+def _autofill_batch_clears_unresolved_final_answers(autofill_batch: dict[str, Any]) -> bool:
+    return bool(
+        autofill_batch.get("avoid_unresolved_final_answers")
+        and autofill_batch.get("avoid_final_answer_aliases")
+        and int(autofill_batch.get("excluded_unresolved_final_answer_position_count") or 0) == 0
+    )
 
 
 def _apply_queue_position_row(
@@ -13031,12 +13122,16 @@ def _select_autofill_batch_positions(
     items_by_position: dict[str, list[dict[str, Any]]],
     limit: int,
     closed_jobs: dict[str, Any] | None,
+    avoid_final_answer_aliases: list[str] | None = None,
 ) -> dict[str, Any]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     excluded_closed: list[dict[str, Any]] = []
+    excluded_unresolved_final_answer: list[dict[str, Any]] = []
+    skipped_no_apply_url: list[dict[str, Any]] = []
     skipped_no_prompt: list[dict[str, Any]] = []
     skipped_not_ready = 0
     ready_source_count = 0
+    avoided_aliases = set(_normalized_final_answer_aliases(avoid_final_answer_aliases))
     for position in readiness.get("positions", []) or []:
         if not isinstance(position, dict):
             continue
@@ -13045,6 +13140,9 @@ def _select_autofill_batch_positions(
             skipped_not_ready += 1
             continue
         ready_source_count += 1
+        if not _position_selection_apply_url(position):
+            skipped_no_apply_url.append(_fake_rehearsal_position_row(position))
+            continue
         if not items_by_position.get(position_key):
             skipped_no_prompt.append(_fake_rehearsal_position_row(position))
             continue
@@ -13054,6 +13152,24 @@ def _select_autofill_batch_positions(
             row["closed_reason"] = closed_reason
             excluded_closed.append(row)
             continue
+        if avoided_aliases:
+            unresolved_matches = _position_unresolved_final_answer_matches(
+                items_by_position.get(position_key, []),
+                avoided_aliases,
+            )
+            if unresolved_matches:
+                row = _fake_rehearsal_position_row(position)
+                row["unresolved_final_answer_aliases"] = sorted(
+                    {
+                        str(match.get("alias") or "")
+                        for match in unresolved_matches
+                        if str(match.get("alias") or "")
+                    }
+                )
+                row["unresolved_final_answer_prompt_count"] = len(unresolved_matches)
+                row["unresolved_final_answer_prompts"] = unresolved_matches[:10]
+                excluded_unresolved_final_answer.append(row)
+                continue
         group_key = "{platform}::{role_family}".format(
             platform=position.get("platform") or "Unknown",
             role_family=position.get("role_family") or "Other",
@@ -13082,10 +13198,86 @@ def _select_autofill_batch_positions(
     return {
         "selected_positions": selected,
         "excluded_closed_positions": excluded_closed,
+        "excluded_unresolved_final_answer_positions": excluded_unresolved_final_answer,
+        "skipped_no_apply_url_positions": skipped_no_apply_url,
         "skipped_no_prompt_positions": skipped_no_prompt,
         "skipped_not_ready_position_count": skipped_not_ready,
         "ready_source_position_count": ready_source_count,
     }
+
+
+def _position_selection_apply_url(position: dict[str, Any]) -> str:
+    apply_url = str(position.get("apply_url") or position.get("short_apply_url") or "").strip()
+    if apply_url:
+        return apply_url
+    position_key = str(position.get("position_key") or "")
+    if position_key.startswith("url:http"):
+        return position_key[len("url:") :]
+    return ""
+
+
+def _normalized_final_answer_aliases(aliases: list[str] | None) -> list[str]:
+    return sorted({str(alias).strip() for alias in aliases or [] if str(alias).strip()})
+
+
+def _position_unresolved_final_answer_matches(
+    items: list[dict[str, Any]],
+    avoided_aliases: set[str],
+) -> list[dict[str, Any]]:
+    matches: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        alias = _final_answer_alias_for_research_item(item, avoided_aliases)
+        if not alias:
+            continue
+        label = str(item.get("label") or "").strip()
+        key = (alias, _normalize_question(label))
+        if key in seen:
+            continue
+        seen.add(key)
+        matches.append(
+            {
+                "alias": alias,
+                "label": label,
+                "category": item.get("category"),
+                "automation_action": item.get("automation_action"),
+                "required": bool(item.get("required")),
+            }
+        )
+    return matches
+
+
+def _final_answer_alias_for_research_item(
+    item: dict[str, Any],
+    avoided_aliases: set[str],
+) -> str:
+    category = str(item.get("category") or "")
+    for alias in sorted(avoided_aliases):
+        if category in FINAL_ANSWER_ALIAS_CATEGORIES.get(alias, set()):
+            return alias
+    label = str(item.get("label") or "")
+    classification = classify_application_prompt(label, item)
+    if classification.category:
+        for alias in sorted(avoided_aliases):
+            if classification.category in FINAL_ANSWER_ALIAS_CATEGORIES.get(alias, set()):
+                return alias
+    if "zip_or_postal_code" in avoided_aliases:
+        normalized_label = _normalize_question(label)
+        if any(term in normalized_label for term in ["zip code", "zipcode", "postal code"]):
+            return "zip_or_postal_code"
+    return ""
+
+
+def _final_answer_alias_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        for alias in row.get("unresolved_final_answer_aliases") or []:
+            alias_text = str(alias or "")
+            if alias_text:
+                counts[alias_text] = counts.get(alias_text, 0) + 1
+    return dict(sorted(counts.items()))
 
 
 def _autofill_position_selection_key(

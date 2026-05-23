@@ -37,6 +37,7 @@ from .core import (
     refresh_closed_jobs_from_live_pages,
     run_pipeline,
     save_final_answer_intake_payload,
+    unresolved_final_answer_aliases_from_blocker_report,
     write_answer_gap_report,
     write_apply_run_audit,
     write_apply_queue_autofill_packet,
@@ -571,6 +572,12 @@ def main() -> int:
     autofill_batch_parser.add_argument("--closed-jobs", default=str(DEFAULT_CLOSED_JOBS))
     autofill_batch_parser.add_argument("--limit", type=int, default=100)
     autofill_batch_parser.add_argument("--include-values", action="store_true")
+    autofill_batch_parser.add_argument(
+        "--avoid-unresolved-final-answers",
+        action="store_true",
+        help="exclude positions whose prompts require currently unresolved final-answer aliases",
+    )
+    autofill_batch_parser.add_argument("--final-answer-blockers-json", default=str(DEFAULT_FINAL_ANSWER_BLOCKERS_JSON))
     autofill_batch_parser.add_argument("--json-output", default=str(DEFAULT_AUTOFILL_BATCH_JSON))
     autofill_batch_parser.add_argument("--markdown-output", default=str(DEFAULT_AUTOFILL_BATCH_MARKDOWN))
     autofill_batch_parser.add_argument("--html-output", default=str(DEFAULT_AUTOFILL_BATCH_HTML))
@@ -2460,6 +2467,13 @@ def main() -> int:
             raise FileNotFoundError(f"readiness report not found: {args.readiness_json}")
         profile = load_profile(args.profile) if args.profile and Path(args.profile).exists() else None
         answer_memory = load_answer_memory(args.memory) if args.memory else None
+        avoid_aliases: list[str] = []
+        if args.avoid_unresolved_final_answers:
+            if not Path(args.final_answer_blockers_json).exists():
+                raise FileNotFoundError(f"final-answer blockers report not found: {args.final_answer_blockers_json}")
+            avoid_aliases = unresolved_final_answer_aliases_from_blocker_report(
+                json.loads(Path(args.final_answer_blockers_json).read_text(encoding="utf-8"))
+            )
         report = write_autofill_batch_plan(
             json.loads(Path(args.research_json).read_text(encoding="utf-8")),
             json.loads(Path(args.readiness_json).read_text(encoding="utf-8")),
@@ -2471,12 +2485,18 @@ def main() -> int:
             closed_jobs=load_closed_jobs(args.closed_jobs),
             limit=args.limit,
             include_values=args.include_values,
+            avoid_final_answer_aliases=avoid_aliases,
         )
         print(f"Wrote autofill batch JSON to {args.json_output}")
         print(f"Wrote autofill batch Markdown to {args.markdown_output}")
         print(f"Wrote autofill batch HTML to {args.html_output}")
         print(f"Selected: {report.get('selected_count', 0)} / {report.get('requested_count', 0)}")
         print(f"Autofill allowed: {report.get('selected_autofill_allowed_count', 0)}")
+        print(
+            "Excluded unresolved final-answer positions: "
+            f"{report.get('excluded_unresolved_final_answer_position_count', 0)}"
+        )
+        print(f"No-apply-URL skipped: {report.get('skipped_no_apply_url_position_count', 0)}")
         print(f"Browser actions: {report.get('browser_action_count', 0)}")
         print(f"Selector misses: {report.get('selector_miss_count', 0)}")
         print(f"Would submit: {report.get('would_submit_count', 0)}")
