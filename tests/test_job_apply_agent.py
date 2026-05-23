@@ -5,6 +5,7 @@ import tempfile
 import unittest
 import urllib.error
 import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from job_apply_agent.core import (
@@ -992,6 +993,54 @@ class JobApplyAgentTests(unittest.TestCase):
             classify_application_prompt("Which companies do you think are innovating best in web design?").category,
             "role_specific_free_text",
         )
+        self.assertEqual(
+            classify_application_prompt("Are you a U.S. Citizen?").category,
+            "citizenship_status",
+        )
+        self.assertEqual(
+            classify_application_prompt("Do you currently hold an active security clearance?").category,
+            "security_clearance",
+        )
+        self.assertEqual(
+            classify_application_prompt("Do you know anyone currently at Glean?").category,
+            "conflict_of_interest",
+        )
+        self.assertEqual(
+            classify_application_prompt("May we record and analyze your interview?").category,
+            "interview_recording_consent",
+        )
+        self.assertEqual(
+            classify_application_prompt("Where did you find this job posting?").category,
+            "referral_source",
+        )
+        self.assertEqual(
+            classify_application_prompt("What age range do you fall within?").automation_action,
+            "do_not_store_sensitive",
+        )
+        self.assertEqual(
+            classify_application_prompt("When do you graduate?").category,
+            "education_date",
+        )
+        self.assertEqual(
+            classify_application_prompt("What is your GPA?").category,
+            "education_grading",
+        )
+        self.assertEqual(
+            classify_application_prompt(
+                "A data scientist proposes a complex ensemble model. What is the most appropriate response?"
+            ).category,
+            "assessment_question",
+        )
+        self.assertEqual(
+            classify_application_prompt("Do you have blockchain/crypto experience?").category,
+            "domain_experience",
+        )
+        self.assertEqual(
+            classify_application_prompt(
+                "Are you currently or were you previously a U.S. Government civilian or military employee?"
+            ).category,
+            "government_employment",
+        )
 
     def test_application_research_summarizes_form_snapshots_and_jsonl(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1439,6 +1488,132 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["blocking_prompt_count"], 0)
         self.assertEqual(report["coverage_counts"]["covered_auto_answer"], 6)
 
+    def test_answer_gap_report_uses_policy_and_english_profile_answers(self) -> None:
+        profile = CandidateProfile(
+            name="Alan Jiang",
+            email="alan@example.com",
+            phone="555-0100",
+            location="Bellevue, WA",
+            target_titles=["Site Reliability Engineer"],
+            target_locations=["United States"],
+            remote_ok=True,
+            keywords=["sre"],
+            blocklist=[],
+            min_score=1,
+            resume_facts={},
+            question_answers={
+                "policy_acknowledgement": "Yes, I acknowledge.",
+                "english_level": "Professional working proficiency in English.",
+            },
+        )
+        research = {
+            "generated_at": "2026-05-22T00:00:00+00:00",
+            "positions_observed_total": 1,
+            "items": [
+                {
+                    "label": "I understand my application will be processed in accordance with the Candidate Privacy Policy.",
+                    "normalized_label": "understand application processed accordance candidate privacy policy",
+                    "category": "policy_acknowledgement",
+                    "automation_action": "human_review_required",
+                    "sensitivity": "policy",
+                    "required": True,
+                    "platform": "Greenhouse",
+                    "source_file": "form.json",
+                },
+                {
+                    "label": "How would you evaluate your English Level?",
+                    "normalized_label": "how evaluate english level",
+                    "category": "language_ability",
+                    "automation_action": "auto_answer_from_memory",
+                    "sensitivity": "standard_preference",
+                    "required": True,
+                    "platform": "Greenhouse",
+                    "source_file": "form.json",
+                },
+            ],
+        }
+
+        report = build_answer_gap_report(research, profile=profile, answer_memory=None)
+        statuses = {item["label"]: item["coverage_status"] for item in report["prompt_statuses"]}
+
+        self.assertEqual(
+            statuses[
+                "I understand my application will be processed in accordance with the Candidate Privacy Policy."
+            ],
+            "covered_requires_review",
+        )
+        self.assertEqual(
+            statuses["How would you evaluate your English Level?"],
+            "covered_auto_answer",
+        )
+
+    def test_profile_identity_uses_specific_location_parts(self) -> None:
+        profile = CandidateProfile(
+            name="Alan Jiang",
+            email="alan@example.com",
+            phone="555-0100",
+            location="Bellevue, WA",
+            target_titles=["Site Reliability Engineer"],
+            target_locations=["United States"],
+            remote_ok=True,
+            keywords=["sre"],
+            blocklist=[],
+            min_score=1,
+            resume_facts={},
+            question_answers={},
+        )
+        snapshot = {
+            "title": "Example Application",
+            "url": "https://job-boards.greenhouse.io/example/jobs/1",
+            "platform": "Greenhouse",
+            "fields": [
+                {"i": 1, "label": "City", "tag": "INPUT", "required": True},
+                {"i": 2, "label": "State", "tag": "INPUT", "required": True},
+                {"i": 3, "label": "Country", "tag": "INPUT", "required": True},
+                {"i": 4, "label": "Zip Code", "tag": "INPUT", "required": True},
+            ],
+        }
+
+        plan = build_form_fill_plan(snapshot, profile=profile, include_values=True)
+        values = {step["label"]: step.get("value") for step in plan["steps"]}
+        statuses = {step["label"]: step["status"] for step in plan["steps"]}
+
+        self.assertEqual(values["City"], "Bellevue")
+        self.assertEqual(values["State"], "WA")
+        self.assertEqual(values["Country"], "United States")
+        self.assertEqual(statuses["Zip Code"], "missing_profile_value")
+
+    def test_education_date_uses_resume_fact_but_gpa_remains_missing(self) -> None:
+        profile = CandidateProfile(
+            name="Alan Jiang",
+            email="alan@example.com",
+            phone="555-0100",
+            location="Bellevue, WA",
+            target_titles=["Site Reliability Engineer"],
+            target_locations=["United States"],
+            remote_ok=True,
+            keywords=["sre"],
+            blocklist=[],
+            min_score=1,
+            resume_facts={"graduation_date": "Dec 2024"},
+            question_answers={},
+        )
+        snapshot = {
+            "title": "Example Application",
+            "url": "https://job-boards.greenhouse.io/example/jobs/1",
+            "platform": "Greenhouse",
+            "fields": [
+                {"i": 1, "label": "When do you graduate?", "tag": "INPUT", "required": True},
+                {"i": 2, "label": "What is your GPA?", "tag": "INPUT", "required": True},
+            ],
+        }
+
+        plan = build_form_fill_plan(snapshot, profile=profile, include_values=True)
+
+        self.assertEqual(plan["steps"][0]["status"], "ready")
+        self.assertEqual(plan["steps"][0]["value"], "Dec 2024")
+        self.assertEqual(plan["steps"][1]["status"], "missing_profile_value")
+
     def test_employment_date_fields_use_specific_resume_facts(self) -> None:
         profile = CandidateProfile(
             name="Alan Jiang",
@@ -1591,6 +1766,103 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertNotIn("WHAT’S IN IT FOR YOU?", labels)
             self.assertNotIn("Ready to accelerate your career?", labels)
             self.assertIn("Why Cisco?", labels)
+
+    def test_application_research_skips_low_signal_skill_filter_labels(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            observed = Path(temp_dir) / "observed_candidates.jsonl"
+            observed.write_text(
+                json.dumps(
+                    {
+                        "status": "OBSERVED_CANDIDATE",
+                        "platform": "LinkedIn",
+                        "company": "Example",
+                        "title": "SRE",
+                        "apply_url": "https://www.linkedin.com/jobs/view/2/",
+                        "questions": [
+                            "Docker",
+                            "SQL",
+                            "Great, do my skills fit?",
+                            "Do you have blockchain/crypto experience?",
+                        ],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            research = build_application_research(temp_dir, position_target=100)
+            labels = {item["label"] for item in research["items"]}
+
+            self.assertNotIn("Docker", labels)
+            self.assertNotIn("SQL", labels)
+            self.assertNotIn("Great, do my skills fit?", labels)
+            self.assertIn("Do you have blockchain/crypto experience?", labels)
+
+    def test_question_export_xlsx_strips_invalid_xml_control_characters(self) -> None:
+        bad_label = "Question with vertical tab \x0b from a scraped page"
+        prompt = {
+            "coverage_status": "needs_user_confirmation",
+            "label": bad_label,
+            "category": "unknown",
+            "automation_action": "human_review_required",
+            "sensitivity": "unknown",
+            "required_count": 1,
+            "observed_count": 1,
+            "platforms": ["Greenhouse"],
+            "source_files": ["bad.json"],
+            "coverage_reason": "test",
+            "next_action": "inspect",
+        }
+        gaps = {
+            "generated_at": "2026-05-22T00:00:00+00:00",
+            "research_generated_at": "2026-05-22T00:00:00+00:00",
+            "positions_observed_total": 1,
+            "unique_prompts_observed": 1,
+            "ready_prompt_count": 0,
+            "blocking_prompt_count": 1,
+            "coverage_counts": {"needs_user_confirmation": 1},
+            "prompt_statuses": [prompt],
+            "blocking_prompts": [prompt],
+        }
+        readiness = {
+            "readiness_counts": {"needs_learning": 1},
+            "manual_gate_count": 0,
+            "manual_gates": [],
+            "positions": [
+                {
+                    "readiness": "needs_learning",
+                    "platform": "Greenhouse",
+                    "company": "Example",
+                    "title": bad_label,
+                    "role_family": "Site Reliability",
+                    "apply_url": "https://example.test/job",
+                    "learning_blockers": [prompt],
+                    "manual_gates": [],
+                }
+            ],
+        }
+        coverage_gate = {"synthetic": {"platform_role_target_achieved": True}}
+        collection_plan = {"tasks": []}
+        learning_tasks = {"task_count": 1, "tasks": []}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            xlsx_path = Path(temp_dir) / "questions.xlsx"
+            html_path = Path(temp_dir) / "questions.html"
+
+            write_question_export(
+                gaps,
+                readiness,
+                coverage_gate,
+                collection_plan,
+                learning_tasks,
+                xlsx_path,
+                html_path,
+            )
+
+            with zipfile.ZipFile(xlsx_path) as archive:
+                for name in archive.namelist():
+                    if name.startswith("xl/worksheets/") and name.endswith(".xml"):
+                        ET.fromstring(archive.read(name))
 
     def test_write_answer_gap_report_outputs_json_and_markdown(self) -> None:
         research = {
