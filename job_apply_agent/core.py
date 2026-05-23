@@ -22281,6 +22281,39 @@ def build_final_answer_blocker_report(
     post_answer_synthetic_final_submit_stop_count = int(
         goal_summary.get("post_answer_synthetic_final_submit_stop_count") or 0
     )
+    live_preflight_keys = [
+        "latest_preflight_live_checked_count",
+        "latest_preflight_open_eligible_count",
+        "latest_preflight_closed_count",
+        "latest_preflight_uncertain_count",
+        "latest_preflight_identity_unverified_count",
+        "latest_preflight_error_count",
+        "latest_preflight_stale",
+    ]
+    live_preflight_evidence_present = any(key in goal_summary for key in live_preflight_keys)
+    latest_preflight_live_checked_count = int(goal_summary.get("latest_preflight_live_checked_count") or 0)
+    latest_preflight_open_eligible_count = int(goal_summary.get("latest_preflight_open_eligible_count") or 0)
+    latest_preflight_closed_count = int(goal_summary.get("latest_preflight_closed_count") or 0)
+    latest_preflight_uncertain_count = int(goal_summary.get("latest_preflight_uncertain_count") or 0)
+    latest_preflight_identity_unverified_count = int(
+        goal_summary.get("latest_preflight_identity_unverified_count") or 0
+    )
+    latest_preflight_error_count = int(goal_summary.get("latest_preflight_error_count") or 0)
+    latest_preflight_stale = bool(goal_summary.get("latest_preflight_stale"))
+    latest_preflight_age_seconds = goal_summary.get("latest_preflight_age_seconds")
+    latest_preflight_max_age_seconds = goal_summary.get("latest_preflight_max_age_seconds")
+    live_preflight_ready = bool(
+        not live_preflight_evidence_present
+        or (
+            latest_preflight_live_checked_count >= 100
+            and latest_preflight_open_eligible_count >= 100
+            and latest_preflight_closed_count == 0
+            and latest_preflight_uncertain_count == 0
+            and latest_preflight_identity_unverified_count == 0
+            and latest_preflight_error_count == 0
+            and not latest_preflight_stale
+        )
+    )
     truthful_answer_only_blockers = all(
         str(row.get("status") or "") in {"missing_answer", "high_risk_unconfirmed"}
         for row in blocker_rows
@@ -22298,6 +22331,7 @@ def build_final_answer_blocker_report(
         and post_answer_intake_answer_count >= len(blocker_rows)
         and post_answer_intake_problem_count == 0
         and post_answer_synthetic_100_ready
+        and live_preflight_ready
     )
     summary = {
         "field_count": len(template.get("fields") or []),
@@ -22330,6 +22364,17 @@ def build_final_answer_blocker_report(
         "post_answer_synthetic_selector_miss_count": post_answer_synthetic_selector_miss_count,
         "post_answer_synthetic_final_submit_stop_count": post_answer_synthetic_final_submit_stop_count,
         "post_answer_synthetic_100_ready": post_answer_synthetic_100_ready,
+        "live_preflight_evidence_present": live_preflight_evidence_present,
+        "live_preflight_ready": live_preflight_ready,
+        "latest_preflight_live_checked_count": latest_preflight_live_checked_count,
+        "latest_preflight_open_eligible_count": latest_preflight_open_eligible_count,
+        "latest_preflight_closed_count": latest_preflight_closed_count,
+        "latest_preflight_uncertain_count": latest_preflight_uncertain_count,
+        "latest_preflight_identity_unverified_count": latest_preflight_identity_unverified_count,
+        "latest_preflight_error_count": latest_preflight_error_count,
+        "latest_preflight_stale": latest_preflight_stale,
+        "latest_preflight_age_seconds": latest_preflight_age_seconds,
+        "latest_preflight_max_age_seconds": latest_preflight_max_age_seconds,
         "ready_after_truthful_answer_reply": ready_after_truthful_answer_reply,
         "observed_prompt_example_count": sum(
             len(row.get("observed_prompt_examples") or []) for row in blocker_rows
@@ -22353,6 +22398,19 @@ def build_final_answer_blocker_report(
         "synthetic_selected_count": summary["post_answer_synthetic_autofill_selected_count"],
         "synthetic_selector_miss_count": summary["post_answer_synthetic_selector_miss_count"],
         "synthetic_final_submit_stop_count": summary["post_answer_synthetic_final_submit_stop_count"],
+        "live_preflight_ready": live_preflight_ready,
+        "live_preflight": {
+            "evidence_present": live_preflight_evidence_present,
+            "live_checked": latest_preflight_live_checked_count,
+            "open_eligible": latest_preflight_open_eligible_count,
+            "closed": latest_preflight_closed_count,
+            "uncertain": latest_preflight_uncertain_count,
+            "identity_unverified": latest_preflight_identity_unverified_count,
+            "errors": latest_preflight_error_count,
+            "stale": latest_preflight_stale,
+            "age_seconds": latest_preflight_age_seconds,
+            "max_age_seconds": latest_preflight_max_age_seconds,
+        },
         "intake_validation": {
             "answer_count": summary["post_answer_intake_answer_count"],
             "missing": summary["post_answer_intake_missing_unblocker_count"],
@@ -22716,6 +22774,7 @@ def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
         )
     automation = report.get("automation_after_answers") or {}
     validation = automation.get("intake_validation") if isinstance(automation.get("intake_validation"), dict) else {}
+    live_preflight = automation.get("live_preflight") if isinstance(automation.get("live_preflight"), dict) else {}
     lines.extend(
         [
             "",
@@ -22733,6 +22792,16 @@ def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
             f"selected {automation.get('synthetic_selected_count', 0)}, "
             f"selector misses {automation.get('synthetic_selector_miss_count', 0)}, "
             f"final-submit stops {automation.get('synthetic_final_submit_stop_count', 0)}",
+            f"- live preflight ready: {str(bool(automation.get('live_preflight_ready'))).lower()}",
+            "- live preflight: "
+            f"checked {live_preflight.get('live_checked', 0)}, "
+            f"open eligible {live_preflight.get('open_eligible', 0)}, "
+            f"closed {live_preflight.get('closed', 0)}, "
+            f"uncertain {live_preflight.get('uncertain', 0)}, "
+            f"identity unverified {live_preflight.get('identity_unverified', 0)}, "
+            f"errors {live_preflight.get('errors', 0)}, "
+            f"stale {str(bool(live_preflight.get('stale'))).lower()}, "
+            f"age seconds {live_preflight.get('age_seconds')}",
             "- intake validation: "
             f"answers {validation.get('answer_count', 0)}, "
             f"missing {validation.get('missing', 0)}, "
@@ -22869,8 +22938,31 @@ def render_final_answer_blocker_report_html(report: dict[str, Any]) -> str:
                     ("Synthetic 100 ready", _yes_no(summary.get("post_answer_synthetic_100_ready"))),
                     ("Synthetic selected", summary.get("post_answer_synthetic_autofill_selected_count", 0)),
                     ("Final-submit stops", summary.get("post_answer_synthetic_final_submit_stop_count", 0)),
+                    ("Live preflight ready", _yes_no(summary.get("live_preflight_ready"))),
+                    ("Preflight checked", summary.get("latest_preflight_live_checked_count", 0)),
+                    ("Preflight open", summary.get("latest_preflight_open_eligible_count", 0)),
+                    ("Identity unverified", summary.get("latest_preflight_identity_unverified_count", 0)),
+                    ("Preflight stale", _yes_no(summary.get("latest_preflight_stale"))),
                 ]
             ),
+            "<section><h2>Live Preflight Boundary</h2>",
+            _html_table(
+                ["Metric", "Value"],
+                [
+                    ["Evidence present", _yes_no(summary.get("live_preflight_evidence_present"))],
+                    ["Ready", _yes_no(summary.get("live_preflight_ready"))],
+                    ["Live checked", summary.get("latest_preflight_live_checked_count", 0)],
+                    ["Open eligible", summary.get("latest_preflight_open_eligible_count", 0)],
+                    ["Closed", summary.get("latest_preflight_closed_count", 0)],
+                    ["Uncertain", summary.get("latest_preflight_uncertain_count", 0)],
+                    ["Identity unverified", summary.get("latest_preflight_identity_unverified_count", 0)],
+                    ["Errors", summary.get("latest_preflight_error_count", 0)],
+                    ["Stale", _yes_no(summary.get("latest_preflight_stale"))],
+                    ["Age seconds", summary.get("latest_preflight_age_seconds")],
+                    ["Max age seconds", summary.get("latest_preflight_max_age_seconds")],
+                ],
+            ),
+            "</section>",
             "<section><h2>Answer Capture Boundary</h2>",
             _html_table(
                 ["Rule", "Value"],
@@ -22989,6 +23081,14 @@ def build_telegram_final_answer_blocker_alert(
         "✅ After-answer path ready: "
         f"{'yes' if report.get('ready_after_truthful_answer_reply') else 'no'}; "
         f"text reply rehearsal: {'yes' if summary.get('post_answer_text_reply_rehearsal_ready') else 'no'}",
+        "🔎 Live preflight: "
+        f"{summary.get('latest_preflight_live_checked_count', 0)} checked / "
+        f"{summary.get('latest_preflight_open_eligible_count', 0)} open; "
+        f"closed {summary.get('latest_preflight_closed_count', 0)}, "
+        f"uncertain {summary.get('latest_preflight_uncertain_count', 0)}, "
+        f"identity {summary.get('latest_preflight_identity_unverified_count', 0)}, "
+        f"errors {summary.get('latest_preflight_error_count', 0)}, "
+        f"stale {'yes' if summary.get('latest_preflight_stale') else 'no'}",
         "",
     ]
     if not blockers:

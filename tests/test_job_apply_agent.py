@@ -7568,6 +7568,15 @@ class JobApplyAgentTests(unittest.TestCase):
                 "post_answer_synthetic_autofill_selected_count": 100,
                 "post_answer_synthetic_selector_miss_count": 0,
                 "post_answer_synthetic_final_submit_stop_count": 100,
+                "latest_preflight_live_checked_count": 100,
+                "latest_preflight_open_eligible_count": 100,
+                "latest_preflight_closed_count": 0,
+                "latest_preflight_uncertain_count": 0,
+                "latest_preflight_identity_unverified_count": 0,
+                "latest_preflight_error_count": 0,
+                "latest_preflight_stale": False,
+                "latest_preflight_age_seconds": 42,
+                "latest_preflight_max_age_seconds": 21600,
             },
         }
         report = build_final_answer_blocker_report(template, goal_audit=goal_audit)
@@ -7583,6 +7592,9 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertTrue(report["summary"]["ready_after_truthful_answer_reply"])
         self.assertTrue(report["automation_after_answers"]["text_reply_rehearsal_ready"])
         self.assertEqual(report["automation_after_answers"]["synthetic_selected_count"], 100)
+        self.assertTrue(report["automation_after_answers"]["live_preflight_ready"])
+        self.assertEqual(report["automation_after_answers"]["live_preflight"]["live_checked"], 100)
+        self.assertEqual(report["automation_after_answers"]["live_preflight"]["identity_unverified"], 0)
         self.assertEqual(report["automation_after_answers"]["intake_validation"]["answer_count"], 6)
         self.assertEqual(len(report["post_answer_runbook"]), 5)
         self.assertEqual(report["post_answer_runbook"][0]["name"], "Validate filled reply")
@@ -7635,6 +7647,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("## Automation After Answers", markdown)
         self.assertIn("text reply rehearsal ready: true", markdown)
         self.assertIn("synthetic packet: selected 100, selector misses 0, final-submit stops 100", markdown)
+        self.assertIn("live preflight ready: true", markdown)
+        self.assertIn("live preflight: checked 100, open eligible 100", markdown)
         self.assertIn("## One-Reply Action Pack", markdown)
         self.assertIn("## Post-Answer Runbook", markdown)
         self.assertIn("Validate filled reply", markdown)
@@ -7651,6 +7665,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("## Reply Template", markdown)
         self.assertIn("citizenship_status\uff1a<fill>", markdown)
         self.assertIn("Final Answer Blockers", html)
+        self.assertIn("Live Preflight Boundary", html)
+        self.assertIn("Preflight checked", html)
         self.assertIn("Answer Capture Boundary", html)
         self.assertIn("Blocking Questions", html)
         self.assertIn("Observed Prompt Examples", html)
@@ -7665,6 +7681,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Final answer reply template", reply_template_text)
         self.assertIn("Job automation needs final answers", alert)
         self.assertIn("After-answer path ready: yes", alert)
+        self.assertIn("Live preflight: 100 checked / 100 open", alert)
         self.assertIn("citizenship_status", alert)
         self.assertIn("Shape:", alert)
         self.assertIn("Shortest reply shape:", alert)
@@ -7883,6 +7900,13 @@ class JobApplyAgentTests(unittest.TestCase):
                 "post_answer_synthetic_autofill_selected_count": 100,
                 "post_answer_synthetic_selector_miss_count": 0,
                 "post_answer_synthetic_final_submit_stop_count": 100,
+                "latest_preflight_live_checked_count": 100,
+                "latest_preflight_open_eligible_count": 100,
+                "latest_preflight_closed_count": 0,
+                "latest_preflight_uncertain_count": 0,
+                "latest_preflight_identity_unverified_count": 0,
+                "latest_preflight_error_count": 0,
+                "latest_preflight_stale": False,
             },
         }
 
@@ -7898,6 +7922,9 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertFalse(summary["selected_queue_currently_ready"])
         self.assertTrue(summary["selected_queue_ready_after_truthful_reply"])
         self.assertTrue(summary["post_answer_synthetic_100_ready"])
+        self.assertTrue(summary["live_preflight_ready"])
+        self.assertEqual(summary["latest_preflight_open_eligible_count"], 100)
+        self.assertEqual(summary["latest_preflight_identity_unverified_count"], 0)
         self.assertEqual(summary["post_answer_intake_problem_count"], 0)
         self.assertEqual(automation["status"], "ready_after_truthful_answer_reply")
         self.assertFalse(automation["selected_queue_currently_ready"])
@@ -7909,15 +7936,29 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(automation["synthetic_selected_count"], 100)
         self.assertEqual(automation["synthetic_selector_miss_count"], 0)
         self.assertEqual(automation["synthetic_final_submit_stop_count"], 100)
+        self.assertTrue(automation["live_preflight_ready"])
+        self.assertEqual(automation["live_preflight"]["open_eligible"], 100)
         self.assertEqual(automation["intake_validation"]["problem_count"], 0)
         self.assertIn("Ready for post-answer pipeline: false", markdown)
         self.assertIn("Ready after truthful answer reply: true", markdown)
         self.assertIn("selected queue ready now: false", markdown)
         self.assertIn("selected queue ready after truthful reply: true", markdown)
         self.assertIn("synthetic 100 ready: true", markdown)
+        self.assertIn("live preflight ready: true", markdown)
         self.assertIn("Current selected queue ready", html)
         self.assertIn("Ready after truthful reply", html)
         self.assertIn("Synthetic 100 ready", html)
+        self.assertIn("Live preflight ready", html)
+
+        stale_goal_audit = json.loads(json.dumps(goal_audit))
+        stale_goal_audit["blocker_summary"]["latest_preflight_stale"] = True
+        stale_report = build_final_answer_blocker_report(template, goal_audit=stale_goal_audit)
+        self.assertFalse(stale_report["ready_after_truthful_answer_reply"])
+        self.assertFalse(stale_report["summary"]["live_preflight_ready"])
+        self.assertEqual(
+            stale_report["automation_after_answers"]["status"],
+            "waiting_for_truthful_answers_or_after_answer_rehearsal",
+        )
 
     def test_final_answer_reply_text_builds_ready_intake_without_markdown_answer_text(self) -> None:
         unblockers = {
