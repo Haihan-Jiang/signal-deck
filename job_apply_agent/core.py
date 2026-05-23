@@ -11794,6 +11794,8 @@ def render_position_execution_audit_markdown(report: dict[str, Any]) -> str:
         f"- selector-miss positions: {summary.get('selector_miss_position_count', 0)}",
         f"- final-submit stops: {summary.get('final_submit_stop_position_count', 0)} positions, {summary.get('final_submit_stop_count', 0)} stops",
         f"- remaining user answers: {summary.get('remaining_user_answer_count', 0)}",
+        f"- global remaining user answers: {summary.get('global_remaining_user_answer_count', 0)}",
+        f"- ready for supervised autofill now: {str(bool(summary.get('ready_for_supervised_autofill_now'))).lower()}",
         f"- ready for supervised autofill after answers: {str(bool(summary.get('ready_for_supervised_autofill_after_answers'))).lower()}",
         "",
         "## Requirement Status",
@@ -11924,6 +11926,7 @@ def render_position_execution_audit_html(report: dict[str, Any]) -> str:
                     ("Selector misses", summary.get("selector_miss_position_count", 0)),
                     ("Final stops", summary.get("final_submit_stop_position_count", 0)),
                     ("User answers", summary.get("remaining_user_answer_count", 0)),
+                    ("Global answers", summary.get("global_remaining_user_answer_count", 0)),
                 ]
             ),
             "<section><h2>Requirement Status</h2>",
@@ -12047,11 +12050,13 @@ def _position_execution_summary(
     goal_readiness_audit: dict[str, Any],
     target_count: int,
 ) -> dict[str, Any]:
-    remaining_answers = int(
+    global_remaining_answers = int(
         ((goal_readiness_audit.get("blocker_summary") or {}).get("final_answer_waiting_count_after_drafts"))
         or ((platform_playbook.get("summary") or {}).get("final_answer_missing_count"))
         or 0
     )
+    ready_now = bool(autofill_packet.get("ready_for_supervised_browser_autofill"))
+    selected_queue_remaining_answers = 0 if ready_now else global_remaining_answers
     position_count = len(rows)
     selector_miss_positions = sum(1 for row in rows if int(row.get("selector_miss_count") or 0) > 0)
     synthetic_selector_miss_positions = sum(
@@ -12096,8 +12101,10 @@ def _position_execution_summary(
         "final_submit_stop_position_count": final_submit_stop_positions,
         "final_submit_stop_count": sum(int(row.get("final_submit_stop_count") or 0) for row in rows),
         "unsafe_real_submit_position_count": unsafe_real_submit_positions,
-        "remaining_user_answer_count": remaining_answers,
-        "ready_for_supervised_autofill_now": bool(autofill_packet.get("ready_for_supervised_browser_autofill")),
+        "remaining_user_answer_count": selected_queue_remaining_answers,
+        "global_remaining_user_answer_count": global_remaining_answers,
+        "selected_queue_remaining_user_answer_count": selected_queue_remaining_answers,
+        "ready_for_supervised_autofill_now": ready_now,
         "ready_for_supervised_autofill_after_answers": ready_after_answers,
         "synthetic_packet_ready_for_supervised_autofill": bool(
             synthetic_autofill_packet.get("ready_for_supervised_browser_autofill")
@@ -12161,7 +12168,10 @@ def _position_execution_requirements(summary: dict[str, Any]) -> list[dict[str, 
         {
             "id": "confirmed_answer_gate",
             "status": "needs_user_answers" if summary.get("remaining_user_answer_count") else "achieved",
-            "evidence": evidence(("remaining_user_answers", summary.get("remaining_user_answer_count", 0))),
+            "evidence": evidence(
+                ("selected_queue_remaining_user_answers", summary.get("remaining_user_answer_count", 0)),
+                ("global_remaining_user_answers", summary.get("global_remaining_user_answer_count", 0)),
+            ),
         },
     ]
 

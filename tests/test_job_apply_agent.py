@@ -10544,6 +10544,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(audit["summary"]["selector_miss_position_count"], 0)
         self.assertEqual(audit["summary"]["final_submit_stop_position_count"], 2)
         self.assertEqual(audit["summary"]["remaining_user_answer_count"], 6)
+        self.assertEqual(audit["summary"]["global_remaining_user_answer_count"], 6)
         self.assertTrue(audit["summary"]["ready_for_supervised_autofill_after_answers"])
         self.assertEqual(
             {
@@ -10583,6 +10584,92 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(markdown_output.exists())
             self.assertTrue(html_output.exists())
             self.assertIn("100-Position Execution Audit", markdown_output.read_text(encoding="utf-8"))
+
+    def test_position_execution_audit_marks_filtered_ready_queue_as_ready_now(self) -> None:
+        packet = {
+            "status": "ready_for_supervised_browser_autofill",
+            "selected_count": 2,
+            "ready_for_supervised_browser_autofill": True,
+            "summary": {"local_synthetic_submit_count": 2, "selector_miss_count": 0},
+            "positions": [
+                {
+                    "index": 1,
+                    "packet_status": "ready_now",
+                    "handoff_status": "ready_to_open_for_supervised_autofill",
+                    "queue_status": "ready_for_live_closed_preflight",
+                    "live_status": "open_live_checked",
+                    "live_open_eligible": True,
+                    "position_key": "url:https://jobs.lever.co/example/1",
+                    "platform": "Lever",
+                    "company": "Example",
+                    "title": "SRE",
+                    "role_family": "SRE",
+                    "apply_url": "https://jobs.lever.co/example/1",
+                    "manifest_status": "autofill_ready_with_supervised_gates",
+                    "autofill_allowed": True,
+                    "browser_action_count": 1,
+                    "stop_action_count": 1,
+                    "final_submit_stop_count": 1,
+                    "manual_gate_count": 1,
+                    "local_check_selector_miss_count": 0,
+                    "local_synthetic_submit_count": 1,
+                    "local_synthetic_submit_selector_miss_count": 0,
+                    "real_platform_submission": False,
+                    "would_submit": False,
+                    "final_submit_allowed": False,
+                },
+                {
+                    "index": 2,
+                    "packet_status": "ready_now",
+                    "handoff_status": "ready_to_open_for_supervised_autofill",
+                    "queue_status": "ready_for_live_closed_preflight",
+                    "live_status": "open_live_checked",
+                    "live_open_eligible": True,
+                    "position_key": "url:https://jobs.greenhouse.io/example/2",
+                    "platform": "Greenhouse",
+                    "company": "Example",
+                    "title": "Platform Engineer",
+                    "role_family": "Platform",
+                    "apply_url": "https://jobs.greenhouse.io/example/2",
+                    "manifest_status": "autofill_ready_with_supervised_gates",
+                    "autofill_allowed": True,
+                    "browser_action_count": 1,
+                    "stop_action_count": 1,
+                    "final_submit_stop_count": 1,
+                    "manual_gate_count": 1,
+                    "local_check_selector_miss_count": 0,
+                    "local_synthetic_submit_count": 1,
+                    "local_synthetic_submit_selector_miss_count": 0,
+                    "real_platform_submission": False,
+                    "would_submit": False,
+                    "final_submit_allowed": False,
+                },
+            ],
+        }
+        goal_audit = {
+            "status": "needs_user_answers",
+            "goal_complete": False,
+            "blocker_summary": {"final_answer_waiting_count_after_drafts": 6},
+        }
+
+        audit = build_position_execution_audit(
+            packet,
+            platform_playbook={"summary": {"final_answer_missing_count": 6}},
+            goal_readiness_audit=goal_audit,
+            target_count=2,
+        )
+
+        self.assertEqual(audit["status"], "ready_for_supervised_autofill")
+        self.assertEqual(audit["summary"]["remaining_user_answer_count"], 0)
+        self.assertEqual(audit["summary"]["global_remaining_user_answer_count"], 6)
+        self.assertTrue(audit["summary"]["ready_for_supervised_autofill_now"])
+        self.assertEqual(
+            {
+                row["id"]: row["status"]
+                for row in audit["requirements"]
+            }["confirmed_answer_gate"],
+            "achieved",
+        )
 
     def test_apply_queue_autofill_packet_ready_writes_outputs(self) -> None:
         profile_payload = {
