@@ -1265,6 +1265,11 @@ def main() -> int:
         "--markdown-output",
         default=str(DEFAULT_FINAL_ANSWER_AUTOPILOT_MARKDOWN),
     )
+    final_answer_autopilot_parser.add_argument(
+        "--skip-final-audits",
+        action="store_true",
+        help="after a successful pipeline run, skip position/goal/safety/handoff audit refresh",
+    )
     final_answer_autopilot_parser.add_argument("--fail-on-not-ready", action="store_true")
 
     resume_after_answers_parser = subparsers.add_parser(
@@ -4274,6 +4279,22 @@ def _final_answer_autopilot_pipeline_command(args: argparse.Namespace) -> list[s
     return command
 
 
+def _final_answer_autopilot_audit_commands() -> list[tuple[str, list[str]]]:
+    return [
+        ("position_execution_audit", [sys.executable, "-m", "job_apply_agent", "position-execution-audit"]),
+        ("goal_audit", [sys.executable, "-m", "job_apply_agent", "goal-audit"]),
+        ("submission_safety_audit", [sys.executable, "-m", "job_apply_agent", "submission-safety-audit"]),
+        ("automation_handoff", [sys.executable, "-m", "job_apply_agent", "automation-handoff"]),
+    ]
+
+
+def _final_answer_autopilot_audit_command_rows() -> list[dict[str, str]]:
+    return [
+        {"name": name, "command": shlex.join(command)}
+        for name, command in _final_answer_autopilot_audit_commands()
+    ]
+
+
 def _write_final_answer_autopilot_report(
     report: dict[str, object],
     json_output: str | Path,
@@ -4304,13 +4325,40 @@ def _render_final_answer_autopilot_markdown(report: dict[str, object]) -> str:
         f"- validate: `{report.get('validate_command', '')}`",
         f"- pipeline: `{report.get('pipeline_command', '')}`",
         "",
-        "## Policy",
+        "## Final Audits",
         "",
-        "- answer text stored in report: false",
-        "- Telegram answer text sent: false",
-        f"- real applications submitted: {str(bool(report.get('submits_real_applications'))).lower()}",
-        "- final submit remains supervised: true",
+        f"- requested: {str(bool(report.get('final_audits_requested'))).lower()}",
     ]
+    audit_rows = report.get("final_audits") if isinstance(report.get("final_audits"), list) else []
+    if audit_rows:
+        for row in audit_rows:
+            if isinstance(row, dict):
+                lines.append(
+                    f"- {row.get('name')}: {row.get('status')} (exit {row.get('exit_code')})"
+                )
+    else:
+        lines.append("- no audit commands ran")
+    audit_command_rows = (
+        report.get("final_audit_commands")
+        if isinstance(report.get("final_audit_commands"), list)
+        else []
+    )
+    if audit_command_rows:
+        lines.extend(["", "Audit commands:"])
+        for row in audit_command_rows:
+            if isinstance(row, dict):
+                lines.append(f"- {row.get('name')}: `{row.get('command')}`")
+    lines.extend(
+        [
+            "",
+            "## Policy",
+            "",
+            "- answer text stored in report: false",
+            "- Telegram answer text sent: false",
+            f"- real applications submitted: {str(bool(report.get('submits_real_applications'))).lower()}",
+            "- final submit remains supervised: true",
+        ]
+    )
     return "\n".join(lines) + "\n"
 
 
@@ -4324,6 +4372,7 @@ def _final_answer_autopilot_base_report(
     pipeline_command: list[str],
     validate_exit_code: int | None = None,
     pipeline_exit_code: int | None = None,
+    final_audits: list[dict[str, object]] | None = None,
     reason: str = "",
 ) -> dict[str, object]:
     return {
@@ -4343,6 +4392,9 @@ def _final_answer_autopilot_base_report(
         "placeholder_line_count": placeholder_line_count,
         "validate_command": shlex.join(validate_command),
         "pipeline_command": shlex.join(pipeline_command),
+        "final_audits_requested": not bool(args.skip_final_audits),
+        "final_audit_commands": _final_answer_autopilot_audit_command_rows(),
+        "final_audits": final_audits or [],
         "validate_exit_code": validate_exit_code,
         "pipeline_exit_code": pipeline_exit_code,
         "stores_answer_text_in_report": False,
@@ -4350,6 +4402,31 @@ def _final_answer_autopilot_base_report(
         "submits_real_applications": False,
         "final_submit_remains_supervised": True,
     }
+
+
+def _run_final_answer_autopilot_final_audits() -> list[dict[str, object]]:
+    results: list[dict[str, object]] = []
+    for name, command in _final_answer_autopilot_audit_commands():
+        result = subprocess.run(
+            command,
+            cwd=Path.cwd(),
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        if result.stdout:
+            print(result.stdout, end="")
+        if result.stderr:
+            print(result.stderr, end="", file=sys.stderr)
+        results.append(
+            {
+                "name": name,
+                "status": "ok" if result.returncode == 0 else "failed",
+                "exit_code": result.returncode,
+                "command": shlex.join(command),
+            }
+        )
+    return results
 
 
 def _run_final_answer_autopilot(args: argparse.Namespace) -> int:
@@ -4445,19 +4522,32 @@ def _run_final_answer_autopilot(args: argparse.Namespace) -> int:
                     print(pipeline_result.stdout, end="")
                 if pipeline_result.stderr:
                     print(pipeline_result.stderr, end="", file=sys.stderr)
+                final_audits: list[dict[str, object]] = []
+                if pipeline_result.returncode == 0 and not args.skip_final_audits:
+                    final_audits = _run_final_answer_autopilot_final_audits()
+                final_audit_failed = any(row.get("exit_code") for row in final_audits)
                 report = _final_answer_autopilot_base_report(
                     args,
-                    status="pipeline_complete" if pipeline_result.returncode == 0 else "pipeline_failed",
+                    status=(
+                        "pipeline_complete"
+                        if pipeline_result.returncode == 0 and not final_audit_failed
+                        else "pipeline_complete_audit_failed"
+                        if pipeline_result.returncode == 0
+                        else "pipeline_failed"
+                    ),
                     attempt_count=attempt_count,
                     placeholder_line_count=0,
                     validate_command=validate_command,
                     pipeline_command=pipeline_command,
                     validate_exit_code=validate_result.returncode,
                     pipeline_exit_code=pipeline_result.returncode,
+                    final_audits=final_audits,
                     reason="pipeline command finished",
                 )
                 _write_final_answer_autopilot_report(report, args.json_output, args.markdown_output)
                 print(f"Final answer autopilot: {report['status']}")
+                if args.fail_on_not_ready and final_audit_failed:
+                    return 2
                 return pipeline_result.returncode if args.fail_on_not_ready else 0
         if not args.watch:
             return 2 if args.fail_on_not_ready else 0
