@@ -1414,6 +1414,7 @@ def main() -> int:
         "--synthetic-unblocker-proof-json",
         default=str(DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_JSON),
     )
+    goal_audit_parser.add_argument("--post-answer-pipeline-json", default=str(DEFAULT_POST_ANSWER_PIPELINE_JSON))
     goal_audit_parser.add_argument("--closed-jobs-json", default=str(DEFAULT_CLOSED_JOBS))
     goal_audit_parser.add_argument("--json-output", default=str(DEFAULT_GOAL_AUDIT_JSON))
     goal_audit_parser.add_argument("--markdown-output", default=str(DEFAULT_GOAL_AUDIT_MARKDOWN))
@@ -1627,6 +1628,7 @@ def main() -> int:
             fake_position_rehearsal=_load_optional_json(args.fake_position_rehearsal_json),
             autofill_batch_plan=_load_optional_json(args.autofill_batch_json),
             synthetic_unblocker_proof=_load_optional_json(args.synthetic_unblocker_proof_json),
+            post_answer_pipeline=_load_optional_json(args.post_answer_pipeline_json),
             closed_jobs=_load_optional_json(args.closed_jobs_json),
         )
         print(f"Wrote goal audit JSON to {args.json_output}")
@@ -3645,6 +3647,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
         fake_position_rehearsal=_load_optional_json(str(DEFAULT_FAKE_POSITION_REHEARSAL_JSON)),
         autofill_batch_plan=_load_optional_json(str(DEFAULT_AUTOFILL_BATCH_JSON)),
         synthetic_unblocker_proof=_load_optional_json(str(DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_JSON)),
+        post_answer_pipeline=_load_optional_json(str(DEFAULT_POST_ANSWER_PIPELINE_JSON)),
         closed_jobs=_load_optional_json(str(DEFAULT_CLOSED_JOBS)),
     )
     apply_queue = write_apply_queue_readiness(

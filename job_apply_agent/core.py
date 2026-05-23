@@ -12025,6 +12025,7 @@ def build_goal_readiness_audit(
     fake_position_rehearsal: dict[str, Any] | None = None,
     autofill_batch_plan: dict[str, Any] | None = None,
     synthetic_unblocker_proof: dict[str, Any] | None = None,
+    post_answer_pipeline: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     coverage_counts = gaps.get("coverage_counts") or {}
@@ -12036,6 +12037,9 @@ def build_goal_readiness_audit(
     autofill_batch = autofill_batch_plan or {}
     unblocker_proof = synthetic_unblocker_proof or {}
     unblocker_proof_summary = unblocker_proof.get("summary") or {}
+    post_answer = post_answer_pipeline or {}
+    post_answer_policy = post_answer.get("policy") or {}
+    post_answer_synthetic = post_answer.get("synthetic_queue_rehearsal") or {}
     synthetic = coverage_gate.get("synthetic") or {}
     readiness_counts = readiness.get("readiness_counts") or {}
     closed_count = _closed_registry_count(closed_jobs)
@@ -12115,6 +12119,27 @@ def build_goal_readiness_audit(
         and not unblocker_proof.get("real_platform_submission")
         and not unblocker_proof.get("writes_real_profile_or_memory")
     )
+    post_answer_synthetic_selected = int(post_answer_synthetic.get("autofill_packet_selected") or 0)
+    post_answer_synthetic_selector_misses = int(
+        post_answer_synthetic.get("autofill_packet_selector_misses") or 0
+    )
+    post_answer_synthetic_final_submit_stops = int(
+        post_answer_synthetic.get("autofill_packet_final_submit_stops") or 0
+    )
+    post_answer_synthetic_submits_real = bool(
+        post_answer.get("real_platform_submission")
+        or post_answer.get("submits_real_applications")
+        or post_answer_policy.get("submits_real_applications")
+        or post_answer_synthetic.get("real_platform_submission")
+        or post_answer_synthetic.get("submits_real_applications")
+    )
+    post_answer_synthetic_queue_ready = bool(
+        post_answer_synthetic.get("ready_for_supervised_browser_autofill")
+        and post_answer_synthetic_selected >= 100
+        and post_answer_synthetic_selector_misses == 0
+        and post_answer_synthetic_final_submit_stops >= 100
+        and not post_answer_synthetic_submits_real
+    )
     user_answers_ready = data_blocker_count == 0 and critical_waiting_count == 0
     supervised_autofill_ready = bool(
         research_ready
@@ -12150,7 +12175,7 @@ def build_goal_readiness_audit(
         {
             "id": "fake_candidate_100_position_rehearsal",
             "requirement": "Use fake candidate data to prove the automation path across at least 100 positions locally.",
-            "status": "achieved" if fake_rehearsal_ready else "needs_rehearsal",
+            "status": "achieved" if fake_rehearsal_ready or post_answer_synthetic_queue_ready else "needs_rehearsal",
             "evidence": {
                 "fake_rehearsal_runs": fake_rehearsal_runs,
                 "fake_rehearsal_submit_count": int(fake_rehearsal.get("actual_submit_count") or 0),
@@ -12158,6 +12183,11 @@ def build_goal_readiness_audit(
                 "fake_rehearsal_real_platform_submission": fake_rehearsal_real_submit,
                 "synthetic_run_count": int(synthetic.get("run_count") or 0),
                 "synthetic_eligible_submit_count": int(synthetic.get("eligible_submit_count") or 0),
+                "post_answer_synthetic_queue_rehearsal_ready": post_answer_synthetic_queue_ready,
+                "post_answer_synthetic_autofill_selected_count": post_answer_synthetic_selected,
+                "post_answer_synthetic_selector_miss_count": post_answer_synthetic_selector_misses,
+                "post_answer_synthetic_final_submit_stop_count": post_answer_synthetic_final_submit_stops,
+                "post_answer_synthetic_real_platform_submission": post_answer_synthetic_submits_real,
             },
         },
         {
@@ -12193,6 +12223,8 @@ def build_goal_readiness_audit(
                 "local_100_synthetic_apply_path_ready": bool(
                     unblocker_proof_summary.get("local_100_synthetic_apply_path_ready")
                 ),
+                "post_answer_pipeline_ready_for_workflow": bool(post_answer.get("ready_for_workflow")),
+                "post_answer_synthetic_queue_rehearsal_ready": post_answer_synthetic_queue_ready,
             },
         },
         {
@@ -12284,6 +12316,12 @@ def build_goal_readiness_audit(
             "synthetic_unblocker_existing_draft_update_count": int(
                 unblocker_proof_summary.get("existing_draft_update_count") or 0
             ),
+            "post_answer_pipeline_status": post_answer.get("status", ""),
+            "post_answer_synthetic_queue_rehearsal_ready": post_answer_synthetic_queue_ready,
+            "post_answer_synthetic_autofill_selected_count": post_answer_synthetic_selected,
+            "post_answer_synthetic_selector_miss_count": post_answer_synthetic_selector_misses,
+            "post_answer_synthetic_final_submit_stop_count": post_answer_synthetic_final_submit_stops,
+            "post_answer_synthetic_submits_real_applications": post_answer_synthetic_submits_real,
         },
         "data_blockers": _goal_coverage_status_rows(coverage_counts, GOAL_DATA_BLOCKER_STATUSES),
         "optional_gaps": _goal_coverage_status_rows(coverage_counts, GOAL_OPTIONAL_GAP_STATUSES),
@@ -12322,6 +12360,7 @@ def write_goal_readiness_audit(
     fake_position_rehearsal: dict[str, Any] | None = None,
     autofill_batch_plan: dict[str, Any] | None = None,
     synthetic_unblocker_proof: dict[str, Any] | None = None,
+    post_answer_pipeline: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     audit = build_goal_readiness_audit(
@@ -12334,6 +12373,7 @@ def write_goal_readiness_audit(
         fake_position_rehearsal=fake_position_rehearsal,
         autofill_batch_plan=autofill_batch_plan,
         synthetic_unblocker_proof=synthetic_unblocker_proof,
+        post_answer_pipeline=post_answer_pipeline,
         closed_jobs=closed_jobs,
     )
     json_path = Path(json_output)
@@ -12391,6 +12431,12 @@ def render_goal_readiness_audit_markdown(audit: dict[str, Any]) -> str:
             f"- synthetic final unblocker proof complete: {str(bool(summary.get('synthetic_unblocker_proof_complete'))).lower()}",
             f"- synthetic final unblockers: {summary.get('synthetic_final_unblocker_update_count', 0)}",
             f"- synthetic unblocker data blockers after: {summary.get('synthetic_unblocker_data_blocking_prompts_after', 0)}",
+            f"- post-answer pipeline status: {summary.get('post_answer_pipeline_status', '')}",
+            f"- post-answer synthetic queue ready: {str(bool(summary.get('post_answer_synthetic_queue_rehearsal_ready'))).lower()}",
+            "- post-answer synthetic selected: "
+            f"{summary.get('post_answer_synthetic_autofill_selected_count', 0)}, "
+            f"selector misses {summary.get('post_answer_synthetic_selector_miss_count', 0)}, "
+            f"final-submit stops {summary.get('post_answer_synthetic_final_submit_stop_count', 0)}",
             "",
             "## Data Blockers",
             "",
