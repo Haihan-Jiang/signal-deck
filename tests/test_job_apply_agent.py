@@ -20,6 +20,7 @@ from job_apply_agent.core import (
     build_application_research,
     build_collection_plan_from_coverage_gate,
     build_critical_input_answer_template,
+    build_critical_input_answer_update,
     build_critical_input_suggestion_packet,
     build_critical_input_status_report,
     build_question_export,
@@ -78,6 +79,7 @@ from job_apply_agent.core import (
     render_browser_action_manifest_markdown,
     render_closed_posting_preflight_markdown,
     render_critical_input_answer_template_markdown,
+    render_critical_input_answer_update_markdown,
     render_critical_input_suggestions_markdown,
     render_critical_input_status_markdown,
     render_browser_dom_execution_plan_markdown,
@@ -112,6 +114,7 @@ from job_apply_agent.core import (
     write_closed_posting_preflight,
     write_collection_plan,
     write_critical_input_answer_template,
+    write_critical_input_answer_update,
     write_critical_input_suggestion_packet,
     write_critical_input_status_report,
     write_question_export,
@@ -4280,6 +4283,164 @@ class JobApplyAgentTests(unittest.TestCase):
             status = build_critical_input_status_report(pack, critical_inputs_payload)
             self.assertEqual(status["summary"]["ready_to_apply_count"], 1)
 
+    def test_critical_input_answer_update_merges_compact_answers_safely(self) -> None:
+        learning_tasks = {
+            "tasks": [
+                {
+                    "group_key": "profile:zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "recommended_storage": "profile",
+                    "labels": ["Zip Code"],
+                    "platforms": ["Ashby"],
+                    "required_count": 4,
+                    "persist_allowed": True,
+                },
+                {
+                    "group_key": "answer_memory:citizenship_status:default_policy",
+                    "question": "What citizenship answers should automation use?",
+                    "recommended_storage": "answer_memory",
+                    "answer_scope": "category_default_policy",
+                    "suggested_answer_source": "requires_exact_user_confirmation",
+                    "approval_risk": "high",
+                    "labels": ["Are you a U.S. citizen?"],
+                    "platforms": ["Greenhouse"],
+                    "required_count": 2,
+                    "persist_allowed": True,
+                },
+                {
+                    "group_key": "supervised_confirmation:policy_acknowledgement",
+                    "question": "May automation mark applicant privacy acknowledgement?",
+                    "recommended_storage": "supervised_confirmation",
+                    "answer_scope": "supervised_only",
+                    "labels": ["Privacy policy"],
+                    "platforms": ["Lever"],
+                    "required_count": 1,
+                    "persist_allowed": False,
+                },
+            ],
+        }
+        pack = build_learning_approval_pack(learning_tasks, {})
+        template = build_critical_input_answer_template(pack)
+        updates = {
+            "profile_zip_or_postal_code": "98004",
+            "answer_memory_citizenship_status_default_policy": "I am a U.S. citizen.",
+            "supervised_confirmation_policy_acknowledgement": {
+                "user_answer": "Yes, I acknowledge.",
+                "approval_decision": "approved",
+            },
+            "unknown_input": "ignore me",
+        }
+
+        report = build_critical_input_answer_update(template, updates, approve=True)
+        updated_rows = {
+            row["input_id"]: row for row in report["updated_answers"]["critical_inputs"]
+        }
+
+        self.assertEqual(report["summary"]["matched_update_count"], 3)
+        self.assertEqual(report["summary"]["unknown_update_count"], 1)
+        self.assertEqual(report["summary"]["answer_updated_count"], 2)
+        self.assertEqual(report["summary"]["approval_updated_count"], 1)
+        self.assertEqual(report["summary"]["high_risk_approval_blocked_count"], 1)
+        self.assertEqual(report["summary"]["supervised_skipped_count"], 1)
+        self.assertEqual(updated_rows["profile_zip_or_postal_code"]["approval_decision"], "approved")
+        self.assertEqual(updated_rows["profile_zip_or_postal_code"]["user_answer"], "98004")
+        self.assertEqual(
+            updated_rows["answer_memory_citizenship_status_default_policy"]["user_answer"],
+            "I am a U.S. citizen.",
+        )
+        self.assertEqual(
+            updated_rows["answer_memory_citizenship_status_default_policy"]["approval_decision"],
+            "",
+        )
+        self.assertEqual(
+            updated_rows["supervised_confirmation_policy_acknowledgement"]["user_answer"],
+            "",
+        )
+        markdown = render_critical_input_answer_update_markdown(report)
+        self.assertIn("High-risk approvals blocked: 1", markdown)
+
+    def test_critical_input_answer_update_can_approve_explicit_high_risk_confirmation(self) -> None:
+        learning_tasks = {
+            "tasks": [
+                {
+                    "group_key": "answer_memory:citizenship_status:default_policy",
+                    "question": "What citizenship answers should automation use?",
+                    "recommended_storage": "answer_memory",
+                    "answer_scope": "category_default_policy",
+                    "suggested_answer_source": "requires_exact_user_confirmation",
+                    "approval_risk": "high",
+                    "labels": ["Are you a U.S. citizen?"],
+                    "platforms": ["Greenhouse"],
+                    "required_count": 2,
+                    "persist_allowed": True,
+                }
+            ],
+        }
+        pack = build_learning_approval_pack(learning_tasks, {})
+        template = build_critical_input_answer_template(pack)
+        updates = {
+            "answer_memory_citizenship_status_default_policy": {
+                "user_answer": "I am a U.S. citizen.",
+                "approval_decision": "approved",
+                "high_risk_user_confirmed": True,
+            }
+        }
+
+        report = build_critical_input_answer_update(template, updates)
+        row = report["updated_answers"]["critical_inputs"][0]
+
+        self.assertEqual(row["approval_decision"], "approved")
+        self.assertEqual(report["summary"]["approval_updated_count"], 1)
+        self.assertEqual(report["summary"]["high_risk_approval_blocked_count"], 0)
+        self.assertEqual(report["summary"]["ready_after_update_count"], 1)
+
+    def test_write_critical_input_answer_update_updates_both_mirrors(self) -> None:
+        learning_tasks = {
+            "tasks": [
+                {
+                    "group_key": "profile:zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "recommended_storage": "profile",
+                    "labels": ["Zip Code"],
+                    "platforms": ["Ashby"],
+                    "required_count": 4,
+                    "persist_allowed": True,
+                }
+            ],
+        }
+        pack = build_learning_approval_pack(learning_tasks, {})
+        template = build_critical_input_answer_template(pack)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            answers_path = Path(temp_dir) / "answers.json"
+            answers_md_path = Path(temp_dir) / "answers.md"
+            updates_path = Path(temp_dir) / "updates.json"
+            report_path = Path(temp_dir) / "report.json"
+            report_md_path = Path(temp_dir) / "report.md"
+            answers_path.write_text(json.dumps(template), encoding="utf-8")
+            updates_path.write_text(
+                json.dumps({"profile_zip_or_postal_code": "98004"}),
+                encoding="utf-8",
+            )
+
+            report = write_critical_input_answer_update(
+                answers_path,
+                json.loads(updates_path.read_text(encoding="utf-8")),
+                report_path,
+                report_md_path,
+                answers_markdown_output=answers_md_path,
+                approve=True,
+            )
+            saved = json.loads(answers_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(report["summary"]["ready_after_update_count"], 1)
+            self.assertEqual(saved["critical_inputs"][0]["user_answer"], "98004")
+            self.assertEqual(saved["answers"][0]["user_answer"], "98004")
+            self.assertEqual(saved["critical_inputs"][0]["approval_decision"], "approved")
+            self.assertTrue(report_path.exists())
+            self.assertTrue(report_md_path.exists())
+            self.assertTrue(answers_md_path.exists())
+
     def test_critical_input_status_report_groups_waiting_ready_and_supervised(self) -> None:
         learning_tasks = {
             "tasks": [
@@ -6720,6 +6881,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("needs_user_answers", html)
         self.assertIn("Critical Input Suggestions", html)
         self.assertIn("profile_zip_or_postal_code", html)
+        self.assertIn("critical-inputs-update", html)
         self.assertIn("Fake Learning Probe", html)
         self.assertIn("Fake Critical Input Probe", html)
         self.assertIn("Fake Position Rehearsal", html)

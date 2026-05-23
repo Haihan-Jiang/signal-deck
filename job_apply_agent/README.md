@@ -420,6 +420,33 @@ Copy only truthful reviewed values into `critical_input_answers_latest.json`;
 high-risk legal, citizenship, work-permit, health, and recording-consent rows
 still require exact user confirmation.
 
+For faster intake, put the answers you confirm into a compact JSON map:
+
+```json
+{
+  "profile_zip_or_postal_code": "98004",
+  "answer_memory_citizenship_status_default_policy": {
+    "user_answer": "Exact truthful answer to reuse",
+    "approval_decision": "approved",
+    "high_risk_user_confirmed": true
+  }
+}
+```
+
+Then merge it into the critical input answer file:
+
+```bash
+python3 -m job_apply_agent critical-inputs-update \
+  --updates /path/to/confirmed_critical_input_answers.json \
+  --approve
+```
+
+`--approve` only auto-approves non-high-risk rows. High-risk rows are filled
+but not approved unless the update object includes
+`high_risk_user_confirmed: true` with `approval_decision: approved`, or the
+command is run with `--approve-high-risk`. Supervised-only rows are skipped and
+remain browser review steps.
+
 ```bash
 python3 -m job_apply_agent critical-inputs-status
 ```

@@ -36,6 +36,7 @@ from .core import (
     write_browser_dom_harness,
     write_closed_posting_preflight,
     write_collection_plan,
+    write_critical_input_answer_update,
     write_form_fill_plan,
     write_fake_learning_probe,
     write_fake_critical_input_probe,
@@ -92,6 +93,8 @@ DEFAULT_CRITICAL_INPUT_STATUS_JSON = Path(__file__).with_name("outbox") / "criti
 DEFAULT_CRITICAL_INPUT_STATUS_MARKDOWN = Path(__file__).with_name("outbox") / "critical_input_status_latest.md"
 DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON = Path(__file__).with_name("outbox") / "critical_input_suggestions_latest.json"
 DEFAULT_CRITICAL_INPUT_SUGGESTIONS_MARKDOWN = Path(__file__).with_name("outbox") / "critical_input_suggestions_latest.md"
+DEFAULT_CRITICAL_INPUT_UPDATE_JSON = Path(__file__).with_name("outbox") / "critical_input_update_latest.json"
+DEFAULT_CRITICAL_INPUT_UPDATE_MARKDOWN = Path(__file__).with_name("outbox") / "critical_input_update_latest.md"
 DEFAULT_FAKE_CRITICAL_INPUT_PROBE_JSON = Path(__file__).with_name("outbox") / "fake_critical_input_probe_latest.json"
 DEFAULT_FAKE_CRITICAL_INPUT_PROBE_MARKDOWN = Path(__file__).with_name("outbox") / "fake_critical_input_probe_latest.md"
 DEFAULT_FAKE_CRITICAL_INPUT_ANSWERS_JSON = Path(__file__).with_name("outbox") / "fake_critical_input_answers_latest.json"
@@ -409,6 +412,32 @@ def main() -> int:
     critical_inputs_suggestions_parser.add_argument(
         "--markdown-output",
         default=str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_MARKDOWN),
+    )
+
+    critical_inputs_update_parser = subparsers.add_parser(
+        "critical-inputs-update",
+        help="merge a compact JSON answer map into the critical input answer file",
+    )
+    critical_inputs_update_parser.add_argument("--answers", default=str(DEFAULT_CRITICAL_INPUT_ANSWERS_JSON))
+    critical_inputs_update_parser.add_argument(
+        "--answers-markdown-output",
+        default=str(DEFAULT_CRITICAL_INPUT_ANSWERS_MARKDOWN),
+    )
+    critical_inputs_update_parser.add_argument("--updates", required=True)
+    critical_inputs_update_parser.add_argument("--json-output", default=str(DEFAULT_CRITICAL_INPUT_UPDATE_JSON))
+    critical_inputs_update_parser.add_argument(
+        "--markdown-output",
+        default=str(DEFAULT_CRITICAL_INPUT_UPDATE_MARKDOWN),
+    )
+    critical_inputs_update_parser.add_argument(
+        "--approve",
+        action="store_true",
+        help="approve non-high-risk rows while merging supplied answers",
+    )
+    critical_inputs_update_parser.add_argument(
+        "--approve-high-risk",
+        action="store_true",
+        help="also approve high-risk rows supplied in this update",
     )
 
     apply_learning_parser = subparsers.add_parser(
@@ -1177,6 +1206,36 @@ def main() -> int:
         print(f"Direct suggestions: {packet.get('direct_suggestion_count', 0)}")
         print(f"Exact user answers required: {packet.get('exact_user_answer_required_count', 0)}")
         print(f"Supervised only: {packet.get('supervised_only_count', 0)}")
+        return 0
+
+    if args.command == "critical-inputs-update":
+        answers_path = Path(args.answers)
+        updates_path = Path(args.updates)
+        if not answers_path.exists():
+            raise FileNotFoundError(f"critical input answers not found: {args.answers}")
+        if not updates_path.exists():
+            raise FileNotFoundError(f"critical input updates not found: {args.updates}")
+        report = write_critical_input_answer_update(
+            answers_path,
+            json.loads(updates_path.read_text(encoding="utf-8")),
+            args.json_output,
+            args.markdown_output,
+            answers_markdown_output=args.answers_markdown_output,
+            approve=args.approve,
+            approve_high_risk=args.approve_high_risk,
+        )
+        summary = report.get("summary") or {}
+        print(f"Updated critical input answers at {args.answers}")
+        print(f"Wrote critical input update JSON to {args.json_output}")
+        print(f"Wrote critical input update Markdown to {args.markdown_output}")
+        print(f"Matched updates: {summary.get('matched_update_count', 0)}")
+        print(f"Answers updated: {summary.get('answer_updated_count', 0)}")
+        print(f"Approvals updated: {summary.get('approval_updated_count', 0)}")
+        print(f"High-risk approvals blocked: {summary.get('high_risk_approval_blocked_count', 0)}")
+        print(f"Supervised skipped: {summary.get('supervised_skipped_count', 0)}")
+        print(f"Unknown updates: {summary.get('unknown_update_count', 0)}")
+        print(f"Ready after update: {summary.get('ready_after_update_count', 0)}")
+        print(f"Waiting after update: {summary.get('waiting_after_update_count', 0)}")
         return 0
 
     if args.command == "apply-learning":

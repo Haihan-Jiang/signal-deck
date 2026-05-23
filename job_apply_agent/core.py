@@ -4155,6 +4155,7 @@ def build_critical_input_answer_template(approval_pack: dict[str, Any]) -> dict[
         "instructions": (
             "Fill critical_inputs.user_answer and set approval_decision=approved only for truthful reusable answers. "
             "The answers field is a legacy mirror; editing either critical_inputs or answers is accepted. "
+            "You can also merge a compact answer map with critical-inputs-update. "
             "Leave supervised_browser_review_only rows blank; they stay browser-supervised."
         ),
         "critical_inputs": answers,
@@ -4332,8 +4333,9 @@ def build_critical_input_suggestion_packet(
         "supervised_only_count": len(supervised_only),
         "instructions": (
             "Review suggested_answer values, then copy only truthful approved values into "
-            "critical_input_answers_latest.json critical_inputs[].user_answer and set "
-            "approval_decision=approved. High-risk rows require exact user confirmation."
+            "critical_input_answers_latest.json with critical-inputs-update, or edit "
+            "critical_inputs[].user_answer and set approval_decision=approved. "
+            "High-risk rows require exact user confirmation."
         ),
         "critical_inputs": rows,
         "policy": {
@@ -4364,6 +4366,230 @@ def write_critical_input_suggestion_packet(
     json_path.write_text(json.dumps(packet, ensure_ascii=True, indent=2), encoding="utf-8")
     markdown_path.write_text(render_critical_input_suggestions_markdown(packet), encoding="utf-8")
     return packet
+
+
+def build_critical_input_answer_update(
+    answers_payload: dict[str, Any],
+    updates_payload: dict[str, Any] | list[Any],
+    approve: bool = False,
+    approve_high_risk: bool = False,
+) -> dict[str, Any]:
+    if not isinstance(answers_payload, dict):
+        raise ValueError("critical input answers must be a JSON object")
+    rows = _critical_input_answer_rows(answers_payload)
+    row_index = _critical_input_answer_match_index(rows)
+    entries = _critical_input_update_entries(updates_payload)
+    pending_updates: dict[str, dict[str, Any]] = {}
+    report_rows: list[dict[str, Any]] = []
+    unknown_updates: list[dict[str, Any]] = []
+
+    for entry in entries:
+        match_key = _critical_input_update_match_key(entry)
+        row = row_index.get(match_key) if match_key else None
+        if not row and match_key:
+            row = row_index.get(_normalize(match_key))
+        if not row:
+            unknown_updates.append(
+                {
+                    "match_key": match_key,
+                    "user_answer": entry.get("user_answer"),
+                    "reason": "unknown_critical_input",
+                }
+            )
+            continue
+
+        input_id = str(row.get("input_id") or "")
+        if not input_id:
+            input_id = _critical_input_answer_id(row, len(pending_updates) + 1)
+        supervised_only = row.get("input_type") == "supervised_browser_review_only"
+        high_risk = _critical_input_is_high_risk(row)
+        user_answer = _critical_input_update_answer(entry)
+        requested_approval = _critical_input_update_requests_approval(entry, approve)
+        high_risk_confirmed = _critical_input_update_high_risk_confirmed(entry)
+        approval_blocked = bool(
+            high_risk
+            and requested_approval
+            and not approve_high_risk
+            and not high_risk_confirmed
+        )
+        if supervised_only:
+            report_rows.append(
+                {
+                    "input_id": input_id,
+                    "group_key": row.get("group_key"),
+                    "question": row.get("question"),
+                    "status": "skipped",
+                    "reason": "supervised_browser_review_only",
+                    "answer_updated": False,
+                    "approval_updated": False,
+                }
+            )
+            continue
+
+        update_fields = pending_updates.setdefault(input_id, {})
+        answer_updated = False
+        approval_updated = False
+        if user_answer is not None and str(user_answer).strip():
+            update_fields["user_answer"] = str(user_answer).strip()
+            answer_updated = True
+        if requested_approval and not approval_blocked:
+            update_fields["approval_decision"] = "approved"
+            approval_updated = True
+        report_rows.append(
+            {
+                "input_id": input_id,
+                "group_key": row.get("group_key"),
+                "question": row.get("question"),
+                "status": "updated" if answer_updated or approval_updated else "matched_no_change",
+                "reason": "high_risk_confirmation_required" if approval_blocked else "",
+                "answer_updated": answer_updated,
+                "approval_updated": approval_updated,
+                "high_risk": high_risk,
+                "high_risk_user_confirmed": high_risk_confirmed,
+            }
+        )
+
+    updated_answers = _critical_input_payload_with_updates(answers_payload, pending_updates)
+    updated_rows = _critical_input_answer_rows(updated_answers)
+    status_counts = _count_by(
+        [{"status": _critical_input_answer_status(row)} for row in updated_rows],
+        "status",
+    )
+    ready_after_update = int(status_counts.get("ready_to_apply") or 0)
+    waiting_after_update = sum(
+        int(status_counts.get(status) or 0)
+        for status in ["waiting_for_answer", "waiting_for_approval", "approved_missing_answer"]
+    )
+    high_risk_waiting = sum(
+        1
+        for row in updated_rows
+        if _critical_input_is_high_risk(row)
+        and str(row.get("user_answer") or "").strip()
+        and not _approval_decision_is_approved(row.get("approval_decision"))
+    )
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "critical_input_answer_update",
+        "updated_answers": updated_answers,
+        "summary": {
+            "update_entry_count": len(entries),
+            "matched_update_count": len(report_rows),
+            "unknown_update_count": len(unknown_updates),
+            "answer_updated_count": sum(1 for row in report_rows if row.get("answer_updated")),
+            "approval_updated_count": sum(1 for row in report_rows if row.get("approval_updated")),
+            "high_risk_approval_blocked_count": sum(
+                1 for row in report_rows if row.get("reason") == "high_risk_confirmation_required"
+            ),
+            "high_risk_waiting_count": high_risk_waiting,
+            "supervised_skipped_count": sum(
+                1 for row in report_rows if row.get("reason") == "supervised_browser_review_only"
+            ),
+            "ready_after_update_count": ready_after_update,
+            "waiting_after_update_count": waiting_after_update,
+            "approve_flag": bool(approve),
+            "approve_high_risk_flag": bool(approve_high_risk),
+        },
+        "rows": report_rows,
+        "unknown_updates": unknown_updates,
+        "policy": {
+            "writes_real_profile_or_memory": False,
+            "submits_real_applications": False,
+            "high_risk_requires_user_confirmation": not bool(approve_high_risk),
+            "supervised_browser_review_only_skipped": True,
+            "final_submit_remains_supervised": True,
+        },
+    }
+
+
+def write_critical_input_answer_update(
+    answers_path: str | Path,
+    updates_payload: dict[str, Any] | list[Any],
+    json_output: str | Path,
+    markdown_output: str | Path,
+    answers_markdown_output: str | Path | None = None,
+    approve: bool = False,
+    approve_high_risk: bool = False,
+) -> dict[str, Any]:
+    path = Path(answers_path)
+    answers_payload = _read_json_file(path)
+    if not isinstance(answers_payload, dict):
+        raise ValueError("critical input answers file must be a JSON object")
+    report = build_critical_input_answer_update(
+        answers_payload,
+        updates_payload,
+        approve=approve,
+        approve_high_risk=approve_high_risk,
+    )
+    path.write_text(
+        json.dumps(report.get("updated_answers", {}), ensure_ascii=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    if answers_markdown_output:
+        Path(answers_markdown_output).write_text(
+            render_critical_input_answer_template_markdown(report.get("updated_answers", {})),
+            encoding="utf-8",
+        )
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    report_for_file = {key: value for key, value in report.items() if key != "updated_answers"}
+    report_for_file["answers_path"] = str(path)
+    if answers_markdown_output:
+        report_for_file["answers_markdown_path"] = str(answers_markdown_output)
+    json_path.write_text(json.dumps(report_for_file, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(render_critical_input_answer_update_markdown(report_for_file), encoding="utf-8")
+    return report
+
+
+def render_critical_input_answer_update_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    lines = [
+        "# Critical Input Answer Update",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        f"Update entries: {summary.get('update_entry_count', 0)}",
+        f"Matched updates: {summary.get('matched_update_count', 0)}",
+        f"Answers updated: {summary.get('answer_updated_count', 0)}",
+        f"Approvals updated: {summary.get('approval_updated_count', 0)}",
+        f"High-risk approvals blocked: {summary.get('high_risk_approval_blocked_count', 0)}",
+        f"High-risk waiting: {summary.get('high_risk_waiting_count', 0)}",
+        f"Supervised skipped: {summary.get('supervised_skipped_count', 0)}",
+        f"Unknown updates: {summary.get('unknown_update_count', 0)}",
+        f"Ready after update: {summary.get('ready_after_update_count', 0)}",
+        f"Waiting after update: {summary.get('waiting_after_update_count', 0)}",
+        "",
+        "## Rows",
+        "",
+    ]
+    rows = report.get("rows") or []
+    if not rows:
+        lines.append("- None")
+    for row in rows[:80]:
+        detail = row.get("reason") or row.get("status")
+        lines.append(
+            "- {input_id}: {detail}".format(
+                input_id=row.get("input_id"),
+                detail=detail,
+            )
+        )
+    unknown = report.get("unknown_updates") or []
+    if unknown:
+        lines.extend(["", "## Unknown Updates", ""])
+        for row in unknown[:40]:
+            lines.append(f"- {row.get('match_key')}: {row.get('reason')}")
+    lines.extend(
+        [
+            "",
+            "## Policy",
+            "",
+            "- This command only edits the critical input answer file.",
+            "- It does not write profile, answer memory, or real applications.",
+            "- High-risk rows need explicit user confirmation before approval.",
+            "- Supervised-only rows remain browser review steps.",
+        ]
+    )
+    return "\n".join(lines) + "\n"
 
 
 def render_critical_input_suggestions_markdown(packet: dict[str, Any]) -> str:
@@ -4691,6 +4917,7 @@ def build_critical_input_status_report(
         "status_counts": status_counts,
         "rows": rows,
         "next_commands": [
+            "python3 -m job_apply_agent critical-inputs-update --updates <confirmed_answers.json> --approve",
             "python3 -m job_apply_agent apply-critical-inputs --answers job_apply_agent/outbox/critical_input_answers_latest.json --dry-run",
             "python3 -m job_apply_agent apply-critical-inputs --answers job_apply_agent/outbox/critical_input_answers_latest.json",
             "python3 -m job_apply_agent gaps && python3 -m job_apply_agent readiness && python3 -m job_apply_agent export-questions",
@@ -5008,6 +5235,138 @@ def _critical_input_answer_rows(payload: dict[str, Any]) -> list[dict[str, Any]]
                 if field not in existing:
                     existing[field] = value
     return [rows_by_key[key] for key in ordered_keys]
+
+
+def _critical_input_update_entries(payload: dict[str, Any] | list[Any]) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    if isinstance(payload, list):
+        for item in payload:
+            if isinstance(item, dict):
+                entries.append(dict(item))
+        return entries
+    if not isinstance(payload, dict):
+        raise ValueError("critical input updates must be a JSON object or list")
+
+    reserved = {
+        "answers",
+        "critical_inputs",
+        "updates",
+        "generated_at",
+        "source",
+        "instructions",
+        "policy",
+    }
+    for field in ["updates", "critical_inputs", "answers"]:
+        value = payload.get(field)
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    entries.append(dict(item))
+        elif isinstance(value, dict):
+            entries.extend(_critical_input_update_entries_from_mapping(value))
+    for key, value in payload.items():
+        if key in reserved:
+            continue
+        entries.extend(_critical_input_update_entries_from_mapping({key: value}))
+    return entries
+
+
+def _critical_input_update_entries_from_mapping(mapping: dict[str, Any]) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for key, value in mapping.items():
+        if isinstance(value, dict):
+            entry = dict(value)
+            entry.setdefault("match_key", key)
+            entry.setdefault("input_id", key)
+        else:
+            entry = {"match_key": key, "input_id": key, "user_answer": value}
+        entries.append(entry)
+    return entries
+
+
+def _critical_input_answer_match_index(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    index: dict[str, dict[str, Any]] = {}
+    for position, row in enumerate(rows, start=1):
+        keys = {
+            str(row.get("input_id") or ""),
+            str(row.get("group_key") or ""),
+            str(row.get("question") or ""),
+            _critical_input_task_key(row),
+            _critical_input_answer_id(row, position),
+        }
+        for key in keys:
+            if not key:
+                continue
+            index.setdefault(key, row)
+            normalized = _normalize(key)
+            if normalized:
+                index.setdefault(normalized, row)
+    return index
+
+
+def _critical_input_update_match_key(entry: dict[str, Any]) -> str:
+    for field in ["input_id", "id", "group_key", "match_key", "question"]:
+        value = str(entry.get(field) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _critical_input_update_answer(entry: dict[str, Any]) -> str | None:
+    for field in ["user_answer", "answer", "value"]:
+        if field in entry:
+            value = entry.get(field)
+            if value is None:
+                return None
+            return str(value)
+    return None
+
+
+def _critical_input_update_requests_approval(entry: dict[str, Any], default_approve: bool) -> bool:
+    for field in ["approval_decision", "approve", "approved"]:
+        if field in entry:
+            return _approval_decision_is_approved(entry.get(field))
+    return bool(default_approve)
+
+
+def _critical_input_update_high_risk_confirmed(entry: dict[str, Any]) -> bool:
+    for field in [
+        "high_risk_user_confirmed",
+        "high_risk_confirmed",
+        "explicit_user_confirmation",
+        "user_confirmed",
+    ]:
+        if _approval_decision_is_approved(entry.get(field)):
+            return True
+    return False
+
+
+def _critical_input_is_high_risk(item: dict[str, Any]) -> bool:
+    return item.get("input_type") == "high_risk_exact_confirmation" or str(
+        item.get("approval_risk") or ""
+    ).lower() == "high"
+
+
+def _critical_input_payload_with_updates(
+    payload: dict[str, Any],
+    updates_by_input_id: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    updated = json.loads(json.dumps(payload))
+    for field in ["critical_inputs", "answers"]:
+        rows = updated.get(field)
+        if not isinstance(rows, list):
+            continue
+        for position, row in enumerate(rows, start=1):
+            if not isinstance(row, dict):
+                continue
+            input_id = str(row.get("input_id") or _critical_input_answer_id(row, position))
+            update = updates_by_input_id.get(input_id)
+            if not update:
+                continue
+            for update_field in ["user_answer", "approval_decision"]:
+                if update_field in update:
+                    row[update_field] = update[update_field]
+    return updated
 
 
 def _critical_input_answer_id(item: dict[str, Any], index: int) -> str:
@@ -7923,6 +8282,7 @@ def build_question_export(
         "fake_position_rehearsal": fake_position_rehearsal_rows,
         "goal_audit": goal_audit_rows,
         "critical_input_suggestions": critical_suggestion_rows,
+        "critical_input_suggestion_instructions": (critical_input_suggestions or {}).get("instructions", ""),
         "answer_memory": answer_memory_rows,
         "closed_postings": closed_posting_rows,
         "coverage_counts": gaps.get("coverage_counts", {}),
@@ -8181,6 +8541,15 @@ def render_question_export_html(export: dict[str, Any]) -> str:
         ),
         "</section>",
         "<section><h2>Critical Input Suggestions</h2>",
+        _html_key_value_table(
+            {
+                "Instructions": export.get("critical_input_suggestion_instructions", ""),
+                "Compact update command": (
+                    "python3 -m job_apply_agent critical-inputs-update "
+                    "--updates <confirmed_answers.json> --approve"
+                ),
+            }
+        ),
         _html_table(
             [
                 "Input ID",
