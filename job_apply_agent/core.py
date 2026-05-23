@@ -14500,6 +14500,9 @@ def build_goal_readiness_audit(
     position_audit_remaining_answers = int(
         position_audit_summary.get("remaining_user_answer_count") or 0
     )
+    position_audit_global_remaining_answers = int(
+        position_audit_summary.get("global_remaining_user_answer_count") or 0
+    )
     position_audit_ready = bool(
         position_audit_target >= 100
         and position_audit_count >= position_audit_target
@@ -14511,11 +14514,22 @@ def build_goal_readiness_audit(
         and position_audit_final_submit_stops >= position_audit_target
     )
     user_answers_ready = data_blocker_count == 0 and critical_waiting_count == 0
-    supervised_autofill_ready = bool(
+    selected_queue_supervised_autofill_ready = bool(
+        research_ready
+        and synthetic_ready
+        and autofill_batch_ready
+        and position_audit_ready
+        and position_audit_remaining_answers == 0
+        and preflight_ready
+        and playbook_ready
+        and not playbook_real_platform_submission
+    )
+    supervised_autofill_ready_after_user_answers = bool(
         research_ready
         and synthetic_ready
         and autofill_batch_ready
         and user_answers_ready
+        and position_audit_ready
         and synthetic_selector_misses == 0
     )
     requirements = [
@@ -14688,8 +14702,10 @@ def build_goal_readiness_audit(
         if item.get("status") not in {"achieved", "supervised_policy_gate"}
     ]
     status = (
-        "supervised_autofill_ready"
-        if supervised_autofill_ready
+        "selected_100_supervised_autofill_ready"
+        if selected_queue_supervised_autofill_ready
+        else "supervised_autofill_ready_after_user_answers"
+        if supervised_autofill_ready_after_user_answers
         else "needs_user_answers"
         if research_ready and synthetic_ready and data_blocker_count > 0
         else "needs_research_or_rehearsal"
@@ -14698,8 +14714,9 @@ def build_goal_readiness_audit(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source": "goal_readiness_audit",
         "status": status,
-        "goal_complete": bool(supervised_autofill_ready and not missing_requirements),
-        "supervised_autofill_ready_after_user_answers": supervised_autofill_ready,
+        "goal_complete": bool(selected_queue_supervised_autofill_ready and not missing_requirements),
+        "selected_queue_supervised_autofill_ready": selected_queue_supervised_autofill_ready,
+        "supervised_autofill_ready_after_user_answers": supervised_autofill_ready_after_user_answers,
         "can_unattended_submit_real_employers": False,
         "requirements": requirements,
         "missing_requirement_count": len(missing_requirements),
@@ -14784,6 +14801,9 @@ def build_goal_readiness_audit(
             "position_execution_unsafe_real_submit_positions": position_audit_unsafe_real_submit,
             "position_execution_final_submit_stop_positions": position_audit_final_submit_stops,
             "position_execution_remaining_user_answers": position_audit_remaining_answers,
+            "position_execution_global_remaining_user_answers": position_audit_global_remaining_answers,
+            "selected_queue_supervised_autofill_ready": selected_queue_supervised_autofill_ready,
+            "supervised_autofill_ready_after_user_answers": supervised_autofill_ready_after_user_answers,
         },
         "data_blockers": _goal_coverage_status_rows(coverage_counts, GOAL_DATA_BLOCKER_STATUSES),
         "optional_gaps": _goal_coverage_status_rows(coverage_counts, GOAL_OPTIONAL_GAP_STATUSES),
@@ -14862,6 +14882,8 @@ def render_goal_readiness_audit_markdown(audit: dict[str, Any]) -> str:
         f"Generated: {audit.get('generated_at')}",
         f"Status: {audit.get('status')}",
         f"Goal complete: {str(bool(audit.get('goal_complete'))).lower()}",
+        f"Selected 100 supervised autofill ready: {str(bool(audit.get('selected_queue_supervised_autofill_ready'))).lower()}",
+        f"Supervised autofill ready after user answers: {str(bool(audit.get('supervised_autofill_ready_after_user_answers'))).lower()}",
         "Real employer unattended submit: false",
         "",
         "## Requirement Evidence",
@@ -14936,6 +14958,8 @@ def render_goal_readiness_audit_markdown(audit: dict[str, Any]) -> str:
             f"local submits {summary.get('platform_playbook_selected_local_synthetic_submit_count', 0)}, "
             f"selector misses {summary.get('platform_playbook_selector_miss_count', 0)}",
             f"- position execution audit ready: {str(bool(summary.get('position_execution_ready'))).lower()}",
+            f"- selected 100 supervised autofill ready: {str(bool(summary.get('selected_queue_supervised_autofill_ready'))).lower()}",
+            f"- supervised autofill after user answers: {str(bool(summary.get('supervised_autofill_ready_after_user_answers'))).lower()}",
             "- position execution audited: "
             f"{summary.get('position_execution_position_count', 0)} / "
             f"{summary.get('position_execution_target_count', 0)}, "
@@ -14943,6 +14967,8 @@ def render_goal_readiness_audit_markdown(audit: dict[str, Any]) -> str:
             f"synthetic ready {summary.get('position_execution_synthetic_ready_now_count', 0)}, "
             f"selector misses {summary.get('position_execution_selector_miss_count', 0)}, "
             f"final-submit stops {summary.get('position_execution_final_submit_stop_positions', 0)}",
+            f"- position execution selected-queue remaining answers: {summary.get('position_execution_remaining_user_answers', 0)}",
+            f"- position execution global remaining answers: {summary.get('position_execution_global_remaining_user_answers', 0)}",
             "",
             "## Data Blockers",
             "",

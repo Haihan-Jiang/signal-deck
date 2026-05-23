@@ -9325,6 +9325,39 @@ class JobApplyAgentTests(unittest.TestCase):
         )
         self.assertEqual(position_requirement["status"], "achieved")
         self.assertEqual(position_requirement["evidence"]["position_count"], 100)
+        ready_position_execution_audit = json.loads(json.dumps(position_execution_audit))
+        ready_position_execution_audit["status"] = "ready_for_supervised_autofill"
+        ready_position_execution_audit["summary"]["remaining_user_answer_count"] = 0
+        ready_position_execution_audit["summary"]["global_remaining_user_answer_count"] = 2
+        ready_position_execution_audit["summary"]["ready_for_supervised_autofill_now"] = True
+        selected_ready_audit = build_goal_readiness_audit(
+            coverage_gate,
+            gaps,
+            readiness,
+            critical_input_status=critical_status,
+            critical_input_updates_readiness=critical_updates_readiness,
+            fake_critical_input_probe=fake_critical,
+            fake_position_rehearsal=fake_rehearsal,
+            autofill_batch_plan=autofill_batch,
+            synthetic_unblocker_proof=synthetic_unblocker_proof,
+            post_answer_pipeline=post_answer_pipeline,
+            closed_preflight=closed_preflight,
+            closed_jobs=closed_jobs,
+            platform_question_playbook=platform_question_playbook,
+            position_execution_audit=ready_position_execution_audit,
+        )
+        self.assertEqual(selected_ready_audit["status"], "selected_100_supervised_autofill_ready")
+        self.assertTrue(selected_ready_audit["selected_queue_supervised_autofill_ready"])
+        self.assertFalse(selected_ready_audit["supervised_autofill_ready_after_user_answers"])
+        self.assertFalse(selected_ready_audit["goal_complete"])
+        self.assertEqual(
+            selected_ready_audit["blocker_summary"]["position_execution_remaining_user_answers"],
+            0,
+        )
+        self.assertEqual(
+            selected_ready_audit["blocker_summary"]["position_execution_global_remaining_user_answers"],
+            2,
+        )
         self.assertEqual(audit["requirements"][4]["status"], "achieved")
         self.assertEqual(audit["top_data_blocking_prompts"][0]["coverage_status"], "needs_user_confirmation")
         self.assertIn("Goal Readiness Audit", markdown)
