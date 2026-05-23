@@ -875,6 +875,10 @@ def main() -> int:
     )
     export_questions_parser.add_argument("--answer-memory-json", default=str(DEFAULT_MEMORY))
     export_questions_parser.add_argument("--closed-jobs-json", default=str(DEFAULT_CLOSED_JOBS))
+    export_questions_parser.add_argument(
+        "--profile-json",
+        default=str(DEFAULT_PERSONAL_PROFILE if DEFAULT_PERSONAL_PROFILE.exists() else DEFAULT_PROFILE),
+    )
     export_questions_parser.add_argument("--goal-audit-json", default=str(DEFAULT_GOAL_AUDIT_JSON))
     export_questions_parser.add_argument("--autofill-batch-json", default=str(DEFAULT_AUTOFILL_BATCH_JSON))
     export_questions_parser.add_argument("--autofill-batch-html", default=str(DEFAULT_AUTOFILL_BATCH_HTML))
@@ -1069,6 +1073,7 @@ def main() -> int:
                     "Learning approval pack": args.learning_approval_pack_json,
                     "Answer memory": args.answer_memory_json,
                     "Closed postings": args.closed_jobs_json,
+                    "Candidate profile": args.profile_json,
                     "Goal readiness audit": args.goal_audit_json,
                     "Autofill batch": args.autofill_batch_json,
                     "Autofill batch HTML": args.autofill_batch_html,
@@ -1097,6 +1102,7 @@ def main() -> int:
             learning_approval_pack=_load_optional_json(args.learning_approval_pack_json),
             answer_memory=_load_optional_json(args.answer_memory_json),
             closed_jobs=_load_optional_json(args.closed_jobs_json),
+            profile=_load_optional_json(args.profile_json),
         )
         print(f"Wrote question Excel to {args.xlsx_output}")
         print(f"Wrote question HTML to {args.html_output}")

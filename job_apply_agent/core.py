@@ -10502,6 +10502,7 @@ def write_question_export(
     learning_approval_pack: dict[str, Any] | None = None,
     answer_memory: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
+    profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     export = build_question_export(
         gaps,
@@ -10524,6 +10525,7 @@ def write_question_export(
         learning_approval_pack=learning_approval_pack,
         answer_memory=answer_memory,
         closed_jobs=closed_jobs,
+        profile=profile,
     )
     xlsx_path = Path(xlsx_output)
     html_path = Path(html_output)
@@ -10556,6 +10558,7 @@ def build_question_export(
     learning_approval_pack: dict[str, Any] | None = None,
     answer_memory: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
+    profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     question_rows = [_question_export_row(item) for item in gaps.get("prompt_statuses", [])]
     blocker_rows = [_question_export_row(item) for item in gaps.get("blocking_prompts", [])]
@@ -10633,6 +10636,7 @@ def build_question_export(
     )
     answer_memory_rows = _answer_memory_export_rows(answer_memory)
     closed_posting_rows = _closed_posting_export_rows(closed_jobs)
+    profile_snapshot_rows = _profile_snapshot_export_rows(profile)
     platform_role_summary_rows = _platform_role_summary_export_rows(readiness)
     platform_role_blocker_rows = _platform_role_blocker_export_rows(readiness)
     collection_targets = [
@@ -10754,6 +10758,7 @@ def build_question_export(
         "real_submit_count": 0,
         "answer_memory_count": len(answer_memory_rows),
         "closed_posting_count": len(closed_posting_rows),
+        "profile_snapshot_field_count": len(profile_snapshot_rows),
         "goal_audit_status": (goal_readiness_audit or {}).get("status", ""),
         "goal_audit_complete": bool((goal_readiness_audit or {}).get("goal_complete")),
         "goal_audit_missing_requirement_count": int(
@@ -10848,6 +10853,7 @@ def build_question_export(
         "platform_role_blockers": platform_role_blocker_rows,
         "answer_memory": answer_memory_rows,
         "closed_postings": closed_posting_rows,
+        "profile_snapshot": profile_snapshot_rows,
         "coverage_counts": gaps.get("coverage_counts", {}),
         "readiness_counts": readiness.get("readiness_counts", {}),
         "real_platform_counts": coverage_gate.get("real_platform_counts", {}),
@@ -10904,6 +10910,7 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                 ("Manual gates", summary.get("manual_gate_count", 0)),
                 ("Closed postings", summary.get("closed_posting_count", 0)),
                 ("Stored answers", summary.get("answer_memory_count", 0)),
+                ("Profile fields", summary.get("profile_snapshot_field_count", 0)),
                 ("Questionnaire", summary.get("critical_questionnaire_question_count", 0)),
                 ("Impact blockers", summary.get("critical_impact_data_blocking_delta", 0)),
                 ("Autofill batch", summary.get("autofill_batch_selected_count", 0)),
@@ -10921,6 +10928,20 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                     row.get("updated_at"),
                 ]
                 for row in export.get("source_artifacts", [])
+            ],
+        ),
+        "</section>",
+        "<section><h2>Profile Snapshot</h2>",
+        _html_table(
+            ["Section", "Field", "Value", "Handling"],
+            [
+                [
+                    row.get("section"),
+                    row.get("field"),
+                    row.get("value"),
+                    row.get("handling"),
+                ]
+                for row in export.get("profile_snapshot", [])
             ],
         ),
         "</section>",
@@ -18837,6 +18858,40 @@ def _closed_posting_export_rows(closed_jobs: dict[str, Any] | None) -> list[dict
     return rows
 
 
+def _profile_snapshot_export_rows(profile: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(profile, dict):
+        return []
+
+    rows: list[dict[str, Any]] = []
+    for section in ["candidate", "preferences", "resume_facts", "question_answers"]:
+        values = profile.get(section)
+        if not isinstance(values, dict):
+            continue
+        for field, value in sorted(values.items()):
+            display_value, handling = _profile_snapshot_value(section, str(field), value)
+            rows.append(
+                {
+                    "section": section,
+                    "field": field,
+                    "value": display_value,
+                    "handling": handling,
+                }
+            )
+    return rows
+
+
+def _profile_snapshot_value(section: str, field: str, value: Any) -> tuple[str, str]:
+    if section == "candidate" and field in {"email", "linkedin_url", "name", "phone"}:
+        return ("configured; redacted in export" if value else "missing", "redacted_sensitive_contact")
+    if value is None or value == "":
+        return "", "missing"
+    if isinstance(value, bool):
+        return ("yes" if value else "no"), "ready"
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True), "ready"
+    return str(value), "ready"
+
+
 def _question_export_row(item: dict[str, Any]) -> dict[str, Any]:
     return {
         "coverage_status": item.get("coverage_status"),
@@ -19185,6 +19240,7 @@ def _write_question_export_xlsx(export: dict[str, Any], path: Path) -> None:
         ("Approval Manual Gates", _table_rows(export.get("learning_approval_manual_gates", []))),
         ("Goal Audit", _table_rows(export.get("goal_audit", []))),
         ("Critical Suggestions", _table_rows(export.get("critical_input_suggestions", []))),
+        ("Profile Snapshot", _table_rows(export.get("profile_snapshot", []))),
     ]
     sheet_names = [_safe_sheet_name(name) for name, _rows in sheets]
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:

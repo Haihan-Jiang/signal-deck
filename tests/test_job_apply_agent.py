@@ -7944,6 +7944,21 @@ class JobApplyAgentTests(unittest.TestCase):
                 }
             ]
         }
+        profile = {
+            "candidate": {
+                "name": "Example Person",
+                "email": "example@example.com",
+                "phone": "555-0100",
+                "location": "Bellevue, WA",
+            },
+            "preferences": {
+                "minimum_compensation_usd": 100000,
+                "relocation_ok": True,
+                "start_availability": "about two months",
+            },
+            "resume_facts": {"current_role": "SRE", "strongest_skills": ["Linux", "Kubernetes"]},
+            "question_answers": {"relocation": "Yes", "sponsorship": "No"},
+        }
         automation_handoff = {
             "status": "waiting_for_confirmed_answers",
             "summary": {
@@ -8026,6 +8041,7 @@ class JobApplyAgentTests(unittest.TestCase):
             automation_handoff=automation_handoff,
             answer_memory=answer_memory,
             closed_jobs=closed_jobs,
+            profile=profile,
         )
         html = render_question_export_html(export)
 
@@ -8056,6 +8072,10 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("writes_real_profile_or_memory", html)
         self.assertIn("Closed Posting Registry", html)
         self.assertIn("Answer Memory Index", html)
+        self.assertIn("Profile Snapshot", html)
+        self.assertIn("minimum_compensation_usd", html)
+        self.assertIn("configured; redacted in export", html)
+        self.assertNotIn("example@example.com", html)
         self.assertIn("No longer accepting applications", html)
         self.assertIn("Problem Buckets", html)
         self.assertIn("Learning Approval Pack", html)
@@ -8095,6 +8115,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 automation_handoff=automation_handoff,
                 answer_memory=answer_memory,
                 closed_jobs=closed_jobs,
+                profile=profile,
             )
 
             self.assertEqual(len(result["question_rows"]), 2)
@@ -8113,6 +8134,7 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(result["summary"]["automation_handoff_answer_queue_count"], 1)
             self.assertEqual(result["summary"]["answer_memory_count"], 1)
             self.assertEqual(result["summary"]["closed_posting_count"], 1)
+            self.assertGreaterEqual(result["summary"]["profile_snapshot_field_count"], 1)
             self.assertTrue(xlsx_output.exists())
             self.assertTrue(html_output.exists())
             with zipfile.ZipFile(xlsx_output) as workbook:
@@ -8127,6 +8149,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 self.assertIn("xl/worksheets/sheet29.xml", names)
                 self.assertIn("xl/worksheets/sheet30.xml", names)
                 self.assertIn("xl/worksheets/sheet39.xml", names)
+                self.assertIn("xl/worksheets/sheet40.xml", names)
                 critical_inputs = workbook.read("xl/worksheets/sheet2.xml").decode("utf-8")
                 self.assertIn("exact_prompt_answer", critical_inputs)
                 self.assertIn("user_answer", critical_inputs)
@@ -8179,6 +8202,10 @@ class JobApplyAgentTests(unittest.TestCase):
                 self.assertIn("needs_user_answers", goal_audit)
                 critical_suggestions = workbook.read("xl/worksheets/sheet39.xml").decode("utf-8")
                 self.assertIn("profile_zip_or_postal_code", critical_suggestions)
+                profile_snapshot = workbook.read("xl/worksheets/sheet40.xml").decode("utf-8")
+                self.assertIn("minimum_compensation_usd", profile_snapshot)
+                self.assertIn("configured; redacted in export", profile_snapshot)
+                self.assertNotIn("example@example.com", profile_snapshot)
 
 
 if __name__ == "__main__":
