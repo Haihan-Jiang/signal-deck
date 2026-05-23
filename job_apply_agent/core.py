@@ -5157,6 +5157,233 @@ def build_final_answer_intake_update(
     }
 
 
+def build_final_answer_reply_intake(
+    template: dict[str, Any],
+    reply_text: str,
+    *,
+    confirm_high_risk: bool = False,
+) -> dict[str, Any]:
+    if not isinstance(template, dict):
+        raise ValueError("final answer intake template must be a JSON object")
+    if not isinstance(reply_text, str):
+        raise ValueError("final answer reply text must be a string")
+    fields = [field for field in template.get("fields") or [] if isinstance(field, dict)]
+    alias_lookup: dict[str, str] = {}
+    field_by_alias: dict[str, dict[str, Any]] = {}
+    for field in fields:
+        alias = str(field.get("alias") or "").strip()
+        input_id = str(field.get("input_id") or "").strip()
+        if not alias:
+            continue
+        field_by_alias[alias] = field
+        for key in {alias, input_id, str(field.get("question") or "")}:
+            normalized = _final_answer_reply_key(key)
+            if normalized:
+                alias_lookup[normalized] = alias
+
+    existing_answers = template.get("answers") if isinstance(template.get("answers"), dict) else {}
+    parsed_answers: dict[str, str] = {}
+    explicit_confirmations: dict[str, bool] = {}
+    unknown_keys: list[str] = []
+    ignored_lines: list[str] = []
+    duplicate_keys: list[str] = []
+    global_confirm_high_risk = bool(confirm_high_risk)
+    parsed_line_count = 0
+
+    for raw_line in reply_text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            if line:
+                ignored_lines.append(raw_line)
+            continue
+        key, value = _split_final_answer_reply_line(line)
+        if not key:
+            ignored_lines.append(raw_line)
+            continue
+        normalized_key = _final_answer_reply_key(key)
+        if normalized_key in {"confirm_high_risk", "high_risk_user_confirmed", "confirmed"}:
+            global_confirm_high_risk = _final_answer_reply_truthy(value)
+            parsed_line_count += 1
+            continue
+        confirmation_alias = _final_answer_reply_confirmation_alias(normalized_key, alias_lookup)
+        if confirmation_alias:
+            explicit_confirmations[confirmation_alias] = _final_answer_reply_truthy(value)
+            parsed_line_count += 1
+            continue
+        alias = alias_lookup.get(normalized_key)
+        if not alias:
+            unknown_keys.append(key.strip())
+            continue
+        if alias in parsed_answers:
+            duplicate_keys.append(alias)
+        parsed_answers[alias] = value.strip()
+        parsed_line_count += 1
+
+    answers: dict[str, Any] = {}
+    for alias, field in field_by_alias.items():
+        raw_existing, _answer_key = _final_answer_intake_raw_answer(
+            existing_answers,
+            str(field.get("input_id") or ""),
+            alias,
+        )
+        existing_answer, existing_confirmed = _final_answer_intake_answer_text(raw_existing)
+        answer_text = parsed_answers.get(alias, existing_answer)
+        high_risk = bool(field.get("high_risk"))
+        confirmed = bool(
+            explicit_confirmations.get(alias, False)
+            or (global_confirm_high_risk and high_risk and bool(answer_text))
+            or (existing_confirmed and alias not in parsed_answers)
+        )
+        if high_risk:
+            answers[alias] = {
+                "answer": answer_text,
+                "high_risk_user_confirmed": confirmed,
+            }
+        else:
+            answers[alias] = answer_text
+
+    intake_payload = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "final_answer_reply_text",
+        "answers": answers,
+        "policy": {
+            "writes_profile_or_memory": False,
+            "submits_real_applications": False,
+            "high_risk_requires_user_confirmation": True,
+        },
+    }
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "final_answer_reply_intake",
+        "parsed_line_count": parsed_line_count,
+        "answer_count": len(parsed_answers),
+        "unknown_key_count": len(unknown_keys),
+        "duplicate_key_count": len(duplicate_keys),
+        "ignored_line_count": len(ignored_lines),
+        "global_confirm_high_risk": global_confirm_high_risk,
+        "unknown_keys": unknown_keys,
+        "duplicate_keys": duplicate_keys,
+        "ignored_lines": ignored_lines[:50],
+        "parsed_aliases": sorted(parsed_answers),
+        "confirmed_high_risk_aliases": sorted(
+            alias
+            for alias, field in field_by_alias.items()
+            if field.get("high_risk")
+            and bool((answers.get(alias) or {}).get("high_risk_user_confirmed"))
+        ),
+        "intake_payload": intake_payload,
+        "policy": {
+            "writes_profile_or_memory": False,
+            "submits_real_applications": False,
+            "markdown_redacts_answer_text": True,
+        },
+    }
+
+
+def write_final_answer_reply_intake(
+    template: dict[str, Any],
+    reply_text: str,
+    json_output: str | Path,
+    markdown_output: str | Path,
+    *,
+    confirm_high_risk: bool = False,
+) -> dict[str, Any]:
+    report = build_final_answer_reply_intake(
+        template,
+        reply_text,
+        confirm_high_risk=confirm_high_risk,
+    )
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    for output_path in [json_path, markdown_path]:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(render_final_answer_reply_intake_markdown(report), encoding="utf-8")
+    return report
+
+
+def render_final_answer_reply_intake_markdown(report: dict[str, Any]) -> str:
+    lines = [
+        "# Final Answer Reply Intake",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        f"Parsed lines: {report.get('parsed_line_count', 0)}",
+        f"Parsed answers: {report.get('answer_count', 0)}",
+        f"Unknown keys: {report.get('unknown_key_count', 0)}",
+        f"Duplicate keys: {report.get('duplicate_key_count', 0)}",
+        f"Ignored lines: {report.get('ignored_line_count', 0)}",
+        f"Global high-risk confirmation: {str(bool(report.get('global_confirm_high_risk'))).lower()}",
+        "",
+        "## Parsed Aliases",
+        "",
+    ]
+    parsed_aliases = report.get("parsed_aliases") or []
+    if parsed_aliases:
+        for alias in parsed_aliases:
+            lines.append(f"- {alias}")
+    else:
+        lines.append("- None")
+    lines.extend(["", "## Confirmed High-Risk Aliases", ""])
+    confirmed_aliases = report.get("confirmed_high_risk_aliases") or []
+    if confirmed_aliases:
+        for alias in confirmed_aliases:
+            lines.append(f"- {alias}")
+    else:
+        lines.append("- None")
+    lines.extend(["", "## Unknown Keys", ""])
+    if report.get("unknown_keys"):
+        for key in report.get("unknown_keys") or []:
+            lines.append(f"- {_markdown_cell(key)}")
+    else:
+        lines.append("- None")
+    lines.extend(
+        [
+            "",
+            "## Policy",
+            "",
+            "- Markdown intentionally redacts answer text.",
+            "- JSON output contains the parsed answer payload for local validation.",
+            "- This parser does not write profile or answer memory and does not submit applications.",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _split_final_answer_reply_line(line: str) -> tuple[str, str]:
+    cleaned = re.sub(r"^\s*(?:[-*]\s+|\d+[.)]\s+)", "", line).strip()
+    for separator in [":", "="]:
+        if separator in cleaned:
+            key, value = cleaned.split(separator, 1)
+            return key.strip(), value.strip()
+    return "", ""
+
+
+def _final_answer_reply_key(key: str) -> str:
+    text = re.sub(r"[`\"']", "", str(key or "").strip().lower())
+    text = re.sub(r"[^a-z0-9]+", "_", text)
+    return text.strip("_")
+
+
+def _final_answer_reply_confirmation_alias(normalized_key: str, alias_lookup: dict[str, str]) -> str:
+    candidates = []
+    for suffix in ["_confirmed", "_confirm", "_high_risk_user_confirmed", "_explicitly_confirmed"]:
+        if normalized_key.endswith(suffix):
+            candidates.append(normalized_key[: -len(suffix)])
+    for prefix in ["confirm_", "confirmed_"]:
+        if normalized_key.startswith(prefix):
+            candidates.append(normalized_key[len(prefix) :])
+    for candidate in candidates:
+        alias = alias_lookup.get(candidate)
+        if alias:
+            return alias
+    return ""
+
+
+def _final_answer_reply_truthy(value: str) -> bool:
+    normalized = re.sub(r"\s+", " ", str(value or "").strip().lower())
+    return normalized in {"1", "true", "yes", "y", "approved", "approve", "confirmed", "confirm", "ok", "okay"}
+
+
 def write_final_answer_intake_template(
     unblocker_packet: dict[str, Any],
     json_output: str | Path,

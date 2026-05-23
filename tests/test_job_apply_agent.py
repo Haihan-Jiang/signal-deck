@@ -49,6 +49,7 @@ from job_apply_agent.core import (
     build_fake_critical_input_probe,
     build_fake_position_rehearsal,
     build_final_answer_blocker_report,
+    build_final_answer_reply_intake,
     build_final_answer_intake_template,
     build_final_answer_intake_update,
     build_goal_readiness_audit,
@@ -138,6 +139,7 @@ from job_apply_agent.core import (
     render_final_answer_intake_template_markdown,
     render_final_answer_intake_update_markdown,
     render_final_answer_blocker_report_markdown,
+    render_final_answer_reply_intake_markdown,
     render_goal_readiness_audit_markdown,
     render_learning_approval_pack_markdown,
     render_learning_task_template_markdown,
@@ -194,6 +196,7 @@ from job_apply_agent.core import (
     write_final_answer_intake_template,
     write_final_answer_intake_update,
     write_final_answer_blocker_report,
+    write_final_answer_reply_intake,
     write_goal_readiness_audit,
     write_learning_approval_pack,
     write_learning_task_template,
@@ -6965,6 +6968,108 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(notify_result["ok"])
             self.assertTrue(notify_result["skipped"])
             self.assertNotIn("Sensitive citizenship answer phrase 12345", notify_result["message"])
+
+    def test_final_answer_reply_text_builds_ready_intake_without_markdown_answer_text(self) -> None:
+        unblockers = {
+            "unblockers": [
+                {
+                    "input_id": "profile_zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "high_risk": False,
+                    "required_count": 56,
+                },
+                {
+                    "input_id": "answer_memory_citizenship_status_default_policy",
+                    "input_type": "high_risk_exact_confirmation",
+                    "question": "What citizenship answers should automation use?",
+                    "high_risk": True,
+                    "required_count": 57,
+                },
+                {
+                    "input_id": "answer_memory_background_or_export_control_default_policy",
+                    "input_type": "high_risk_exact_confirmation",
+                    "question": "What background/export-control answers should automation use?",
+                    "high_risk": True,
+                    "required_count": 31,
+                },
+                {
+                    "input_id": "answer_memory_country_work_permit_default_policy",
+                    "input_type": "high_risk_exact_confirmation",
+                    "question": "What country work permit answers should automation use?",
+                    "high_risk": True,
+                    "required_count": 28,
+                },
+                {
+                    "input_id": "answer_memory_interview_recording_consent_default_policy",
+                    "input_type": "high_risk_exact_confirmation",
+                    "question": "Should automation consent to interview recording?",
+                    "high_risk": True,
+                    "required_count": 18,
+                },
+                {
+                    "input_id": "answer_memory_health_requirement_default_policy",
+                    "input_type": "high_risk_exact_confirmation",
+                    "question": "What health requirement answer should automation use?",
+                    "high_risk": True,
+                    "required_count": 2,
+                },
+            ]
+        }
+        template = build_final_answer_intake_template(unblockers)
+        reply_text = "\n".join(
+            [
+                "zip_or_postal_code: 98004",
+                "citizenship_status: U.S. citizen; no restricted-country citizenship or permanent residency.",
+                "citizenship_status_confirmed: yes",
+                "background_or_export_control: No disqualifying background, export-control, indictment, debarment, substance, firearm, felony, or legal-eligibility issues; no exceptions.",
+                "background_or_export_control_confirmed: yes",
+                "country_work_permit: Authorized to work in the United States; no non-U.S. country work permits or visa sponsorship exceptions should be assumed.",
+                "country_work_permit_confirmed: yes",
+                "interview_recording_consent: Yes, I consent to interview recording, transcription, AI notetakers, and interview analysis.",
+                "interview_recording_consent_confirmed: yes",
+                "health_requirement: I can comply with standard health or vaccination requirements for client-site access; no exceptions.",
+                "health_requirement_confirmed: yes",
+            ]
+        )
+        reply_report = build_final_answer_reply_intake(template, reply_text)
+        reply_markdown = render_final_answer_reply_intake_markdown(reply_report)
+        intake_report = build_final_answer_intake_update(unblockers, reply_report["intake_payload"])
+
+        self.assertEqual(reply_report["answer_count"], 6)
+        self.assertEqual(reply_report["unknown_key_count"], 0)
+        self.assertEqual(reply_report["duplicate_key_count"], 0)
+        self.assertEqual(len(reply_report["confirmed_high_risk_aliases"]), 5)
+        self.assertTrue(intake_report["ready_for_finalize"])
+        self.assertEqual(intake_report["summary"]["compact_update_count"], 6)
+        self.assertIn("Final Answer Reply Intake", reply_markdown)
+        self.assertIn("zip_or_postal_code", reply_markdown)
+        self.assertNotIn("98004", reply_markdown)
+        self.assertNotIn("U.S. citizen", reply_markdown)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            reply_json = root / "reply.json"
+            reply_md = root / "reply.md"
+            compact_json = root / "compact.json"
+            report_json = root / "report.json"
+            report_md = root / "report.md"
+            written_reply = write_final_answer_reply_intake(
+                template,
+                reply_text,
+                reply_json,
+                reply_md,
+            )
+            written_intake = write_final_answer_intake_update(
+                unblockers,
+                written_reply["intake_payload"],
+                compact_json,
+                report_json,
+                report_md,
+            )
+            self.assertTrue(written_intake["ready_for_finalize"])
+            self.assertTrue(reply_json.exists())
+            self.assertTrue(reply_md.exists())
+            self.assertNotIn("98004", reply_md.read_text(encoding="utf-8"))
 
     def test_final_answer_intake_server_post_answer_flags_are_guarded(self) -> None:
         base_args = {

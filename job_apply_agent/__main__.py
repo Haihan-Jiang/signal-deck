@@ -67,6 +67,7 @@ from .core import (
     write_final_answer_intake_template,
     write_final_answer_intake_update,
     write_final_answer_blocker_report,
+    write_final_answer_reply_intake,
     build_synthetic_unblocker_compact_updates,
     write_goal_readiness_audit,
     write_critical_input_suggestion_packet,
@@ -210,6 +211,12 @@ DEFAULT_FINAL_ANSWER_BLOCKERS_JSON = (
 )
 DEFAULT_FINAL_ANSWER_BLOCKERS_MARKDOWN = (
     Path(__file__).with_name("outbox") / "final_answer_blockers_latest.md"
+)
+DEFAULT_FINAL_ANSWER_REPLY_JSON = (
+    Path(__file__).with_name("outbox") / "final_answer_reply_intake_latest.json"
+)
+DEFAULT_FINAL_ANSWER_REPLY_MARKDOWN = (
+    Path(__file__).with_name("outbox") / "final_answer_reply_intake_latest.md"
 )
 DEFAULT_POST_ANSWER_SYNTHETIC_COMPACT_UPDATES_JSON = (
     Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_unblockers_updates_latest.json"
@@ -1050,6 +1057,51 @@ def main() -> int:
     final_answer_blockers_parser.add_argument("--telegram-env", default=None)
     final_answer_blockers_parser.add_argument("--telegram-dry-run", action="store_true")
     final_answer_blockers_parser.add_argument("--limit", type=int, default=6)
+
+    final_answer_reply_parser = subparsers.add_parser(
+        "final-answer-reply",
+        help="parse a plain-text final-answer reply into the local final-answer intake JSON and validation report",
+    )
+    final_answer_reply_parser.add_argument(
+        "--template",
+        default=str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON),
+    )
+    final_answer_reply_parser.add_argument(
+        "--unblockers",
+        default=str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_JSON),
+    )
+    final_answer_reply_parser.add_argument("--reply-text", default=None)
+    final_answer_reply_parser.add_argument("--reply-file", default=None)
+    final_answer_reply_parser.add_argument("--json-output", default=str(DEFAULT_FINAL_ANSWER_REPLY_JSON))
+    final_answer_reply_parser.add_argument("--markdown-output", default=str(DEFAULT_FINAL_ANSWER_REPLY_MARKDOWN))
+    final_answer_reply_parser.add_argument(
+        "--compact-updates-output",
+        default=str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_UPDATES_JSON),
+    )
+    final_answer_reply_parser.add_argument("--final-answer-intake-report-json", default=str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_JSON))
+    final_answer_reply_parser.add_argument(
+        "--final-answer-intake-report-markdown",
+        default=str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_MARKDOWN),
+    )
+    final_answer_reply_parser.add_argument(
+        "--full-template",
+        default=str(DEFAULT_CRITICAL_INPUT_FULL_UPDATES_JSON),
+    )
+    final_answer_reply_parser.add_argument(
+        "--confirmed-updates-output",
+        default=str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_JSON),
+    )
+    final_answer_reply_parser.add_argument(
+        "--confirmed-report-json-output",
+        default=str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_JSON),
+    )
+    final_answer_reply_parser.add_argument(
+        "--confirmed-report-markdown-output",
+        default=str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_MARKDOWN),
+    )
+    final_answer_reply_parser.add_argument("--confirm-high-risk", action="store_true")
+    final_answer_reply_parser.add_argument("--finalize", action="store_true")
+    final_answer_reply_parser.add_argument("--fail-on-not-ready", action="store_true")
 
     post_answer_pipeline_parser = subparsers.add_parser(
         "post-answer-pipeline",
@@ -2786,6 +2838,81 @@ def main() -> int:
                 print(f"Sent Telegram notification to {result.get('chat_count', 0)} chat(s)")
             if args.telegram_dry_run:
                 print(result["message"])
+        return 0
+
+    if args.command == "final-answer-reply":
+        if bool(args.reply_text) == bool(args.reply_file):
+            raise ValueError("provide exactly one of --reply-text or --reply-file")
+        template_path = Path(args.template)
+        if not template_path.exists():
+            raise FileNotFoundError(f"final answer intake template not found: {args.template}")
+        reply_text = args.reply_text
+        if args.reply_file:
+            reply_path = Path(args.reply_file)
+            if not reply_path.exists():
+                raise FileNotFoundError(f"final answer reply file not found: {args.reply_file}")
+            reply_text = reply_path.read_text(encoding="utf-8")
+        report = write_final_answer_reply_intake(
+            json.loads(template_path.read_text(encoding="utf-8")),
+            str(reply_text or ""),
+            args.json_output,
+            args.markdown_output,
+            confirm_high_risk=args.confirm_high_risk,
+        )
+        print(f"Wrote final answer reply intake JSON to {args.json_output}")
+        print(f"Wrote final answer reply intake Markdown to {args.markdown_output}")
+        print(f"Parsed answers: {report.get('answer_count', 0)}")
+        print(f"Unknown keys: {report.get('unknown_key_count', 0)}")
+        print(f"Duplicate keys: {report.get('duplicate_key_count', 0)}")
+
+        unblockers_path = Path(args.unblockers)
+        if not unblockers_path.exists():
+            raise FileNotFoundError(f"critical input unblockers not found: {args.unblockers}")
+        intake_payload = report.get("intake_payload") if isinstance(report.get("intake_payload"), dict) else {}
+        intake_report = write_final_answer_intake_update(
+            json.loads(unblockers_path.read_text(encoding="utf-8")),
+            intake_payload,
+            args.compact_updates_output,
+            args.final_answer_intake_report_json,
+            args.final_answer_intake_report_markdown,
+            confirm_high_risk=args.confirm_high_risk,
+        )
+        intake_summary = intake_report.get("summary") or {}
+        print(f"Wrote compact final-answer updates to {args.compact_updates_output}")
+        print(f"Wrote final answer intake report JSON to {args.final_answer_intake_report_json}")
+        print(f"Ready for finalize: {str(bool(intake_report.get('ready_for_finalize'))).lower()}")
+        print(f"Missing unblockers: {intake_summary.get('missing_unblocker_count', 0)}")
+        print(f"High-risk confirmations missing: {intake_summary.get('unconfirmed_high_risk_count', 0)}")
+        print(f"Needs more specificity: {intake_summary.get('needs_more_specific_answer_count', 0)}")
+        print(f"Unknown answers: {intake_summary.get('unknown_answer_count', 0)}")
+        if args.finalize:
+            final_report = write_critical_input_unblocker_final_update(
+                args.compact_updates_output,
+                args.full_template,
+                args.unblockers,
+                args.confirmed_updates_output,
+                args.confirmed_report_json_output,
+                args.confirmed_report_markdown_output,
+            )
+            final_summary = final_report.get("summary") or {}
+            print(f"Wrote confirmed updates JSON to {args.confirmed_updates_output}")
+            print(
+                "Confirmed updates ready for workflow: "
+                f"{str(bool(final_report.get('ready_for_workflow'))).lower()}"
+            )
+            print(f"Confirmed missing unblockers: {final_summary.get('missing_unblocker_count', 0)}")
+            print(
+                "Confirmed high-risk confirmations missing: "
+                f"{final_summary.get('unconfirmed_high_risk_count', 0)}"
+            )
+            if args.fail_on_not_ready and not final_report.get("ready_for_workflow"):
+                return 2
+        if args.fail_on_not_ready and (
+            not intake_report.get("ready_for_finalize")
+            or int(report.get("unknown_key_count") or 0)
+            or int(report.get("duplicate_key_count") or 0)
+        ):
+            return 2
         return 0
 
     if args.command == "post-answer-pipeline":
