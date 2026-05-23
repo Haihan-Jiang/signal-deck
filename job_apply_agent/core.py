@@ -4869,6 +4869,335 @@ def build_synthetic_unblocker_compact_updates(unblocker_packet: dict[str, Any]) 
     return updates
 
 
+FINAL_ANSWER_INTAKE_ALIASES = {
+    "profile_zip_or_postal_code": "zip_or_postal_code",
+    "answer_memory_citizenship_status_default_policy": "citizenship_status",
+    "answer_memory_background_or_export_control_default_policy": "background_or_export_control",
+    "answer_memory_country_work_permit_default_policy": "country_work_permit",
+    "answer_memory_interview_recording_consent_default_policy": "interview_recording_consent",
+    "answer_memory_health_requirement_default_policy": "health_requirement",
+}
+
+
+def build_final_answer_intake_template(unblocker_packet: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(unblocker_packet, dict):
+        raise ValueError("critical input unblockers must be a JSON object")
+    answers: dict[str, Any] = {}
+    fields: list[dict[str, Any]] = []
+    aliases: dict[str, str] = {}
+    for row in unblocker_packet.get("unblockers") or []:
+        if not isinstance(row, dict):
+            continue
+        input_id = str(row.get("input_id") or "").strip()
+        if not input_id:
+            continue
+        alias = _final_answer_intake_alias(input_id)
+        high_risk = _synthetic_final_unblocker_is_high_risk(row)
+        aliases[alias] = input_id
+        answers[alias] = (
+            {"answer": "", "high_risk_user_confirmed": False}
+            if high_risk
+            else ""
+        )
+        fields.append(
+            {
+                "alias": alias,
+                "input_id": input_id,
+                "question": row.get("question"),
+                "required_user_response": row.get("required_user_response"),
+                "high_risk": high_risk,
+                "required_count": int(row.get("required_count") or 0),
+                "platforms": row.get("platforms") or [],
+                "labels": row.get("labels") or [],
+                "why_not_inferred": row.get("why_not_inferred"),
+            }
+        )
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "final_answer_intake_template",
+        "answer_count": len(answers),
+        "high_risk_count": sum(1 for row in fields if row.get("high_risk")),
+        "instructions": (
+            "Fill answers by alias. High-risk answers require exact truthful text "
+            "and high_risk_user_confirmed=true before they can be converted into "
+            "the post-answer pipeline updates."
+        ),
+        "answers": answers,
+        "aliases": aliases,
+        "fields": fields,
+        "policy": {
+            "writes_profile_or_memory": False,
+            "submits_real_applications": False,
+            "high_risk_requires_user_confirmation": True,
+        },
+    }
+
+
+def build_final_answer_intake_update(
+    unblocker_packet: dict[str, Any],
+    intake_payload: dict[str, Any],
+    *,
+    confirm_high_risk: bool = False,
+) -> dict[str, Any]:
+    if not isinstance(unblocker_packet, dict):
+        raise ValueError("critical input unblockers must be a JSON object")
+    if not isinstance(intake_payload, dict):
+        raise ValueError("final answer intake must be a JSON object")
+    answers = intake_payload.get("answers") if isinstance(intake_payload.get("answers"), dict) else intake_payload
+    if not isinstance(answers, dict):
+        raise ValueError("final answer intake answers must be a JSON object")
+
+    compact_updates: dict[str, Any] = {}
+    missing_ids: list[str] = []
+    unconfirmed_high_risk_ids: list[str] = []
+    alias_to_input_id: dict[str, str] = {}
+    input_ids: set[str] = set()
+    used_answer_keys: set[str] = set()
+    fields: list[dict[str, Any]] = []
+
+    for row in unblocker_packet.get("unblockers") or []:
+        if not isinstance(row, dict):
+            continue
+        input_id = str(row.get("input_id") or "").strip()
+        if not input_id:
+            continue
+        alias = _final_answer_intake_alias(input_id)
+        high_risk = _synthetic_final_unblocker_is_high_risk(row)
+        alias_to_input_id[alias] = input_id
+        input_ids.add(input_id)
+        raw_value, answer_key = _final_answer_intake_raw_answer(answers, input_id, alias)
+        if answer_key:
+            used_answer_keys.add(answer_key)
+        answer_text, high_risk_confirmed = _final_answer_intake_answer_text(raw_value)
+        if not answer_text:
+            missing_ids.append(input_id)
+            fields.append(
+                {
+                    "alias": alias,
+                    "input_id": input_id,
+                    "status": "missing",
+                    "high_risk": high_risk,
+                }
+            )
+            continue
+        if high_risk:
+            confirmed = bool(high_risk_confirmed or confirm_high_risk)
+            compact_updates[input_id] = {
+                "user_answer": answer_text,
+                "approval_decision": "approved",
+                "high_risk_user_confirmed": confirmed,
+            }
+            if not confirmed:
+                unconfirmed_high_risk_ids.append(input_id)
+                status = "high_risk_unconfirmed"
+            else:
+                status = "ready"
+        else:
+            compact_updates[input_id] = answer_text
+            status = "ready"
+        fields.append(
+            {
+                "alias": alias,
+                "input_id": input_id,
+                "status": status,
+                "high_risk": high_risk,
+            }
+        )
+
+    valid_answer_keys = set(input_ids) | set(alias_to_input_id)
+    unknown_answer_ids = sorted(
+        str(key)
+        for key, value in answers.items()
+        if str(key) not in valid_answer_keys and not _critical_update_value_is_blank(value)
+    )
+    ready_for_finalize = bool(not missing_ids and not unconfirmed_high_risk_ids and not unknown_answer_ids)
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "final_answer_intake_update",
+        "ready_for_finalize": ready_for_finalize,
+        "writes_profile_or_memory": False,
+        "submits_real_applications": False,
+        "summary": {
+            "answer_input_count": len(answers),
+            "compact_update_count": len(compact_updates),
+            "unblocker_count": len(input_ids),
+            "missing_unblocker_count": len(missing_ids),
+            "unconfirmed_high_risk_count": len(unconfirmed_high_risk_ids),
+            "unknown_answer_count": len(unknown_answer_ids),
+            "confirm_high_risk_flag": bool(confirm_high_risk),
+        },
+        "missing_unblocker_ids": missing_ids,
+        "unconfirmed_high_risk_ids": unconfirmed_high_risk_ids,
+        "unknown_answer_ids": unknown_answer_ids,
+        "compact_updates": compact_updates,
+        "fields": fields,
+        "next_commands": [
+            "python3 -m job_apply_agent critical-input-unblockers-finalize --fail-on-not-ready",
+            "python3 -m job_apply_agent post-answer-pipeline --fail-on-not-ready",
+        ],
+        "policy": {
+            "requires_high_risk_confirmation": True,
+            "final_submit_remains_supervised": True,
+            "does_not_apply_answers": True,
+        },
+    }
+
+
+def write_final_answer_intake_template(
+    unblocker_packet: dict[str, Any],
+    json_output: str | Path,
+    markdown_output: str | Path,
+) -> dict[str, Any]:
+    template = build_final_answer_intake_template(unblocker_packet)
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    for path in [json_path, markdown_path]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(template, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(render_final_answer_intake_template_markdown(template), encoding="utf-8")
+    return template
+
+
+def write_final_answer_intake_update(
+    unblocker_packet: dict[str, Any],
+    intake_payload: dict[str, Any],
+    compact_updates_output: str | Path,
+    json_output: str | Path,
+    markdown_output: str | Path,
+    *,
+    confirm_high_risk: bool = False,
+) -> dict[str, Any]:
+    report = build_final_answer_intake_update(
+        unblocker_packet,
+        intake_payload,
+        confirm_high_risk=confirm_high_risk,
+    )
+    updates_path = Path(compact_updates_output)
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    for path in [updates_path, json_path, markdown_path]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    updates_path.write_text(
+        json.dumps(report.get("compact_updates") or {}, ensure_ascii=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(render_final_answer_intake_update_markdown(report), encoding="utf-8")
+    return report
+
+
+def render_final_answer_intake_template_markdown(template: dict[str, Any]) -> str:
+    lines = [
+        "# Final Answer Intake Template",
+        "",
+        f"Generated: {template.get('generated_at')}",
+        f"Answers: {template.get('answer_count', 0)}",
+        f"High risk: {template.get('high_risk_count', 0)}",
+        "",
+        str(template.get("instructions") or ""),
+        "",
+        "## Fields",
+        "",
+    ]
+    rows = [
+        [
+            row.get("alias"),
+            row.get("input_id"),
+            "yes" if row.get("high_risk") else "no",
+            row.get("required_count", 0),
+            row.get("question"),
+        ]
+        for row in template.get("fields") or []
+    ]
+    lines.extend(_simple_markdown_table(["Alias", "Input ID", "High risk", "Prompts", "Question"], rows))
+    lines.extend(["", "## Answers JSON", "", "```json"])
+    lines.append(json.dumps({"answers": template.get("answers") or {}}, ensure_ascii=True, indent=2))
+    lines.extend(["```", ""])
+    return "\n".join(lines)
+
+
+def render_final_answer_intake_update_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    lines = [
+        "# Final Answer Intake Update",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        f"Ready for finalize: {str(bool(report.get('ready_for_finalize'))).lower()}",
+        "Writes profile or memory: false",
+        "Submits real applications: false",
+        "",
+        "## Summary",
+        "",
+        f"- answer inputs: {summary.get('answer_input_count', 0)}",
+        f"- compact updates: {summary.get('compact_update_count', 0)}",
+        f"- final unblockers: {summary.get('unblocker_count', 0)}",
+        f"- missing unblockers: {summary.get('missing_unblocker_count', 0)}",
+        f"- unconfirmed high-risk answers: {summary.get('unconfirmed_high_risk_count', 0)}",
+        f"- unknown answers: {summary.get('unknown_answer_count', 0)}",
+        "",
+        "## Field Status",
+        "",
+    ]
+    rows = [
+        [
+            row.get("alias"),
+            row.get("input_id"),
+            row.get("status"),
+            "yes" if row.get("high_risk") else "no",
+        ]
+        for row in report.get("fields") or []
+    ]
+    lines.extend(_simple_markdown_table(["Alias", "Input ID", "Status", "High risk"], rows))
+    lines.extend(["", "## Next Commands", ""])
+    for command in report.get("next_commands") or []:
+        lines.append(f"- `{command}`")
+    return "\n".join(lines) + "\n"
+
+
+def _final_answer_intake_alias(input_id: str) -> str:
+    if input_id in FINAL_ANSWER_INTAKE_ALIASES:
+        return FINAL_ANSWER_INTAKE_ALIASES[input_id]
+    alias = input_id
+    if alias.startswith("answer_memory_"):
+        alias = alias[len("answer_memory_") :]
+    if alias.endswith("_default_policy"):
+        alias = alias[: -len("_default_policy")]
+    if alias.startswith("profile_"):
+        alias = alias[len("profile_") :]
+    return alias
+
+
+def _final_answer_intake_raw_answer(
+    answers: dict[str, Any],
+    input_id: str,
+    alias: str,
+) -> tuple[Any, str]:
+    if input_id in answers:
+        return answers.get(input_id), input_id
+    if alias in answers:
+        return answers.get(alias), alias
+    return "", ""
+
+
+def _final_answer_intake_answer_text(value: Any) -> tuple[str, bool]:
+    if isinstance(value, dict):
+        raw_answer = (
+            value.get("answer")
+            if value.get("answer") is not None
+            else value.get("user_answer")
+            if value.get("user_answer") is not None
+            else value.get("value")
+        )
+        answer = str(raw_answer or "").strip()
+        confirmed = bool(
+            value.get("high_risk_user_confirmed")
+            or value.get("confirmed")
+            or value.get("explicitly_confirmed")
+        )
+        return answer, confirmed
+    return str(value or "").strip(), False
+
+
 def _synthetic_final_unblocker_is_high_risk(row: dict[str, Any]) -> bool:
     return bool(row.get("high_risk")) or str(row.get("input_type") or "") == "high_risk_exact_confirmation"
 

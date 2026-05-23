@@ -46,6 +46,8 @@ from job_apply_agent.core import (
     build_fake_learning_probe,
     build_fake_critical_input_probe,
     build_fake_position_rehearsal,
+    build_final_answer_intake_template,
+    build_final_answer_intake_update,
     build_goal_readiness_audit,
     build_learning_approval_pack,
     build_learning_task_template,
@@ -124,6 +126,8 @@ from job_apply_agent.core import (
     render_fake_learning_probe_markdown,
     render_fake_critical_input_probe_markdown,
     render_fake_position_rehearsal_markdown,
+    render_final_answer_intake_template_markdown,
+    render_final_answer_intake_update_markdown,
     render_goal_readiness_audit_markdown,
     render_learning_approval_pack_markdown,
     render_learning_task_template_markdown,
@@ -173,6 +177,8 @@ from job_apply_agent.core import (
     write_fake_learning_probe,
     write_fake_critical_input_probe,
     write_fake_position_rehearsal,
+    write_final_answer_intake_template,
+    write_final_answer_intake_update,
     write_goal_readiness_audit,
     write_learning_approval_pack,
     write_learning_task_template,
@@ -6550,6 +6556,120 @@ class JobApplyAgentTests(unittest.TestCase):
             confirmed_updates = json.loads(updates_output.read_text(encoding="utf-8"))
             self.assertIn("answer_memory_employment_history_default_policy", confirmed_updates)
             self.assertEqual(confirmed_updates["profile_zip_or_postal_code"], "98004")
+
+    def test_final_answer_intake_builds_compact_updates_from_alias_answers(self) -> None:
+        unblockers = {
+            "unblockers": [
+                {
+                    "input_id": "profile_zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "required_user_response": "Provide exact ZIP/postal code.",
+                    "high_risk": False,
+                    "required_count": 4,
+                    "platforms": ["Ashby"],
+                    "labels": ["Zip Code"],
+                },
+                {
+                    "input_id": "answer_memory_citizenship_status_default_policy",
+                    "input_type": "high_risk_exact_confirmation",
+                    "question": "What citizenship answers should automation use?",
+                    "required_user_response": "Confirm the exact truthful legal answer.",
+                    "high_risk": True,
+                    "required_count": 7,
+                    "platforms": ["Greenhouse"],
+                    "labels": ["Are you a U.S. Citizen?"],
+                },
+            ]
+        }
+        template = build_final_answer_intake_template(unblockers)
+        template_markdown = render_final_answer_intake_template_markdown(template)
+
+        self.assertEqual(template["answer_count"], 2)
+        self.assertEqual(template["high_risk_count"], 1)
+        self.assertEqual(template["aliases"]["zip_or_postal_code"], "profile_zip_or_postal_code")
+        self.assertIn("citizenship_status", template["answers"])
+        self.assertIn("Final Answer Intake Template", template_markdown)
+        self.assertIn("zip_or_postal_code", template_markdown)
+
+        unconfirmed = build_final_answer_intake_update(
+            unblockers,
+            {
+                "answers": {
+                    "zip_or_postal_code": "98004",
+                    "citizenship_status": {
+                        "answer": "U.S. citizen; no restricted-country citizenship or permanent residency.",
+                        "high_risk_user_confirmed": False,
+                    },
+                }
+            },
+        )
+        self.assertFalse(unconfirmed["ready_for_finalize"])
+        self.assertEqual(
+            unconfirmed["unconfirmed_high_risk_ids"],
+            ["answer_memory_citizenship_status_default_policy"],
+        )
+
+        ready = build_final_answer_intake_update(
+            unblockers,
+            {
+                "answers": {
+                    "zip_or_postal_code": "98004",
+                    "citizenship_status": {
+                        "answer": "U.S. citizen; no restricted-country citizenship or permanent residency.",
+                        "high_risk_user_confirmed": True,
+                    },
+                }
+            },
+        )
+        update_markdown = render_final_answer_intake_update_markdown(ready)
+
+        self.assertTrue(ready["ready_for_finalize"])
+        self.assertEqual(ready["summary"]["compact_update_count"], 2)
+        self.assertEqual(ready["compact_updates"]["profile_zip_or_postal_code"], "98004")
+        self.assertTrue(
+            ready["compact_updates"]["answer_memory_citizenship_status_default_policy"][
+                "high_risk_user_confirmed"
+            ]
+        )
+        self.assertIn("Ready for finalize: true", update_markdown)
+        self.assertIn("critical-input-unblockers-finalize", update_markdown)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            template_json = root / "template.json"
+            template_md = root / "template.md"
+            updates_json = root / "compact.json"
+            report_json = root / "report.json"
+            report_md = root / "report.md"
+
+            written_template = write_final_answer_intake_template(
+                unblockers,
+                template_json,
+                template_md,
+            )
+            written_report = write_final_answer_intake_update(
+                unblockers,
+                {"answers": {"zip_or_postal_code": "98004", "citizenship_status": "U.S. citizen."}},
+                updates_json,
+                report_json,
+                report_md,
+                confirm_high_risk=True,
+            )
+
+            self.assertEqual(written_template["answer_count"], 2)
+            self.assertTrue(written_report["ready_for_finalize"])
+            self.assertTrue(template_json.exists())
+            self.assertTrue(template_md.exists())
+            self.assertTrue(updates_json.exists())
+            self.assertTrue(report_json.exists())
+            self.assertTrue(report_md.exists())
+            compact_updates = json.loads(updates_json.read_text(encoding="utf-8"))
+            self.assertEqual(compact_updates["profile_zip_or_postal_code"], "98004")
+            self.assertTrue(
+                compact_updates["answer_memory_citizenship_status_default_policy"][
+                    "high_risk_user_confirmed"
+                ]
+            )
 
     def test_critical_input_updates_readiness_blocks_blanks_and_unconfirmed_high_risk(self) -> None:
         learning_tasks = {

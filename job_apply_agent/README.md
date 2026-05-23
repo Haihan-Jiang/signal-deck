@@ -744,6 +744,35 @@ for the remaining exact answers. After filling it, run
 `critical_input_confirmed_updates_latest.json`, the full one-shot updates file
 used by `critical-inputs-workflow`.
 
+For a simpler intake file keyed by short aliases, generate the final-answer
+template:
+
+```bash
+python3 -m job_apply_agent final-answer-intake
+```
+
+This writes:
+
+```text
+job_apply_agent/outbox/final_answer_intake_template_latest.json
+job_apply_agent/outbox/final_answer_intake_template_latest.md
+```
+
+Fill the `answers` object in that template, then convert it into the compact
+updates file used by the rest of the post-answer pipeline:
+
+```bash
+python3 -m job_apply_agent final-answer-intake \
+  --answers job_apply_agent/outbox/final_answer_intake_template_latest.json \
+  --finalize \
+  --fail-on-not-ready
+```
+
+High-risk answers must either set `high_risk_user_confirmed=true` per answer or
+be run with `--confirm-high-risk` after explicit user confirmation. The command
+only writes outbox update artifacts; it does not write profile/memory or submit
+applications.
+
 The audit separates achieved evidence, remaining user-answer blockers, and
 supervised-only gates such as CAPTCHA/security, protected-class answers, and
 real employer final submit.

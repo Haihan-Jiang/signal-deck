@@ -56,6 +56,8 @@ from .core import (
     write_fake_learning_probe,
     write_fake_critical_input_probe,
     write_fake_position_rehearsal,
+    write_final_answer_intake_template,
+    write_final_answer_intake_update,
     build_synthetic_unblocker_compact_updates,
     write_goal_readiness_audit,
     write_critical_input_suggestion_packet,
@@ -174,6 +176,18 @@ DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_JSON = (
 )
 DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_MARKDOWN = (
     Path(__file__).with_name("outbox") / "critical_input_confirmed_updates_report_latest.md"
+)
+DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON = (
+    Path(__file__).with_name("outbox") / "final_answer_intake_template_latest.json"
+)
+DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_MARKDOWN = (
+    Path(__file__).with_name("outbox") / "final_answer_intake_template_latest.md"
+)
+DEFAULT_FINAL_ANSWER_INTAKE_REPORT_JSON = (
+    Path(__file__).with_name("outbox") / "final_answer_intake_update_latest.json"
+)
+DEFAULT_FINAL_ANSWER_INTAKE_REPORT_MARKDOWN = (
+    Path(__file__).with_name("outbox") / "final_answer_intake_update_latest.md"
 )
 DEFAULT_POST_ANSWER_SYNTHETIC_COMPACT_UPDATES_JSON = (
     Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_unblockers_updates_latest.json"
@@ -776,6 +790,70 @@ def main() -> int:
         "--fail-on-not-ready",
         action="store_true",
         help="exit non-zero when any final answer is blank, unconfirmed, or unknown",
+    )
+
+    final_answer_intake_parser = subparsers.add_parser(
+        "final-answer-intake",
+        help="convert a simple six-answer intake JSON into post-answer compact updates",
+    )
+    final_answer_intake_parser.add_argument(
+        "--unblockers",
+        default=str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_JSON),
+    )
+    final_answer_intake_parser.add_argument(
+        "--answers",
+        help="JSON with an answers object keyed by aliases from the generated template",
+    )
+    final_answer_intake_parser.add_argument(
+        "--template-output",
+        default=str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON),
+    )
+    final_answer_intake_parser.add_argument(
+        "--template-markdown-output",
+        default=str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_MARKDOWN),
+    )
+    final_answer_intake_parser.add_argument(
+        "--compact-updates-output",
+        default=str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_UPDATES_JSON),
+    )
+    final_answer_intake_parser.add_argument(
+        "--full-template",
+        default=str(DEFAULT_CRITICAL_INPUT_FULL_UPDATES_JSON),
+    )
+    final_answer_intake_parser.add_argument(
+        "--confirmed-updates-output",
+        default=str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_JSON),
+    )
+    final_answer_intake_parser.add_argument(
+        "--confirmed-report-json-output",
+        default=str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_JSON),
+    )
+    final_answer_intake_parser.add_argument(
+        "--confirmed-report-markdown-output",
+        default=str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_MARKDOWN),
+    )
+    final_answer_intake_parser.add_argument(
+        "--json-output",
+        default=str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_JSON),
+    )
+    final_answer_intake_parser.add_argument(
+        "--markdown-output",
+        default=str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_MARKDOWN),
+    )
+    final_answer_intake_parser.add_argument(
+        "--confirm-high-risk",
+        action="store_true",
+        help="treat all supplied high-risk answer text as explicitly user-confirmed",
+    )
+    final_answer_intake_parser.add_argument(
+        "--finalize",
+        action="store_true",
+        help="also merge compact answers into the full confirmed updates file",
+    )
+    final_answer_intake_parser.add_argument(
+        "--fail-on-not-ready",
+        action="store_true",
+        help="exit non-zero when answers are missing, high-risk confirmations are absent, or unknown keys exist",
     )
 
     post_answer_pipeline_parser = subparsers.add_parser(
@@ -2219,6 +2297,69 @@ def main() -> int:
         print(f"High-risk confirmations missing: {summary.get('unconfirmed_high_risk_count', 0)}")
         print(f"Unknown compact updates: {summary.get('unknown_compact_update_count', 0)}")
         if args.fail_on_not_ready and not report.get("ready_for_workflow"):
+            return 2
+        return 0
+
+    if args.command == "final-answer-intake":
+        unblockers_path = Path(args.unblockers)
+        if not unblockers_path.exists():
+            raise FileNotFoundError(f"critical input unblockers not found: {args.unblockers}")
+        unblockers = json.loads(unblockers_path.read_text(encoding="utf-8"))
+        template = write_final_answer_intake_template(
+            unblockers,
+            args.template_output,
+            args.template_markdown_output,
+        )
+        print(f"Wrote final answer intake template JSON to {args.template_output}")
+        print(f"Wrote final answer intake template Markdown to {args.template_markdown_output}")
+        print(f"Answers required: {template.get('answer_count', 0)}")
+        print(f"High risk: {template.get('high_risk_count', 0)}")
+        if not args.answers:
+            if args.fail_on_not_ready:
+                return 2
+            return 0
+        answers_path = Path(args.answers)
+        if not answers_path.exists():
+            raise FileNotFoundError(f"final answer intake not found: {args.answers}")
+        report = write_final_answer_intake_update(
+            unblockers,
+            json.loads(answers_path.read_text(encoding="utf-8")),
+            args.compact_updates_output,
+            args.json_output,
+            args.markdown_output,
+            confirm_high_risk=args.confirm_high_risk,
+        )
+        summary = report.get("summary") or {}
+        print(f"Wrote compact final-answer updates to {args.compact_updates_output}")
+        print(f"Wrote final answer intake report JSON to {args.json_output}")
+        print(f"Wrote final answer intake report Markdown to {args.markdown_output}")
+        print(f"Ready for finalize: {str(bool(report.get('ready_for_finalize'))).lower()}")
+        print(f"Missing unblockers: {summary.get('missing_unblocker_count', 0)}")
+        print(f"High-risk confirmations missing: {summary.get('unconfirmed_high_risk_count', 0)}")
+        print(f"Unknown answers: {summary.get('unknown_answer_count', 0)}")
+        if args.finalize:
+            final_report = write_critical_input_unblocker_final_update(
+                args.compact_updates_output,
+                args.full_template,
+                args.unblockers,
+                args.confirmed_updates_output,
+                args.confirmed_report_json_output,
+                args.confirmed_report_markdown_output,
+            )
+            final_summary = final_report.get("summary") or {}
+            print(f"Wrote confirmed updates JSON to {args.confirmed_updates_output}")
+            print(
+                "Confirmed updates ready for workflow: "
+                f"{str(bool(final_report.get('ready_for_workflow'))).lower()}"
+            )
+            print(f"Confirmed missing unblockers: {final_summary.get('missing_unblocker_count', 0)}")
+            print(
+                "Confirmed high-risk confirmations missing: "
+                f"{final_summary.get('unconfirmed_high_risk_count', 0)}"
+            )
+            if args.fail_on_not_ready and not final_report.get("ready_for_workflow"):
+                return 2
+        if args.fail_on_not_ready and not report.get("ready_for_finalize"):
             return 2
         return 0
 
