@@ -1859,6 +1859,7 @@ def main() -> int:
         default=str(DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_JSON),
     )
     goal_audit_parser.add_argument("--post-answer-pipeline-json", default=str(DEFAULT_POST_ANSWER_PIPELINE_JSON))
+    goal_audit_parser.add_argument("--closed-preflight-json", default=str(DEFAULT_CLOSED_PREFLIGHT_JSON))
     goal_audit_parser.add_argument("--closed-jobs-json", default=str(DEFAULT_CLOSED_JOBS))
     goal_audit_parser.add_argument(
         "--platform-question-playbook-json",
@@ -2153,6 +2154,7 @@ def main() -> int:
             autofill_batch_plan=_load_optional_json(args.autofill_batch_json),
             synthetic_unblocker_proof=_load_optional_json(args.synthetic_unblocker_proof_json),
             post_answer_pipeline=_load_optional_json(args.post_answer_pipeline_json),
+            closed_preflight=_load_optional_json(args.closed_preflight_json),
             closed_jobs=_load_optional_json(args.closed_jobs_json),
             platform_question_playbook=_load_optional_json(args.platform_question_playbook_json),
             position_execution_audit=_load_optional_json(args.position_execution_audit_json),

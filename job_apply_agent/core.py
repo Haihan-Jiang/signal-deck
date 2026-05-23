@@ -13855,6 +13855,7 @@ def build_goal_readiness_audit(
     autofill_batch_plan: dict[str, Any] | None = None,
     synthetic_unblocker_proof: dict[str, Any] | None = None,
     post_answer_pipeline: dict[str, Any] | None = None,
+    closed_preflight: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
     platform_question_playbook: dict[str, Any] | None = None,
     position_execution_audit: dict[str, Any] | None = None,
@@ -13871,6 +13872,7 @@ def build_goal_readiness_audit(
     post_answer = post_answer_pipeline or {}
     post_answer_policy = post_answer.get("policy") or {}
     post_answer_synthetic = post_answer.get("synthetic_queue_rehearsal") or {}
+    preflight = closed_preflight or {}
     playbook = platform_question_playbook or {}
     playbook_summary = playbook.get("summary") or {}
     position_audit = position_execution_audit or {}
@@ -13878,6 +13880,24 @@ def build_goal_readiness_audit(
     synthetic = coverage_gate.get("synthetic") or {}
     readiness_counts = readiness.get("readiness_counts") or {}
     closed_count = _closed_registry_count(closed_jobs)
+    preflight_candidate_count = int(preflight.get("candidate_count") or 0)
+    preflight_live_checked_count = int(preflight.get("live_checked_count") or 0)
+    preflight_open_eligible_count = int(preflight.get("open_eligible_count") or 0)
+    preflight_closed_count = int(preflight.get("closed_count") or 0)
+    preflight_uncertain_count = int(preflight.get("uncertain_count") or 0)
+    preflight_error_count = int(preflight.get("error_count") or 0)
+    preflight_retry_attempts = int(preflight.get("retry_attempts") or 0)
+    preflight_fetch_attempt_count = int(preflight.get("fetch_attempt_count") or 0)
+    preflight_ready = bool(
+        not preflight
+        or (
+            preflight_candidate_count >= 100
+            and preflight_live_checked_count >= 100
+            and preflight_open_eligible_count >= 100
+            and preflight_uncertain_count == 0
+            and preflight_error_count == 0
+        )
+    )
     data_blocker_count = _coverage_status_total(coverage_counts, GOAL_DATA_BLOCKER_STATUSES)
     optional_gap_count = _coverage_status_total(coverage_counts, GOAL_OPTIONAL_GAP_STATUSES)
     policy_gate_prompt_count = _coverage_status_total(coverage_counts, GOAL_POLICY_GATE_STATUSES)
@@ -14040,10 +14060,24 @@ def build_goal_readiness_audit(
         {
             "id": "closed_posting_filter",
             "requirement": "Detect and skip postings that show closed, expired, removed, filled, or no-longer-accepting application status.",
-            "status": "achieved" if closed_count > 0 else "needs_live_evidence",
+            "status": (
+                "achieved"
+                if closed_count > 0 and preflight_ready
+                else "needs_live_preflight_retry"
+                if closed_count > 0
+                else "needs_live_evidence"
+            ),
             "evidence": {
                 "closed_registry_count": closed_count,
                 "readiness_closed_skip_count": int(readiness_counts.get("closed_skip") or 0),
+                "latest_preflight_candidates": preflight_candidate_count,
+                "latest_preflight_live_checked": preflight_live_checked_count,
+                "latest_preflight_open_eligible": preflight_open_eligible_count,
+                "latest_preflight_closed": preflight_closed_count,
+                "latest_preflight_uncertain": preflight_uncertain_count,
+                "latest_preflight_errors": preflight_error_count,
+                "latest_preflight_retry_attempts": preflight_retry_attempts,
+                "latest_preflight_fetch_attempts": preflight_fetch_attempt_count,
                 "closed_phrase_count": len(CLOSED_APPLICATION_PHRASES),
                 "closed_regex_count": len(_CLOSED_APPLICATION_PATTERN_SPECS),
                 "policy": "closed postings are excluded before notify/open/apply",
@@ -14221,6 +14255,14 @@ def build_goal_readiness_audit(
             "critical_supervised_only_count": critical_supervised_only_count,
             "manual_gate_count": int(readiness.get("manual_gate_count") or 0),
             "closed_registry_count": closed_count,
+            "latest_preflight_candidate_count": preflight_candidate_count,
+            "latest_preflight_live_checked_count": preflight_live_checked_count,
+            "latest_preflight_open_eligible_count": preflight_open_eligible_count,
+            "latest_preflight_closed_count": preflight_closed_count,
+            "latest_preflight_uncertain_count": preflight_uncertain_count,
+            "latest_preflight_error_count": preflight_error_count,
+            "latest_preflight_retry_attempts": preflight_retry_attempts,
+            "latest_preflight_fetch_attempt_count": preflight_fetch_attempt_count,
             "real_platform_target_achieved": bool(coverage_gate.get("real_platform_target_achieved")),
             "real_platform_role_target_achieved": bool(coverage_gate.get("real_platform_role_target_achieved")),
             "positions_observed_total": int(coverage_gate.get("positions_observed_total") or 0),
@@ -14318,6 +14360,7 @@ def write_goal_readiness_audit(
     autofill_batch_plan: dict[str, Any] | None = None,
     synthetic_unblocker_proof: dict[str, Any] | None = None,
     post_answer_pipeline: dict[str, Any] | None = None,
+    closed_preflight: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
     platform_question_playbook: dict[str, Any] | None = None,
     position_execution_audit: dict[str, Any] | None = None,
@@ -14333,6 +14376,7 @@ def write_goal_readiness_audit(
         autofill_batch_plan=autofill_batch_plan,
         synthetic_unblocker_proof=synthetic_unblocker_proof,
         post_answer_pipeline=post_answer_pipeline,
+        closed_preflight=closed_preflight,
         closed_jobs=closed_jobs,
         platform_question_playbook=platform_question_playbook,
         position_execution_audit=position_execution_audit,
@@ -14387,6 +14431,15 @@ def render_goal_readiness_audit_markdown(audit: dict[str, Any]) -> str:
             f"- critical supervised-only inputs: {summary.get('critical_supervised_only_count', 0)}",
             f"- manual gates: {summary.get('manual_gate_count', 0)}",
             f"- closed registry entries: {summary.get('closed_registry_count', 0)}",
+            "- latest live preflight: "
+            f"{summary.get('latest_preflight_open_eligible_count', 0)} open / "
+            f"{summary.get('latest_preflight_candidate_count', 0)} candidates, "
+            f"live checked {summary.get('latest_preflight_live_checked_count', 0)}, "
+            f"closed {summary.get('latest_preflight_closed_count', 0)}, "
+            f"uncertain {summary.get('latest_preflight_uncertain_count', 0)}, "
+            f"errors {summary.get('latest_preflight_error_count', 0)}, "
+            f"retry attempts {summary.get('latest_preflight_retry_attempts', 0)}, "
+            f"fetch attempts {summary.get('latest_preflight_fetch_attempt_count', 0)}",
             f"- real platform coverage achieved: {str(bool(summary.get('real_platform_target_achieved'))).lower()}",
             f"- real platform-role coverage achieved: {str(bool(summary.get('real_platform_role_target_achieved'))).lower()}",
             f"- real positions observed: {summary.get('positions_observed_total', 0)}",
@@ -14565,7 +14618,10 @@ def _goal_next_actions(
         if unblocker_proof_complete:
             blank_count = final_answer_waiting_count or critical_waiting_count
             actions.append(
-                f"Fill the {blank_count} blanks in job_apply_agent/outbox/critical_input_unblockers_updates_template.json, run critical-input-unblockers-finalize, then run critical-inputs-workflow with the confirmed updates file."
+                f"Fill the {blank_count} final-answer reply-format lines, save them to a local reply file, then run `python3 -m job_apply_agent final-answer-reply --reply-file /path/to/reply.txt --run-post-answer-pipeline --post-answer-apply --post-answer-live-check --post-answer-include-values --fail-on-not-ready`."
+            )
+            actions.append(
+                "If you want the compact prompt again, run `python3 -m job_apply_agent final-answer-blockers --notify-telegram --telegram-dry-run` before filling the reply file."
             )
         else:
             actions.append(

@@ -8539,6 +8539,16 @@ class JobApplyAgentTests(unittest.TestCase):
             },
         }
         closed_jobs = {"jobs": [{"key": "linkedin:1", "reason": "No longer accepting applications"}]}
+        closed_preflight = {
+            "candidate_count": 100,
+            "live_checked_count": 100,
+            "open_eligible_count": 100,
+            "closed_count": 0,
+            "uncertain_count": 0,
+            "error_count": 0,
+            "retry_attempts": 1,
+            "fetch_attempt_count": 100,
+        }
         platform_question_playbook = {
             "summary": {
                 "target_platform_count": 2,
@@ -8578,6 +8588,7 @@ class JobApplyAgentTests(unittest.TestCase):
             autofill_batch_plan=autofill_batch,
             synthetic_unblocker_proof=synthetic_unblocker_proof,
             post_answer_pipeline=post_answer_pipeline,
+            closed_preflight=closed_preflight,
             closed_jobs=closed_jobs,
             platform_question_playbook=platform_question_playbook,
             position_execution_audit=position_execution_audit,
@@ -8620,6 +8631,10 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(audit["blocker_summary"]["position_execution_position_count"], 100)
         self.assertEqual(audit["blocker_summary"]["position_execution_selector_miss_count"], 0)
         self.assertEqual(audit["requirements"][0]["status"], "achieved")
+        self.assertEqual(audit["requirements"][0]["evidence"]["latest_preflight_open_eligible"], 100)
+        self.assertEqual(audit["requirements"][0]["evidence"]["latest_preflight_uncertain"], 0)
+        self.assertEqual(audit["blocker_summary"]["latest_preflight_open_eligible_count"], 100)
+        self.assertEqual(audit["blocker_summary"]["latest_preflight_uncertain_count"], 0)
         self.assertGreaterEqual(audit["requirements"][0]["evidence"]["closed_phrase_count"], 20)
         self.assertGreaterEqual(audit["requirements"][0]["evidence"]["closed_regex_count"], 7)
         fake_requirement = next(item for item in audit["requirements"] if item["id"] == "fake_candidate_100_position_rehearsal")
@@ -8650,8 +8665,10 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("platform playbook targets at 100: 2/2", markdown)
         self.assertIn("position execution audit ready: true", markdown)
         self.assertIn("position execution audited: 100 / 100", markdown)
+        self.assertIn("latest live preflight: 100 open / 100 candidates", markdown)
         self.assertIn("Top Data-Blocking Prompts", markdown)
         self.assertIn("Have you worked with us before?", markdown)
+        self.assertIn("final-answer-reply --reply-file", "\n".join(audit["next_actions"]))
 
         with tempfile.TemporaryDirectory() as temp_dir:
             json_output = Path(temp_dir) / "goal.json"
@@ -8669,6 +8686,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 autofill_batch_plan=autofill_batch,
                 synthetic_unblocker_proof=synthetic_unblocker_proof,
                 post_answer_pipeline=post_answer_pipeline,
+                closed_preflight=closed_preflight,
                 closed_jobs=closed_jobs,
                 platform_question_playbook=platform_question_playbook,
                 position_execution_audit=position_execution_audit,
