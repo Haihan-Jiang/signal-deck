@@ -8022,6 +8022,9 @@ def _select_autofill_batch_positions(
         )
         grouped.setdefault(group_key, []).append(position)
 
+    for positions in grouped.values():
+        positions.sort(key=lambda position: _autofill_position_selection_key(position, items_by_position))
+
     selected: list[dict[str, Any]] = []
     group_keys = sorted(grouped)
     target = max(int(limit), 0)
@@ -8038,6 +8041,40 @@ def _select_autofill_batch_positions(
         "skipped_not_ready_position_count": skipped_not_ready,
         "ready_source_position_count": ready_source_count,
     }
+
+
+def _autofill_position_selection_key(
+    position: dict[str, Any],
+    items_by_position: dict[str, list[dict[str, Any]]],
+) -> tuple[int, int, int, int, int, str, str, str]:
+    position_key = str(position.get("position_key") or "")
+    stop_estimate = _autofill_position_stop_estimate(items_by_position.get(position_key, []))
+    return (
+        stop_estimate["sensitive"],
+        stop_estimate["policy"],
+        stop_estimate["manual"],
+        int(position.get("required_prompt_count") or 0),
+        len(items_by_position.get(position_key, [])),
+        str(position.get("company") or ""),
+        str(position.get("title") or ""),
+        str(position.get("apply_url") or ""),
+    )
+
+
+def _autofill_position_stop_estimate(items: list[dict[str, Any]]) -> dict[str, int]:
+    estimate = {"sensitive": 0, "policy": 0, "manual": 0}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        action = str(item.get("automation_action") or "")
+        category = str(item.get("category") or "")
+        if action == "do_not_store_sensitive":
+            estimate["sensitive"] += 1
+        elif category == "policy_acknowledgement":
+            estimate["policy"] += 1
+        elif action in {"human_review_required", "manual_security_step"}:
+            estimate["manual"] += 1
+    return estimate
 
 
 def _observed_position_snapshot(

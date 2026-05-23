@@ -3565,6 +3565,122 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(markdown_output.exists())
             self.assertTrue(html_output.exists())
 
+    def test_autofill_batch_prefers_lower_stop_positions_inside_group(self) -> None:
+        profile = CandidateProfile(
+            name="Alan Jiang",
+            email="alan@example.com",
+            phone="555-0100",
+            location="Bellevue, WA",
+            target_titles=["SRE"],
+            target_locations=["United States"],
+            remote_ok=True,
+            keywords=[],
+            blocklist=[],
+            min_score=1,
+            resume_facts={"professional_summary": "SRE"},
+            question_answers={},
+        )
+        positions = [
+            {
+                "position_key": "ashby:extra-stop:1",
+                "platform": "Ashby",
+                "company": "A Co",
+                "title": "Site Reliability Engineer",
+                "role_family": "SRE",
+                "apply_url": "https://jobs.ashbyhq.com/a/1",
+            },
+            {
+                "position_key": "ashby:clean:1",
+                "platform": "Ashby",
+                "company": "B Co",
+                "title": "Site Reliability Engineer",
+                "role_family": "SRE",
+                "apply_url": "https://jobs.ashbyhq.com/b/1",
+            },
+        ]
+        research = {
+            "positions": positions,
+            "items": [
+                {
+                    "position_key": "ashby:extra-stop:1",
+                    "label": "Email",
+                    "category": "profile_identity",
+                    "automation_action": "auto_fill_from_profile",
+                    "required": True,
+                    "platform": "Ashby",
+                    "source_file": "test",
+                },
+                {
+                    "position_key": "ashby:extra-stop:1",
+                    "label": "Gender",
+                    "category": "protected_class_self_id",
+                    "automation_action": "do_not_store_sensitive",
+                    "required": True,
+                    "platform": "Ashby",
+                    "source_file": "test",
+                },
+                {
+                    "position_key": "ashby:extra-stop:1",
+                    "label": "Submit application",
+                    "category": "final_submit",
+                    "automation_action": "submit_gate",
+                    "required": True,
+                    "platform": "Ashby",
+                    "source_file": "test",
+                },
+                {
+                    "position_key": "ashby:clean:1",
+                    "label": "Email",
+                    "category": "profile_identity",
+                    "automation_action": "auto_fill_from_profile",
+                    "required": True,
+                    "platform": "Ashby",
+                    "source_file": "test",
+                },
+                {
+                    "position_key": "ashby:clean:1",
+                    "label": "Submit application",
+                    "category": "final_submit",
+                    "automation_action": "submit_gate",
+                    "required": True,
+                    "platform": "Ashby",
+                    "source_file": "test",
+                },
+            ],
+        }
+        readiness = {
+            "positions": [
+                {
+                    **positions[0],
+                    "readiness": "supervised_ready",
+                    "ready_for_autofill": True,
+                    "required_prompt_count": 3,
+                    "covered_prompt_count": 2,
+                },
+                {
+                    **positions[1],
+                    "readiness": "supervised_ready",
+                    "ready_for_autofill": True,
+                    "required_prompt_count": 2,
+                    "covered_prompt_count": 1,
+                },
+            ]
+        }
+
+        report = build_autofill_batch_plan(
+            research,
+            readiness,
+            profile=profile,
+            answer_memory={"version": 1, "answers": []},
+            closed_jobs={"version": 1, "jobs": []},
+            limit=1,
+        )
+
+        self.assertEqual(report["selected_count"], 1)
+        self.assertEqual(report["positions"][0]["position_key"], "ashby:clean:1")
+        self.assertEqual(report["stop_action_count"], 1)
+        self.assertEqual(report["selected_stop_actions"][0]["status"], "final_submit_confirmation")
+
     def test_write_browser_action_manifest_outputs_reports(self) -> None:
         plan = {
             "title": "Application",
