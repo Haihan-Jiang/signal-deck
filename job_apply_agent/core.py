@@ -5543,10 +5543,15 @@ def render_final_answer_reply_intake_markdown(report: dict[str, Any]) -> str:
 
 def _split_final_answer_reply_line(line: str) -> tuple[str, str]:
     cleaned = re.sub(r"^\s*(?:[-*]\s+|\d+[.)]\s+)", "", line).strip()
-    for separator in [":", "\uff1a", "=", "\uff1d"]:
-        if separator in cleaned:
-            key, value = cleaned.split(separator, 1)
-            return key.strip(), value.strip()
+    separator_positions = [
+        (cleaned.find(separator), separator)
+        for separator in [":", "\uff1a", "=", "\uff1d"]
+        if cleaned.find(separator) >= 0
+    ]
+    if separator_positions:
+        index, separator = min(separator_positions, key=lambda item: item[0])
+        key, value = cleaned[:index], cleaned[index + len(separator) :]
+        return key.strip(), value.strip()
     return "", ""
 
 

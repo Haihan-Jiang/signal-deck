@@ -7672,7 +7672,7 @@ class JobApplyAgentTests(unittest.TestCase):
         reply_text = "\n".join(
             [
                 "1. zip_or_postal_code\uff1a98004",
-                "2. health_requirement\uff1aI can comply with standard health or vaccination requirements; no exceptions.",
+                "2. health_requirement\uff1aI can comply with standard health or vaccination requirements; exceptions: none.",
                 "3. health_requirement_confirmed\uff1a\u786e\u8ba4",
             ]
         )
