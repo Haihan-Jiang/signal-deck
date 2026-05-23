@@ -21606,6 +21606,10 @@ def build_telegram_final_answer_blocker_alert(
         if len(reply_template_lines) > max_items * 2:
             lines.append("... full template in job_apply_agent/outbox/final_answer_blockers_latest.md")
         lines.append("Confirm values can be yes or \u786e\u8ba4; : and \uff1a both work.")
+        lines.append("Short labels also work, e.g. \u90ae\u7f16\u662f[ZIP_CODE] or recording Yes/No...")
+        lines.append(
+            f"Validate locally: python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --validate-only --fail-on-not-ready"
+        )
         lines.append("")
     lines.append("Paste filled lines back to Codex. This alert does not include your answers.")
     return _truncate_telegram_text("\n".join(lines))
