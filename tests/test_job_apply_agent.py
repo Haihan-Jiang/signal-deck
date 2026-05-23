@@ -7485,7 +7485,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("--validate-only", report["action_pack"]["safe_validate_command"])
         self.assertIn("--run-post-answer-pipeline", report["action_pack"]["safe_run_command"])
         self.assertIn("final-answer-autopilot", report["action_pack"]["autopilot_command"])
-        self.assertIn("--reply-text", report["action_pack"]["autopilot_reply_text_command"])
+        self.assertIn("--reply-stdin", report["action_pack"]["autopilot_reply_text_command"])
         self.assertIn("--apply --live-check --include-values", report["action_pack"]["autopilot_reply_text_command"])
         self.assertIn("--apply --live-check --include-values", report["action_pack"]["autopilot_apply_command"])
         self.assertIn("--open-browser --open-limit 100", report["action_pack"]["autopilot_open_command"])
@@ -7495,9 +7495,9 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertTrue(report["action_pack"]["final_submit_remains_supervised"])
         reply_template_text = render_final_answer_reply_template_text(report)
         self.assertIn("rehearse-after-answers", report["next_commands"][0])
-        self.assertIn("resume-after-answers --reply-text", report["next_commands"][1])
+        self.assertIn("resume-after-answers --reply-stdin", report["next_commands"][1])
         self.assertIn("--validate-only", report["next_commands"][1])
-        self.assertIn("final-answer-autopilot --reply-text", report["next_commands"][2])
+        self.assertIn("final-answer-autopilot --reply-stdin", report["next_commands"][2])
         self.assertIn("--dry-run", report["next_commands"][2])
         self.assertIn("--validate-only", report["next_commands"][3])
         self.assertIn("resume-after-answers", report["next_commands"][4])
@@ -10102,7 +10102,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(audit["completion_verdict"]["satisfied_requirement_count"], 11)
         self.assertEqual(audit["completion_verdict"]["blocking_requirement_count"], 1)
         self.assertFalse(audit["completion_verdict"]["real_employer_unattended_submit_allowed"])
-        self.assertIn("--reply-text", audit["completion_verdict"]["direct_autopilot_command"])
+        self.assertIn("--reply-stdin", audit["completion_verdict"]["direct_autopilot_command"])
         self.assertEqual(len(audit["completion_checklist"]), 12)
         self.assertTrue(audit["completion_checklist"][0]["counts_as_complete"])
         blocking_checklist = [row for row in audit["completion_checklist"] if row["blocking"]]
@@ -10254,7 +10254,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Top Data-Blocking Prompts", markdown)
         self.assertIn("Have you worked with us before?", markdown)
         self.assertIn("resume-after-answers", "\n".join(audit["next_actions"]))
-        self.assertIn("final-answer-autopilot --reply-text", "\n".join(audit["next_actions"]))
+        self.assertIn("final-answer-autopilot --reply-stdin", "\n".join(audit["next_actions"]))
 
         with tempfile.TemporaryDirectory() as temp_dir:
             json_output = Path(temp_dir) / "goal.json"
@@ -10319,7 +10319,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 ],
                 "direct_autopilot_command": (
                     "python3 -m job_apply_agent final-answer-autopilot "
-                    "--reply-text '<filled final-answer lines>' --apply --live-check "
+                    "--reply-stdin --apply --live-check "
                     "--include-values --fail-on-not-ready"
                 ),
             },
@@ -10614,7 +10614,7 @@ class JobApplyAgentTests(unittest.TestCase):
             report["summary"]["goal_completion_blocking_final_answer_aliases"],
             ["zip_or_postal_code", "citizenship_status"],
         )
-        self.assertIn("--reply-text", report["summary"]["goal_completion_direct_autopilot_command"])
+        self.assertIn("--reply-stdin", report["summary"]["goal_completion_direct_autopilot_command"])
         self.assertEqual(report["goal_completion_verdict"]["status"], "waiting_for_truthful_user_answers")
         self.assertEqual(report["goal_completion_checklist"][1]["id"], "real_user_answer_learning")
         self.assertEqual(
@@ -10646,12 +10646,12 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("resume-after-answers", report["next_commands"][0])
         self.assertIn("final-answer-blockers", report["next_commands"][1])
         self.assertIn("rehearse-after-answers", report["next_commands"][2])
-        self.assertIn("resume-after-answers --reply-text", report["next_commands"][3])
+        self.assertIn("resume-after-answers --reply-stdin", report["next_commands"][3])
         self.assertIn("--validate-only", report["next_commands"][3])
         self.assertIn("final-answer-reply --reply-file", report["next_commands"][4])
         self.assertIn("job_apply_agent/outbox/final_answer_reply_template_latest.txt", report["next_commands"][4])
         self.assertIn("--run-post-answer-pipeline", report["next_commands"][4])
-        self.assertIn("final-answer-autopilot --reply-text", report["next_commands"][5])
+        self.assertIn("final-answer-autopilot --reply-stdin", report["next_commands"][5])
         self.assertIn("resume-after-answers", report["next_commands"][6])
         self.assertIn("--open-browser", report["next_commands"][7])
         self.assertIn("post-answer-pipeline --synthetic-final-answers --synthetic-rehearse-queue", report["next_commands"][8])
@@ -10674,7 +10674,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("final-answer fake/test markers: real 0, synthetic 5", markdown)
         self.assertIn("Goal Completion Verdict", markdown)
         self.assertIn("blocking final-answer aliases: zip_or_postal_code, citizenship_status", markdown)
-        self.assertIn("final-answer-autopilot --reply-text", markdown)
+        self.assertIn("final-answer-autopilot --reply-stdin", markdown)
         self.assertIn("Completion Verdict", markdown)
         self.assertIn("truthful_answer_learning", markdown)
         self.assertIn("Submission Safety Audit", markdown)

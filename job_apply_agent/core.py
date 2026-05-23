@@ -15641,7 +15641,7 @@ def _goal_completion_verdict(
         "real_employer_unattended_submit_allowed": False,
         "direct_autopilot_command": (
             "python3 -m job_apply_agent final-answer-autopilot "
-            "--reply-text '<filled final-answer lines>' --apply --live-check "
+            "--reply-stdin --apply --live-check "
             "--include-values --fail-on-not-ready"
         ),
     }
@@ -15670,7 +15670,7 @@ def _goal_next_actions(
             )
             actions.append(
                 "Or paste those lines into Codex and run the direct path: "
-                "`python3 -m job_apply_agent final-answer-autopilot --reply-text '<filled final-answer lines>' --apply --live-check --include-values --fail-on-not-ready`."
+                "`python3 -m job_apply_agent final-answer-autopilot --reply-stdin --apply --live-check --include-values --fail-on-not-ready`."
             )
             actions.append(
                 "If you want the compact prompt again, run `python3 -m job_apply_agent final-answer-blockers --notify-telegram --telegram-dry-run` before filling the reply file."
@@ -16751,8 +16751,8 @@ def _automation_handoff_confirmed_answer_runbook(summary: dict[str, Any]) -> lis
             "step": 1,
             "name": "Confirm final answer blanks",
             "status": "waiting_for_user" if final_blanks else "ready",
-            "action": f"python3 -m job_apply_agent final-answer-blockers --notify-telegram --telegram-dry-run, then fill {FINAL_ANSWER_REPLY_TEMPLATE_PATH} with truthful values.",
-            "expected_result": f"{final_blanks} final blanks are captured in reply-file format without sending answer text.",
+            "action": "python3 -m job_apply_agent final-answer-blockers --print-minimal-reply, then paste truthful values through --reply-stdin.",
+            "expected_result": f"{final_blanks} final blanks are captured in stdin/reply-file format without sending answer text.",
         },
         {
             "step": 2,
@@ -16765,7 +16765,7 @@ def _automation_handoff_confirmed_answer_runbook(summary: dict[str, Any]) -> lis
             "step": 3,
             "name": "Run safe post-answer preflight",
             "status": "ready_after_confirmation" if final_blanks else "ready",
-            "action": "python3 -m job_apply_agent resume-after-answers --reply-text '<filled final-answer lines>' --validate-only",
+            "action": "python3 -m job_apply_agent resume-after-answers --reply-stdin --validate-only",
             "alternate_action": f"python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --validate-only --fail-on-not-ready",
             "expected_result": "The reply is parsed and verified without writing outbox updates, profile, or answer memory.",
         },
@@ -16773,14 +16773,14 @@ def _automation_handoff_confirmed_answer_runbook(summary: dict[str, Any]) -> lis
             "step": 4,
             "name": "Apply approved answers and live-check",
             "status": "ready_after_confirmation" if final_blanks else "ready",
-            "action": "python3 -m job_apply_agent resume-after-answers",
+            "action": "python3 -m job_apply_agent resume-after-answers --reply-stdin",
             "expected_result": "Approved answers are written to profile/memory, live closed-posting preflight runs, and the supervised autofill packet is rebuilt.",
         },
         {
             "step": 5,
             "name": "Open verified pages",
             "status": "ready_after_confirmation" if final_blanks else "ready",
-            "action": "python3 -m job_apply_agent resume-after-answers --open-browser --open-limit 100",
+            "action": "python3 -m job_apply_agent resume-after-answers --reply-stdin --open-browser --open-limit 100",
             "expected_result": "Only live-verified pages open; final submit stays supervised.",
         },
         {
@@ -16824,13 +16824,13 @@ def _automation_handoff_confirmed_answer_runbook(summary: dict[str, Any]) -> lis
 def _automation_handoff_next_commands(summary: dict[str, Any]) -> list[str]:
     commands = [
         _automation_handoff_one_command_resume(summary),
-        "python3 -m job_apply_agent final-answer-blockers --notify-telegram --telegram-dry-run",
+        "python3 -m job_apply_agent final-answer-blockers --print-minimal-reply",
         "python3 -m job_apply_agent rehearse-after-answers",
-        "python3 -m job_apply_agent resume-after-answers --reply-text '<filled final-answer lines>' --validate-only",
+        "python3 -m job_apply_agent resume-after-answers --reply-stdin --validate-only",
         f"python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --run-post-answer-pipeline --fail-on-not-ready",
-        "python3 -m job_apply_agent final-answer-autopilot --reply-text '<filled final-answer lines>' --apply --live-check --include-values --fail-on-not-ready",
-        "python3 -m job_apply_agent resume-after-answers",
-        "python3 -m job_apply_agent resume-after-answers --open-browser --open-limit 100",
+        "python3 -m job_apply_agent final-answer-autopilot --reply-stdin --apply --live-check --include-values --fail-on-not-ready",
+        "python3 -m job_apply_agent resume-after-answers --reply-stdin",
+        "python3 -m job_apply_agent resume-after-answers --reply-stdin --open-browser --open-limit 100",
         "python3 -m job_apply_agent post-answer-pipeline --synthetic-final-answers --synthetic-rehearse-queue --fail-on-not-ready",
         "python3 -m job_apply_agent post-answer-pipeline --fail-on-not-ready",
         "python3 -m job_apply_agent post-answer-pipeline --apply --live-check --include-values",
@@ -21782,11 +21782,11 @@ def build_final_answer_blocker_report(
             "needs_more_specificity": summary["post_answer_intake_needs_more_specific_answer_count"],
             "unknown": summary["post_answer_intake_unknown_answer_count"],
         },
-        "next_validate_command": "python3 -m job_apply_agent resume-after-answers --reply-text '<filled final-answer lines>' --validate-only",
-        "next_run_command": "python3 -m job_apply_agent resume-after-answers --reply-text '<filled final-answer lines>'",
+        "next_validate_command": "python3 -m job_apply_agent resume-after-answers --reply-stdin --validate-only",
+        "next_run_command": "python3 -m job_apply_agent resume-after-answers --reply-stdin",
         "next_autopilot_reply_text_command": (
             "python3 -m job_apply_agent final-answer-autopilot "
-            "--reply-text '<filled final-answer lines>' --apply --live-check "
+            "--reply-stdin --apply --live-check "
             "--include-values --fail-on-not-ready"
         ),
         "policy": {
@@ -21816,12 +21816,12 @@ def build_final_answer_blocker_report(
         "minimal_reply_prompt_lines": minimal_reply_prompt_lines,
         "next_commands": [
             "python3 -m job_apply_agent rehearse-after-answers",
-            "python3 -m job_apply_agent resume-after-answers --reply-text '<filled final-answer lines>' --validate-only",
-            "python3 -m job_apply_agent final-answer-autopilot --reply-text '<filled final-answer lines>' --dry-run --fail-on-not-ready",
+            "python3 -m job_apply_agent resume-after-answers --reply-stdin --validate-only",
+            "python3 -m job_apply_agent final-answer-autopilot --reply-stdin --dry-run --fail-on-not-ready",
             f"python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --validate-only --fail-on-not-ready",
             "python3 -m job_apply_agent resume-after-answers",
             f"python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --run-post-answer-pipeline --fail-on-not-ready",
-            "python3 -m job_apply_agent final-answer-autopilot --reply-text '<filled final-answer lines>' --apply --live-check --include-values --fail-on-not-ready",
+            "python3 -m job_apply_agent final-answer-autopilot --reply-stdin --apply --live-check --include-values --fail-on-not-ready",
             f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --watch --fail-on-not-ready",
             f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --watch --apply --live-check --include-values --fail-on-not-ready",
             "python3 -m job_apply_agent final-answer-intake-server --open-browser --once --run-post-answer-pipeline --post-answer-apply --post-answer-live-check --post-answer-include-values",
@@ -21889,7 +21889,7 @@ def _final_answer_blocker_action_pack(
         ),
         "autopilot_reply_text_command": (
             "python3 -m job_apply_agent final-answer-autopilot "
-            "--reply-text '<filled final-answer lines>' --apply --live-check "
+            "--reply-stdin --apply --live-check "
             "--include-values --fail-on-not-ready"
         ),
         "autopilot_apply_command": (
