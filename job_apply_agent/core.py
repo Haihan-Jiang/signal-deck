@@ -13974,6 +13974,22 @@ def build_goal_readiness_audit(
             "critical_supervised_only_count": critical_supervised_only_count,
             "manual_gate_count": int(readiness.get("manual_gate_count") or 0),
             "closed_registry_count": closed_count,
+            "real_platform_target_achieved": bool(coverage_gate.get("real_platform_target_achieved")),
+            "real_platform_role_target_achieved": bool(coverage_gate.get("real_platform_role_target_achieved")),
+            "positions_observed_total": int(coverage_gate.get("positions_observed_total") or 0),
+            "synthetic_browser_run_count": int(synthetic.get("run_count") or 0),
+            "synthetic_browser_platform_role_target_achieved": bool(
+                synthetic.get("platform_role_target_achieved")
+            ),
+            "synthetic_browser_local_submit_count": int(synthetic.get("actual_submit_count") or 0),
+            "synthetic_browser_eligible_submit_count": int(synthetic.get("eligible_submit_count") or 0),
+            "synthetic_browser_eligible_submit_target_count": int(
+                synthetic.get("eligible_submit_target_count") or 0
+            ),
+            "synthetic_browser_eligible_submit_achieved": bool(synthetic.get("eligible_submit_achieved")),
+            "synthetic_browser_expected_blocker_count": int(synthetic.get("expected_blocker_count") or 0),
+            "synthetic_browser_selector_miss_count": synthetic_selector_misses,
+            "synthetic_browser_real_platform_submission": bool(synthetic.get("real_platform_submission")),
             "autofill_batch_selected_count": batch_selected,
             "autofill_batch_allowed_count": batch_allowed,
             "autofill_batch_selector_miss_count": batch_selector_misses,
@@ -14124,6 +14140,18 @@ def render_goal_readiness_audit_markdown(audit: dict[str, Any]) -> str:
             f"- critical supervised-only inputs: {summary.get('critical_supervised_only_count', 0)}",
             f"- manual gates: {summary.get('manual_gate_count', 0)}",
             f"- closed registry entries: {summary.get('closed_registry_count', 0)}",
+            f"- real platform coverage achieved: {str(bool(summary.get('real_platform_target_achieved'))).lower()}",
+            f"- real platform-role coverage achieved: {str(bool(summary.get('real_platform_role_target_achieved'))).lower()}",
+            f"- real positions observed: {summary.get('positions_observed_total', 0)}",
+            "- synthetic browser rehearsal: "
+            f"runs {summary.get('synthetic_browser_run_count', 0)}, "
+            f"platform-role target {str(bool(summary.get('synthetic_browser_platform_role_target_achieved'))).lower()}, "
+            f"local submits {summary.get('synthetic_browser_local_submit_count', 0)}, "
+            f"eligible {summary.get('synthetic_browser_eligible_submit_count', 0)} / "
+            f"{summary.get('synthetic_browser_eligible_submit_target_count', 0)}, "
+            f"eligible achieved {str(bool(summary.get('synthetic_browser_eligible_submit_achieved'))).lower()}, "
+            f"selector misses {summary.get('synthetic_browser_selector_miss_count', 0)}, "
+            f"real platform submission {str(bool(summary.get('synthetic_browser_real_platform_submission'))).lower()}",
             f"- 100-batch local synthetic submits: {summary.get('autofill_batch_local_synthetic_submit_count', 0)}",
             f"- 100-batch local synthetic submit achieved: {str(bool(summary.get('autofill_batch_local_synthetic_submit_achieved'))).lower()}",
             f"- synthetic final unblocker proof complete: {str(bool(summary.get('synthetic_unblocker_proof_complete'))).lower()}",

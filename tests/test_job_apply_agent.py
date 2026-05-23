@@ -8090,9 +8090,11 @@ class JobApplyAgentTests(unittest.TestCase):
             "synthetic": {
                 "run_count": 400,
                 "platform_role_target_achieved": True,
+                "actual_submit_count": 350,
                 "eligible_submit_count": 350,
                 "eligible_submit_target_count": 350,
                 "eligible_submit_achieved": True,
+                "expected_blocker_count": 50,
                 "selector_miss_count": 0,
                 "real_platform_submission": False,
             },
@@ -8235,6 +8237,18 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(audit["blocker_summary"]["final_answer_waiting_count_after_drafts"], 2)
         self.assertEqual(audit["blocker_summary"]["critical_update_entry_count"], 12)
         self.assertEqual(audit["blocker_summary"]["policy_gate_prompt_count"], 4)
+        self.assertTrue(audit["blocker_summary"]["real_platform_target_achieved"])
+        self.assertTrue(audit["blocker_summary"]["real_platform_role_target_achieved"])
+        self.assertEqual(audit["blocker_summary"]["positions_observed_total"], 400)
+        self.assertEqual(audit["blocker_summary"]["synthetic_browser_run_count"], 400)
+        self.assertTrue(audit["blocker_summary"]["synthetic_browser_platform_role_target_achieved"])
+        self.assertEqual(audit["blocker_summary"]["synthetic_browser_local_submit_count"], 350)
+        self.assertEqual(audit["blocker_summary"]["synthetic_browser_eligible_submit_count"], 350)
+        self.assertEqual(audit["blocker_summary"]["synthetic_browser_eligible_submit_target_count"], 350)
+        self.assertTrue(audit["blocker_summary"]["synthetic_browser_eligible_submit_achieved"])
+        self.assertEqual(audit["blocker_summary"]["synthetic_browser_expected_blocker_count"], 50)
+        self.assertEqual(audit["blocker_summary"]["synthetic_browser_selector_miss_count"], 0)
+        self.assertFalse(audit["blocker_summary"]["synthetic_browser_real_platform_submission"])
         self.assertEqual(audit["blocker_summary"]["autofill_batch_local_synthetic_submit_count"], 100)
         self.assertTrue(audit["blocker_summary"]["autofill_batch_local_synthetic_submit_achieved"])
         self.assertTrue(audit["blocker_summary"]["synthetic_unblocker_proof_complete"])
@@ -8267,6 +8281,11 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(audit["top_data_blocking_prompts"][0]["coverage_status"], "needs_user_confirmation")
         self.assertIn("Goal Readiness Audit", markdown)
         self.assertIn("needs_user_answers", markdown)
+        self.assertIn("real platform coverage achieved: true", markdown)
+        self.assertIn("real platform-role coverage achieved: true", markdown)
+        self.assertIn("synthetic browser rehearsal: runs 400", markdown)
+        self.assertIn("eligible 350 / 350", markdown)
+        self.assertIn("real platform submission false", markdown)
         self.assertIn("100-batch local synthetic submits: 100", markdown)
         self.assertIn("final answer blanks after prepared drafts: 2", markdown)
         self.assertIn("synthetic final unblocker proof complete: true", markdown)
