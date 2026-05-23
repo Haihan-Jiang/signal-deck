@@ -535,6 +535,7 @@ To run the whole confirmed-answer intake loop in one command, use:
 python3 -m job_apply_agent critical-inputs-workflow \
   --updates /path/to/confirmed_critical_input_answers.json \
   --approve \
+  --approve-high-risk \
   --apply
 ```
 
@@ -543,6 +544,25 @@ This merges the compact answers, writes a status report, runs
 values to the local profile/answer memory when `--apply` is present, then
 refreshes gaps, readiness, coverage gate, goal audit, Excel, and HTML. It still
 does not submit real employer applications.
+
+By default, `critical-inputs-workflow --apply` refuses to write profile or
+answer-memory values unless every critical input in the update set is complete,
+known, approved, and any high-risk row has `high_risk_user_confirmed: true`.
+Use this dry-run gate before applying:
+
+```bash
+python3 -m job_apply_agent critical-inputs-readiness
+```
+
+This writes:
+
+```text
+job_apply_agent/outbox/critical_input_updates_readiness_latest.json
+job_apply_agent/outbox/critical_input_updates_readiness_latest.md
+```
+
+`--allow-partial-apply` exists only for an intentional staged migration; it can
+persist currently ready values while other critical inputs are still waiting.
 
 ```bash
 python3 -m job_apply_agent critical-inputs-status
@@ -572,7 +592,9 @@ python3 -m job_apply_agent apply-critical-inputs \
 
 This writes approved profile fields, resume facts, and reusable answer memory.
 Supervised-only privacy acknowledgements stay as browser review steps, and
-final submit remains supervised.
+final submit remains supervised. High-risk critical inputs are skipped unless
+their answer row includes `high_risk_user_confirmed: true`; this prevents
+direct `apply-critical-inputs` from bypassing the workflow readiness gate.
 
 After editing the JSON so only approved non-sensitive tasks have
 `approved: true` and an `answer`, apply those approved answers locally:

@@ -4197,26 +4197,27 @@ def build_critical_input_answer_template(
             not in {"high_risk_exact_confirmation", "supervised_browser_review_only"}
             else ""
         )
-        answers.append(
-            {
-                "input_id": _critical_input_answer_id(item, index),
-                "input_type": item.get("input_type"),
-                "group_key": item.get("group_key"),
-                "question": item.get("question"),
-                "approval_decision": "",
-                "user_answer": prefilled_answer,
-                "required_user_response": item.get("required_user_response"),
-                "draft_answer": draft_answer,
-                "draft_answer_source": item.get("draft_answer_source"),
-                "approval_risk": item.get("approval_risk"),
-                "storage_after_approval": item.get("storage_after_approval"),
-                "automation_after_answer": item.get("automation_after_answer"),
-                "persist_allowed": bool(item.get("persist_allowed")),
-                "required_count": item.get("required_count", 0),
-                "platforms": item.get("platforms") or [],
-                "labels": item.get("labels") or [],
-            }
-        )
+        answer = {
+            "input_id": _critical_input_answer_id(item, index),
+            "input_type": item.get("input_type"),
+            "group_key": item.get("group_key"),
+            "question": item.get("question"),
+            "approval_decision": "",
+            "user_answer": prefilled_answer,
+            "required_user_response": item.get("required_user_response"),
+            "draft_answer": draft_answer,
+            "draft_answer_source": item.get("draft_answer_source"),
+            "approval_risk": item.get("approval_risk"),
+            "storage_after_approval": item.get("storage_after_approval"),
+            "automation_after_answer": item.get("automation_after_answer"),
+            "persist_allowed": bool(item.get("persist_allowed")),
+            "required_count": item.get("required_count", 0),
+            "platforms": item.get("platforms") or [],
+            "labels": item.get("labels") or [],
+        }
+        if _critical_input_is_high_risk(item):
+            answer["high_risk_user_confirmed"] = False
+        answers.append(answer)
     preserved_answer_count = _sync_existing_critical_input_answers(answers, existing_answers_payload)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -4273,8 +4274,9 @@ def _sync_existing_critical_input_answers(
                     answer[field] = existing_value
                 copied_any = copied_any or bool(str(existing_value or "").strip())
         for field in ["notes", "high_risk_user_confirmed"]:
-            if field in existing and field not in answer:
+            if field in existing:
                 answer[field] = existing.get(field)
+                copied_any = copied_any or bool(existing.get(field))
         if copied_any:
             preserved += 1
     return preserved
@@ -4296,6 +4298,8 @@ def build_fake_critical_input_probe(approval_pack: dict[str, Any]) -> dict[str, 
             continue
         item["approval_decision"] = "approved"
         item["user_answer"] = _fake_critical_input_answer(item)
+        if _critical_input_is_high_risk(item):
+            item["high_risk_user_confirmed"] = True
     status = build_critical_input_status_report(approval_pack, fake_answers)
     summary = status.get("summary") or {}
     return {
@@ -5572,21 +5576,28 @@ def build_critical_input_answer_update(
         update_fields = pending_updates.setdefault(input_id, {})
         answer_updated = False
         approval_updated = False
+        confirmation_updated = False
         if user_answer is not None and str(user_answer).strip():
             update_fields["user_answer"] = str(user_answer).strip()
             answer_updated = True
         if requested_approval and not approval_blocked:
             update_fields["approval_decision"] = "approved"
             approval_updated = True
+        if high_risk and _critical_input_update_has_high_risk_confirmation(entry):
+            update_fields["high_risk_user_confirmed"] = high_risk_confirmed
+            confirmation_updated = True
         report_rows.append(
             {
                 "input_id": input_id,
                 "group_key": row.get("group_key"),
                 "question": row.get("question"),
-                "status": "updated" if answer_updated or approval_updated else "matched_no_change",
+                "status": "updated"
+                if answer_updated or approval_updated or confirmation_updated
+                else "matched_no_change",
                 "reason": "high_risk_confirmation_required" if approval_blocked else "",
                 "answer_updated": answer_updated,
                 "approval_updated": approval_updated,
+                "high_risk_confirmation_updated": confirmation_updated,
                 "high_risk": high_risk,
                 "high_risk_user_confirmed": high_risk_confirmed,
             }
@@ -5620,6 +5631,9 @@ def build_critical_input_answer_update(
             "unknown_update_count": len(unknown_updates),
             "answer_updated_count": sum(1 for row in report_rows if row.get("answer_updated")),
             "approval_updated_count": sum(1 for row in report_rows if row.get("approval_updated")),
+            "high_risk_confirmation_updated_count": sum(
+                1 for row in report_rows if row.get("high_risk_confirmation_updated")
+            ),
             "high_risk_approval_blocked_count": sum(
                 1 for row in report_rows if row.get("reason") == "high_risk_confirmation_required"
             ),
@@ -5703,11 +5717,32 @@ def write_critical_input_answer_workflow(
     approve: bool = False,
     approve_high_risk: bool = False,
     apply_confirmed: bool = False,
+    allow_partial_apply: bool = False,
     source: str = "confirmed_critical_inputs",
 ) -> dict[str, Any]:
     approval_pack = _read_json_file(Path(approval_pack_path))
     if not isinstance(approval_pack, dict):
         raise ValueError("approval pack must be a JSON object")
+    answers_payload = _read_json_file(Path(answers_path))
+    if not isinstance(answers_payload, dict):
+        raise ValueError("critical input answers must be a JSON object")
+    precheck_update_report = build_critical_input_answer_update(
+        answers_payload,
+        updates_payload,
+        approve=approve,
+        approve_high_risk=approve_high_risk,
+    )
+    apply_gate = _critical_input_answer_workflow_apply_gate(
+        precheck_update_report,
+        answers_payload,
+        updates_payload,
+    )
+    if apply_confirmed and not allow_partial_apply and not apply_gate.get("ready_for_apply"):
+        reasons = ", ".join(apply_gate.get("blocking_reasons") or ["not_ready"])
+        raise ValueError(
+            "critical input workflow apply blocked until updates are complete: "
+            f"{reasons}. Run critical-inputs-readiness or pass --allow-partial-apply intentionally."
+        )
     update_report = write_critical_input_answer_update(
         answers_path,
         updates_payload,
@@ -5748,9 +5783,14 @@ def write_critical_input_answer_workflow(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source": "critical_input_answer_workflow",
         "apply_confirmed": bool(apply_confirmed),
+        "allow_partial_apply": bool(allow_partial_apply),
         "summary": {
             "matched_updates": (update_report.get("summary") or {}).get("matched_update_count", 0),
             "unknown_updates": (update_report.get("summary") or {}).get("unknown_update_count", 0),
+            "ready_for_complete_apply": bool(apply_gate.get("ready_for_apply")),
+            "apply_gate_blocking_reasons": apply_gate.get("blocking_reasons") or [],
+            "apply_gate_waiting_after_update": apply_gate.get("waiting_after_update_count", 0),
+            "apply_gate_high_risk_unconfirmed": apply_gate.get("high_risk_unconfirmed_count", 0),
             "high_risk_approval_blocked": (update_report.get("summary") or {}).get(
                 "high_risk_approval_blocked_count", 0
             ),
@@ -5767,6 +5807,7 @@ def write_critical_input_answer_workflow(
             "applied_answer_memory_updates": len((apply_result or {}).get("answer_memory_updates", [])),
         },
         "update_report": {key: value for key, value in update_report.items() if key != "updated_answers"},
+        "apply_gate": apply_gate,
         "status_report": status_report,
         "dry_run_apply_result": dry_run_result,
         "apply_result": apply_result,
@@ -5782,6 +5823,8 @@ def write_critical_input_answer_workflow(
         "policy": {
             "submits_real_applications": False,
             "writes_profile_or_memory_only_when_apply_confirmed": True,
+            "complete_updates_required_by_default": True,
+            "partial_apply_requires_explicit_flag": True,
             "final_submit_remains_supervised": True,
             "supervised_browser_review_only_skipped": True,
         },
@@ -5807,7 +5850,10 @@ def render_critical_input_answer_workflow_markdown(workflow: dict[str, Any]) -> 
         "",
         f"- matched updates: {summary.get('matched_updates', 0)}",
         f"- unknown updates: {summary.get('unknown_updates', 0)}",
+        f"- ready for complete apply: {str(bool(summary.get('ready_for_complete_apply'))).lower()}",
+        f"- apply gate blockers: {', '.join(summary.get('apply_gate_blocking_reasons') or []) or 'None'}",
         f"- high-risk approvals blocked: {summary.get('high_risk_approval_blocked', 0)}",
+        f"- high-risk confirmations missing: {summary.get('apply_gate_high_risk_unconfirmed', 0)}",
         f"- supervised skipped: {summary.get('supervised_skipped', 0)}",
         f"- ready to apply: {summary.get('ready_to_apply', 0)}",
         f"- waiting: {summary.get('waiting', 0)}",
@@ -5830,6 +5876,7 @@ def render_critical_input_answer_workflow_markdown(workflow: dict[str, Any]) -> 
             "## Policy",
             "",
             "- This workflow never submits real employer applications.",
+            "- Complete confirmed updates are required before profile or answer-memory writes unless partial apply is explicitly allowed.",
             "- Profile and answer memory writes require the apply flag.",
             "- Final submit, CAPTCHA/security, and protected-class answers remain supervised.",
         ]
@@ -5851,6 +5898,45 @@ def _critical_input_answer_workflow_next_commands(apply_confirmed: bool) -> list
     return [
         "python3 -m job_apply_agent critical-inputs-workflow --updates <confirmed_answers.json> --approve --apply",
     ]
+
+
+def _critical_input_answer_workflow_apply_gate(
+    update_report: dict[str, Any],
+    answers_payload: dict[str, Any],
+    updates_payload: dict[str, Any] | list[Any],
+) -> dict[str, Any]:
+    summary = update_report.get("summary") or {}
+    unknown_count = int(summary.get("unknown_update_count") or 0)
+    high_risk_blocked_count = int(summary.get("high_risk_approval_blocked_count") or 0)
+    waiting_count = int(summary.get("waiting_after_update_count") or 0)
+    high_risk_unconfirmed = _critical_input_updates_high_risk_unconfirmed_rows(
+        answers_payload,
+        updates_payload,
+    )
+    blocking_reasons: list[str] = []
+    if unknown_count:
+        blocking_reasons.append("unknown_updates")
+    if high_risk_blocked_count:
+        blocking_reasons.append("high_risk_approval_blocked")
+    if high_risk_unconfirmed:
+        blocking_reasons.append("high_risk_confirmation_missing")
+    if waiting_count:
+        blocking_reasons.append("critical_inputs_waiting")
+    return {
+        "ready_for_apply": not blocking_reasons,
+        "blocking_reasons": blocking_reasons,
+        "unknown_update_count": unknown_count,
+        "high_risk_approval_blocked_count": high_risk_blocked_count,
+        "high_risk_unconfirmed_count": len(high_risk_unconfirmed),
+        "waiting_after_update_count": waiting_count,
+        "ready_after_update_count": int(summary.get("ready_after_update_count") or 0),
+        "high_risk_unconfirmed_rows": high_risk_unconfirmed,
+        "policy": {
+            "writes_real_profile_or_memory": False,
+            "requires_complete_updates_before_apply": True,
+            "requires_per_row_high_risk_confirmation": True,
+        },
+    }
 
 
 def build_critical_input_preflight(
@@ -7009,6 +7095,7 @@ def render_critical_input_answer_update_markdown(report: dict[str, Any]) -> str:
         f"Matched updates: {summary.get('matched_update_count', 0)}",
         f"Answers updated: {summary.get('answer_updated_count', 0)}",
         f"Approvals updated: {summary.get('approval_updated_count', 0)}",
+        f"High-risk confirmations updated: {summary.get('high_risk_confirmation_updated_count', 0)}",
         f"High-risk approvals blocked: {summary.get('high_risk_approval_blocked_count', 0)}",
         f"High-risk waiting: {summary.get('high_risk_waiting_count', 0)}",
         f"Supervised skipped: {summary.get('supervised_skipped_count', 0)}",
@@ -7511,6 +7598,15 @@ def apply_critical_input_answers(
         if not answer:
             skipped.append({"group_key": group_key, "question": question, "reason": "empty_user_answer"})
             continue
+        if _critical_input_is_high_risk(item) and not _critical_input_update_high_risk_confirmed(item):
+            skipped.append(
+                {
+                    "group_key": group_key,
+                    "question": question,
+                    "reason": "high_risk_user_confirmed_required",
+                }
+            )
+            continue
         task = dict(tasks_by_key.get(_critical_input_task_key(item)) or {})
         if not task:
             task = {
@@ -7677,6 +7773,8 @@ def _approval_pack_with_answer_template(
             item["approval_decision"] = answer.get("approval_decision")
         if "user_answer" in answer:
             item["user_answer"] = answer.get("user_answer")
+        if "high_risk_user_confirmed" in answer:
+            item["high_risk_user_confirmed"] = answer.get("high_risk_user_confirmed")
     return merged
 
 
@@ -7695,9 +7793,9 @@ def _critical_input_answer_rows(payload: dict[str, Any]) -> list[dict[str, Any]]
                 ordered_keys.append(key)
                 continue
             existing = rows_by_key[key]
-            for field in ["approval_decision", "user_answer"]:
+            for field in ["approval_decision", "user_answer", "high_risk_user_confirmed"]:
                 value = row.get(field)
-                if str(value or "").strip():
+                if isinstance(value, bool) or str(value or "").strip():
                     existing[field] = value
             for field, value in row.items():
                 if field not in existing:
@@ -7823,6 +7921,18 @@ def _critical_input_update_high_risk_confirmed(entry: dict[str, Any]) -> bool:
     return False
 
 
+def _critical_input_update_has_high_risk_confirmation(entry: dict[str, Any]) -> bool:
+    return any(
+        field in entry
+        for field in [
+            "high_risk_user_confirmed",
+            "high_risk_confirmed",
+            "explicit_user_confirmation",
+            "user_confirmed",
+        ]
+    )
+
+
 def _critical_input_is_high_risk(item: dict[str, Any]) -> bool:
     return item.get("input_type") == "high_risk_exact_confirmation" or str(
         item.get("approval_risk") or ""
@@ -7845,7 +7955,7 @@ def _critical_input_payload_with_updates(
             update = updates_by_input_id.get(input_id)
             if not update:
                 continue
-            for update_field in ["user_answer", "approval_decision"]:
+            for update_field in ["user_answer", "approval_decision", "high_risk_user_confirmed"]:
                 if update_field in update:
                     row[update_field] = update[update_field]
     return updated

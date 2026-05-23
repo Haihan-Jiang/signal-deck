@@ -698,6 +698,11 @@ def main() -> int:
         help="write confirmed values to profile and answer memory after dry-run",
     )
     critical_inputs_workflow_parser.add_argument(
+        "--allow-partial-apply",
+        action="store_true",
+        help="intentionally persist only the currently ready critical inputs even when other critical inputs are still waiting",
+    )
+    critical_inputs_workflow_parser.add_argument(
         "--skip-refresh",
         action="store_true",
         help="skip regenerating gaps/readiness/coverage/audit/export after applying",
@@ -1717,6 +1722,7 @@ def main() -> int:
         print(f"Matched updates: {summary.get('matched_update_count', 0)}")
         print(f"Answers updated: {summary.get('answer_updated_count', 0)}")
         print(f"Approvals updated: {summary.get('approval_updated_count', 0)}")
+        print(f"High-risk confirmations updated: {summary.get('high_risk_confirmation_updated_count', 0)}")
         print(f"High-risk approvals blocked: {summary.get('high_risk_approval_blocked_count', 0)}")
         print(f"Supervised skipped: {summary.get('supervised_skipped_count', 0)}")
         print(f"Unknown updates: {summary.get('unknown_update_count', 0)}")
@@ -1859,6 +1865,7 @@ def main() -> int:
             approve=args.approve,
             approve_high_risk=args.approve_high_risk,
             apply_confirmed=args.apply,
+            allow_partial_apply=args.allow_partial_apply,
             source=args.source,
         )
         refresh = None

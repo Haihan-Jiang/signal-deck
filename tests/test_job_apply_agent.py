@@ -5046,6 +5046,8 @@ class JobApplyAgentTests(unittest.TestCase):
         for item in pack["critical_inputs"]:
             item["user_answer"] = answers[item["group_key"]]
             item["approval_decision"] = "approved"
+            if item["input_type"] == "high_risk_exact_confirmation":
+                item["high_risk_user_confirmed"] = True
 
         with tempfile.TemporaryDirectory() as temp_dir:
             pack_path = Path(temp_dir) / "approval_pack.json"
@@ -5082,6 +5084,58 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertIsNotNone(find_learned_answer(memory, "What is your favorite restaurant?"))
             self.assertIsNotNone(find_learned_answer(memory, "Are you a U.S. citizen?"))
             self.assertEqual(result["category_policy_updates"], ["citizenship_status"])
+
+    def test_apply_critical_input_answers_skips_unconfirmed_high_risk_values(self) -> None:
+        learning_tasks = {
+            "tasks": [
+                {
+                    "group_key": "answer_memory:citizenship_status:default_policy",
+                    "question": "What citizenship answers should automation use?",
+                    "recommended_storage": "answer_memory",
+                    "answer_scope": "category_default_policy",
+                    "suggested_answer_source": "requires_exact_user_confirmation",
+                    "approval_risk": "high",
+                    "labels": ["Are you a U.S. citizen?"],
+                    "platforms": ["Greenhouse"],
+                    "related_prompt_count": 1,
+                    "observed_count": 2,
+                    "required_count": 2,
+                    "persist_allowed": True,
+                },
+            ],
+        }
+        pack = build_learning_approval_pack(learning_tasks, {})
+        template = build_critical_input_answer_template(pack)
+        template["critical_inputs"][0]["user_answer"] = "Exact high-risk answer."
+        template["critical_inputs"][0]["approval_decision"] = "approved"
+        template["critical_inputs"][0]["high_risk_user_confirmed"] = False
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pack_path = Path(temp_dir) / "approval_pack.json"
+            answers_path = Path(temp_dir) / "answers.json"
+            profile_path = Path(temp_dir) / "profile.json"
+            memory_path = Path(temp_dir) / "memory.json"
+            pack_path.write_text(json.dumps(pack), encoding="utf-8")
+            answers_path.write_text(json.dumps(template), encoding="utf-8")
+            profile_path.write_text(
+                json.dumps({"candidate": {"name": "Test User"}, "question_answers": {}, "resume_facts": {}}),
+                encoding="utf-8",
+            )
+
+            result = apply_critical_input_answers(
+                pack_path,
+                profile_path,
+                memory_path,
+                answers_path=answers_path,
+            )
+
+            self.assertEqual(result["approved_input_count"], 0)
+            self.assertEqual(result["skipped_input_count"], 1)
+            self.assertEqual(
+                result["critical_input_skipped"][0]["reason"],
+                "high_risk_user_confirmed_required",
+            )
+            self.assertFalse(memory_path.exists())
 
     def test_critical_input_answer_template_can_drive_apply_command(self) -> None:
         learning_tasks = {
@@ -5344,7 +5398,9 @@ class JobApplyAgentTests(unittest.TestCase):
         row = report["updated_answers"]["critical_inputs"][0]
 
         self.assertEqual(row["approval_decision"], "approved")
+        self.assertTrue(row["high_risk_user_confirmed"])
         self.assertEqual(report["summary"]["approval_updated_count"], 1)
+        self.assertEqual(report["summary"]["high_risk_confirmation_updated_count"], 1)
         self.assertEqual(report["summary"]["high_risk_approval_blocked_count"], 0)
         self.assertEqual(report["summary"]["ready_after_update_count"], 1)
 
@@ -5497,12 +5553,209 @@ class JobApplyAgentTests(unittest.TestCase):
             profile = json.loads(profile_path.read_text(encoding="utf-8"))
             memory = load_answer_memory(memory_path)
             self.assertTrue(applied_workflow["summary"]["apply_executed"])
+            self.assertTrue(applied_workflow["summary"]["ready_for_complete_apply"])
+            self.assertEqual(applied_workflow["apply_gate"]["blocking_reasons"], [])
             self.assertEqual(profile["question_answers"]["zip_code"], "98004")
             self.assertIsNotNone(find_learned_answer(memory, "What's your favorite junk food?"))
             self.assertTrue(workflow_json.exists())
             self.assertTrue(workflow_md.exists())
             self.assertTrue(status_json.exists())
             self.assertIn("Critical Input Answer Workflow", render_critical_input_answer_workflow_markdown(applied_workflow))
+
+    def test_critical_input_workflow_blocks_partial_apply_by_default(self) -> None:
+        learning_tasks = {
+            "tasks": [
+                {
+                    "group_key": "profile:zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "recommended_storage": "profile",
+                    "labels": ["Zip Code"],
+                    "platforms": ["Ashby"],
+                    "required_count": 4,
+                    "persist_allowed": True,
+                },
+                {
+                    "group_key": "answer_memory:favorite_junk_food",
+                    "question": "What's your favorite junk food?",
+                    "recommended_storage": "answer_memory",
+                    "labels": ["What's your favorite junk food?"],
+                    "platforms": ["Greenhouse"],
+                    "required_count": 2,
+                    "persist_allowed": True,
+                },
+            ],
+        }
+        pack = build_learning_approval_pack(learning_tasks, {})
+        template = build_critical_input_answer_template(pack)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            approval_pack_path = root / "pack.json"
+            answers_path = root / "answers.json"
+            answers_md_path = root / "answers.md"
+            profile_path = root / "profile.json"
+            memory_path = root / "memory.json"
+            workflow_json = root / "workflow.json"
+            workflow_md = root / "workflow.md"
+            update_json = root / "update.json"
+            update_md = root / "update.md"
+            status_json = root / "status.json"
+            status_md = root / "status.md"
+            approval_pack_path.write_text(json.dumps(pack), encoding="utf-8")
+            answers_path.write_text(json.dumps(template), encoding="utf-8")
+            original_answers = answers_path.read_text(encoding="utf-8")
+            profile_path.write_text(
+                json.dumps(
+                    {
+                        "candidate": {"name": "Test User"},
+                        "preferences": {},
+                        "resume_facts": {},
+                        "question_answers": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "critical_inputs_waiting"):
+                write_critical_input_answer_workflow(
+                    approval_pack_path,
+                    answers_path,
+                    {"profile_zip_or_postal_code": "98004"},
+                    profile_path,
+                    memory_path,
+                    workflow_json,
+                    workflow_md,
+                    update_json,
+                    update_md,
+                    status_json,
+                    status_md,
+                    answers_markdown_output=answers_md_path,
+                    approve=True,
+                    apply_confirmed=True,
+                )
+
+            self.assertEqual(answers_path.read_text(encoding="utf-8"), original_answers)
+            self.assertFalse(memory_path.exists())
+            self.assertEqual(
+                json.loads(profile_path.read_text(encoding="utf-8"))["question_answers"],
+                {},
+            )
+
+            partial = write_critical_input_answer_workflow(
+                approval_pack_path,
+                answers_path,
+                {"profile_zip_or_postal_code": "98004"},
+                profile_path,
+                memory_path,
+                workflow_json,
+                workflow_md,
+                update_json,
+                update_md,
+                status_json,
+                status_md,
+                answers_markdown_output=answers_md_path,
+                approve=True,
+                apply_confirmed=True,
+                allow_partial_apply=True,
+            )
+
+            self.assertFalse(partial["summary"]["ready_for_complete_apply"])
+            self.assertIn("critical_inputs_waiting", partial["apply_gate"]["blocking_reasons"])
+            self.assertTrue(partial["summary"]["apply_executed"])
+            self.assertEqual(
+                json.loads(profile_path.read_text(encoding="utf-8"))["question_answers"]["zip_code"],
+                "98004",
+            )
+
+    def test_critical_input_workflow_blocks_unconfirmed_high_risk_apply(self) -> None:
+        learning_tasks = {
+            "tasks": [
+                {
+                    "group_key": "answer_memory:citizenship_status:default_policy",
+                    "question": "What citizenship answer should automation reuse?",
+                    "recommended_storage": "answer_memory",
+                    "labels": ["Are you a U.S. Citizen?"],
+                    "platforms": ["Ashby"],
+                    "required_count": 3,
+                    "persist_allowed": True,
+                    "approval_risk": "high",
+                    "suggested_answer_source": "requires_exact_user_confirmation",
+                },
+            ],
+        }
+        pack = build_learning_approval_pack(learning_tasks, {})
+        template = build_critical_input_answer_template(pack)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            approval_pack_path = root / "pack.json"
+            answers_path = root / "answers.json"
+            profile_path = root / "profile.json"
+            memory_path = root / "memory.json"
+            workflow_json = root / "workflow.json"
+            workflow_md = root / "workflow.md"
+            update_json = root / "update.json"
+            update_md = root / "update.md"
+            status_json = root / "status.json"
+            status_md = root / "status.md"
+            approval_pack_path.write_text(json.dumps(pack), encoding="utf-8")
+            answers_path.write_text(json.dumps(template), encoding="utf-8")
+            original_answers = answers_path.read_text(encoding="utf-8")
+            profile_path.write_text(
+                json.dumps({"candidate": {"name": "Test User"}, "question_answers": {}, "resume_facts": {}}),
+                encoding="utf-8",
+            )
+            updates = {
+                "answer_memory_citizenship_status_default_policy": {
+                    "user_answer": "Exact user-confirmed citizenship answer.",
+                    "approval_decision": "approved",
+                    "high_risk_user_confirmed": False,
+                }
+            }
+
+            with self.assertRaisesRegex(ValueError, "high_risk_confirmation_missing"):
+                write_critical_input_answer_workflow(
+                    approval_pack_path,
+                    answers_path,
+                    updates,
+                    profile_path,
+                    memory_path,
+                    workflow_json,
+                    workflow_md,
+                    update_json,
+                    update_md,
+                    status_json,
+                    status_md,
+                    approve=True,
+                    approve_high_risk=True,
+                    apply_confirmed=True,
+                )
+
+            self.assertEqual(answers_path.read_text(encoding="utf-8"), original_answers)
+            self.assertFalse(memory_path.exists())
+
+            updates["answer_memory_citizenship_status_default_policy"]["high_risk_user_confirmed"] = True
+            workflow = write_critical_input_answer_workflow(
+                approval_pack_path,
+                answers_path,
+                updates,
+                profile_path,
+                memory_path,
+                workflow_json,
+                workflow_md,
+                update_json,
+                update_md,
+                status_json,
+                status_md,
+                approve=True,
+                approve_high_risk=True,
+                apply_confirmed=True,
+            )
+
+            memory = load_answer_memory(memory_path)
+            self.assertTrue(workflow["summary"]["ready_for_complete_apply"])
+            self.assertTrue(workflow["summary"]["apply_executed"])
+            self.assertIsNotNone(find_learned_answer(memory, "Are you a U.S. Citizen?"))
 
     def test_critical_input_preflight_reports_temp_only_impact(self) -> None:
         learning_tasks = {
