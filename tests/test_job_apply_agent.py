@@ -7836,6 +7836,25 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertIn("Parsed answers: 6", stdin_validate_result.stdout)
             self.assertNotIn("98004", stdin_validate_result.stdout)
             self.assertNotIn("U.S. citizen", stdin_validate_result.stdout)
+            resume_stdin_validate_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "job_apply_agent",
+                    "resume-after-answers",
+                    "--reply-stdin",
+                    "--validate-only",
+                ],
+                cwd=ROOT,
+                input=reply_text,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(resume_stdin_validate_result.returncode, 0, resume_stdin_validate_result.stderr)
+            self.assertIn("Parsed answers: 6", resume_stdin_validate_result.stdout)
+            self.assertNotIn("98004", resume_stdin_validate_result.stdout)
+            self.assertNotIn("U.S. citizen", resume_stdin_validate_result.stdout)
 
             resume_help = subprocess.run(
                 [sys.executable, "-m", "job_apply_agent", "resume-after-answers", "--help"],
