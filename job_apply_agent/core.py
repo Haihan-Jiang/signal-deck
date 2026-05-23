@@ -3763,6 +3763,9 @@ def build_learning_task_template(
                 **suggestion,
                 "labels": task.get("labels", []),
                 "platforms": task.get("platforms", []),
+                "related_prompt_count": task.get("related_prompt_count", 0),
+                "observed_count": task.get("observed_count", 0),
+                "required_count": task.get("required_count", 0),
                 "approved": False,
                 "answer": "",
                 "notes": "",
@@ -3796,6 +3799,222 @@ def write_learning_task_template(
     json_path.write_text(json.dumps(template, ensure_ascii=True, indent=2), encoding="utf-8")
     markdown_path.write_text(render_learning_task_template_markdown(template), encoding="utf-8")
     return template
+
+
+def build_learning_approval_pack(
+    learning_tasks: dict[str, Any],
+    readiness_report: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    task_rows: list[dict[str, Any]] = []
+    bucket_totals: dict[str, dict[str, Any]] = {}
+    for index, task in enumerate(learning_tasks.get("tasks", []), start=1):
+        if not isinstance(task, dict):
+            continue
+        bucket = _learning_approval_bucket(task)
+        draft_answer = str(task.get("answer") or task.get("suggested_answer") or "").strip()
+        row = {
+            "priority": bucket["rank"],
+            "bucket": bucket["bucket"],
+            "bucket_title": bucket["title"],
+            "recommended_action": bucket["recommended_action"],
+            "group_key": task.get("group_key"),
+            "question": task.get("question"),
+            "recommended_storage": task.get("recommended_storage"),
+            "answer_scope": task.get("answer_scope")
+            or _learning_task_answer_scope(
+                str(task.get("group_key") or ""),
+                str(task.get("recommended_storage") or ""),
+            ),
+            "automation_behavior": task.get("automation_behavior")
+            or _learning_task_automation_behavior(
+                str(task.get("group_key") or ""),
+                str(task.get("recommended_storage") or ""),
+            ),
+            "suggested_answer": task.get("suggested_answer", ""),
+            "draft_answer": draft_answer,
+            "suggested_answer_source": task.get("suggested_answer_source", ""),
+            "suggestion_confidence": task.get("suggestion_confidence", ""),
+            "approval_risk": task.get("approval_risk", ""),
+            "approval_required": bool(task.get("approval_required", True)),
+            "approval_note": task.get("approval_note", ""),
+            "persist_allowed": bool(task.get("persist_allowed", True)),
+            "related_prompt_count": int(task.get("related_prompt_count") or 0),
+            "observed_count": int(task.get("observed_count") or 0),
+            "required_count": int(task.get("required_count") or 0),
+            "platforms": _string_list(task.get("platforms")),
+            "labels": _string_list(task.get("labels")),
+            "approved": bool(task.get("approved")),
+            "answer": task.get("answer", ""),
+            "notes": task.get("notes", ""),
+            "source_index": index,
+        }
+        task_rows.append(row)
+        totals = bucket_totals.setdefault(
+            bucket["bucket"],
+            {
+                "bucket": bucket["bucket"],
+                "title": bucket["title"],
+                "recommended_action": bucket["recommended_action"],
+                "priority": bucket["rank"],
+                "task_count": 0,
+                "related_prompt_count": 0,
+                "observed_count": 0,
+                "required_count": 0,
+                "draft_answer_count": 0,
+                "persist_allowed_count": 0,
+                "platforms": set(),
+            },
+        )
+        totals["task_count"] += 1
+        totals["related_prompt_count"] += row["related_prompt_count"]
+        totals["observed_count"] += row["observed_count"]
+        totals["required_count"] += row["required_count"]
+        if draft_answer:
+            totals["draft_answer_count"] += 1
+        if row["persist_allowed"]:
+            totals["persist_allowed_count"] += 1
+        for platform in row["platforms"]:
+            totals["platforms"].add(platform)
+
+    task_rows.sort(
+        key=lambda row: (
+            int(row.get("priority") or 99),
+            -int(row.get("required_count") or 0),
+            str(row.get("question") or ""),
+        )
+    )
+    bucket_rows: list[dict[str, Any]] = []
+    for row in sorted(bucket_totals.values(), key=lambda item: (item["priority"], item["bucket"])):
+        bucket_rows.append(
+            {
+                **{key: value for key, value in row.items() if key != "platforms"},
+                "platforms": sorted(row["platforms"]),
+            }
+        )
+
+    manual_gate_rows = [
+        _learning_approval_manual_gate_row(item)
+        for item in (readiness_report or {}).get("manual_gates", [])
+        if isinstance(item, dict)
+    ]
+    summary = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "learning_tasks",
+        "task_count": len(task_rows),
+        "bucket_count": len(bucket_rows),
+        "draft_answer_count": sum(1 for row in task_rows if row.get("draft_answer")),
+        "persist_allowed_count": sum(1 for row in task_rows if row.get("persist_allowed")),
+        "exact_user_confirmation_count": sum(
+            1 for row in task_rows if row.get("bucket") == "exact_user_confirmation"
+        ),
+        "missing_user_answer_count": sum(1 for row in task_rows if not row.get("draft_answer")),
+        "manual_gate_count": len(manual_gate_rows),
+        "position_learning_queue_count": int((readiness_report or {}).get("learning_queue_count") or 0),
+        "positions_needing_learning": int(
+            ((readiness_report or {}).get("readiness_counts") or {}).get("needs_learning") or 0
+        ),
+        "ready_to_apply_after_approval": not task_rows and not manual_gate_rows,
+        "real_submit_policy": "supervised_final_submit_only",
+    }
+    return {
+        "generated_at": summary["generated_at"],
+        "summary": summary,
+        "buckets": bucket_rows,
+        "tasks": task_rows,
+        "manual_gates": manual_gate_rows,
+        "instructions": (
+            "Review draft answers, set approved=true in the learning template only for "
+            "truthful non-sensitive answers, then run apply-learning. High-risk and "
+            "manual-gate rows stay supervised."
+        ),
+    }
+
+
+def write_learning_approval_pack(
+    learning_tasks: dict[str, Any],
+    readiness_report: dict[str, Any],
+    json_output: str | Path,
+    markdown_output: str | Path,
+) -> dict[str, Any]:
+    pack = build_learning_approval_pack(learning_tasks, readiness_report)
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(pack, ensure_ascii=True, indent=2), encoding="utf-8")
+    markdown_path.write_text(render_learning_approval_pack_markdown(pack), encoding="utf-8")
+    return pack
+
+
+def render_learning_approval_pack_markdown(pack: dict[str, Any]) -> str:
+    summary = pack.get("summary") or {}
+    lines = [
+        "# Learning Approval Pack",
+        "",
+        f"Generated: {pack.get('generated_at')}",
+        f"Learning tasks: {summary.get('task_count', 0)}",
+        f"Draft answers ready to review: {summary.get('draft_answer_count', 0)}",
+        f"Missing user answers: {summary.get('missing_user_answer_count', 0)}",
+        f"Exact user confirmations: {summary.get('exact_user_confirmation_count', 0)}",
+        f"Manual gates: {summary.get('manual_gate_count', 0)}",
+        "",
+        str(pack.get("instructions") or ""),
+        "",
+        "## Buckets",
+        "",
+    ]
+    for bucket in pack.get("buckets", []):
+        lines.append(
+            "- {title}: {count} task(s), {drafts} draft answer(s), {observed} observed prompt(s)".format(
+                title=bucket.get("title"),
+                count=bucket.get("task_count", 0),
+                drafts=bucket.get("draft_answer_count", 0),
+                observed=bucket.get("observed_count", 0),
+            )
+        )
+        lines.append(f"  action: {bucket.get('recommended_action')}")
+
+    lines.extend(["", "## Tasks", ""])
+    tasks = pack.get("tasks", [])
+    if not tasks:
+        lines.append("- None")
+    for task in tasks[:80]:
+        lines.append(
+            "- {bucket}: {question}".format(
+                bucket=task.get("bucket_title"),
+                question=task.get("question") or "Unknown question",
+            )
+        )
+        if task.get("draft_answer"):
+            lines.append(f"  draft: {task.get('draft_answer')}")
+        lines.append(
+            "  risk: {risk}; storage: {storage}; prompts: {count}".format(
+                risk=task.get("approval_risk"),
+                storage=task.get("recommended_storage"),
+                count=task.get("related_prompt_count", 0),
+            )
+        )
+        if task.get("approval_note"):
+            lines.append(f"  note: {task.get('approval_note')}")
+        labels = task.get("labels") or []
+        if labels:
+            lines.append(f"  labels: {'; '.join(str(label) for label in labels[:3])}")
+
+    lines.extend(["", "## Manual Gates", ""])
+    gates = pack.get("manual_gates", [])
+    if not gates:
+        lines.append("- None")
+    for gate in gates[:40]:
+        lines.append(
+            "- {status}: {label} ({count} observed)".format(
+                status=gate.get("coverage_status"),
+                label=gate.get("label"),
+                count=gate.get("observed_count", 0),
+            )
+        )
+        if gate.get("handling"):
+            lines.append(f"  handling: {gate.get('handling')}")
+    return "\n".join(lines) + "\n"
 
 
 def apply_learning_task_answers(
@@ -6053,6 +6272,7 @@ def write_question_export(
     synthetic_browser_execution: dict[str, Any] | None = None,
     fake_learning_probe: dict[str, Any] | None = None,
     fake_position_rehearsal: dict[str, Any] | None = None,
+    learning_approval_pack: dict[str, Any] | None = None,
     answer_memory: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -6066,6 +6286,7 @@ def write_question_export(
         synthetic_browser_execution=synthetic_browser_execution,
         fake_learning_probe=fake_learning_probe,
         fake_position_rehearsal=fake_position_rehearsal,
+        learning_approval_pack=learning_approval_pack,
         answer_memory=answer_memory,
         closed_jobs=closed_jobs,
     )
@@ -6089,6 +6310,7 @@ def build_question_export(
     synthetic_browser_execution: dict[str, Any] | None = None,
     fake_learning_probe: dict[str, Any] | None = None,
     fake_position_rehearsal: dict[str, Any] | None = None,
+    learning_approval_pack: dict[str, Any] | None = None,
     answer_memory: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -6096,6 +6318,13 @@ def build_question_export(
     blocker_rows = [_question_export_row(item) for item in gaps.get("blocking_prompts", [])]
     problem_buckets = _question_problem_bucket_rows(blocker_rows)
     user_questions = [_learning_task_export_row(task) for task in learning_tasks.get("tasks", [])]
+    learning_approval_pack = learning_approval_pack or build_learning_approval_pack(
+        learning_tasks,
+        readiness,
+    )
+    approval_bucket_rows = _learning_approval_bucket_export_rows(learning_approval_pack)
+    approval_task_rows = _learning_approval_task_export_rows(learning_approval_pack)
+    approval_manual_gate_rows = _learning_approval_manual_gate_export_rows(learning_approval_pack)
     manual_gates = [_manual_gate_export_row(item) for item in readiness.get("manual_gates", [])]
     positions = [_position_export_row(item) for item in readiness.get("positions", [])]
     source_artifact_rows = _source_artifact_export_rows(source_artifacts or [])
@@ -6147,6 +6376,16 @@ def build_question_export(
         "blocking_prompt_count": gaps.get("blocking_prompt_count", 0),
         "learning_task_count": learning_tasks.get("task_count", len(user_questions)),
         "manual_gate_count": readiness.get("manual_gate_count", 0),
+        "approval_pack_task_count": (learning_approval_pack.get("summary") or {}).get("task_count", 0),
+        "approval_pack_draft_answer_count": (learning_approval_pack.get("summary") or {}).get(
+            "draft_answer_count", 0
+        ),
+        "approval_pack_missing_user_answer_count": (learning_approval_pack.get("summary") or {}).get(
+            "missing_user_answer_count", 0
+        ),
+        "approval_pack_exact_confirmation_count": (learning_approval_pack.get("summary") or {}).get(
+            "exact_user_confirmation_count", 0
+        ),
         "ready_for_full_automation": bool(coverage_gate.get("ready_for_full_automation")),
         "real_platform_target_achieved": bool(coverage_gate.get("real_platform_target_achieved")),
         "real_platform_role_target_achieved": bool(
@@ -6216,6 +6455,10 @@ def build_question_export(
         "blocker_rows": blocker_rows,
         "problem_buckets": problem_buckets,
         "user_questions": user_questions,
+        "learning_approval_summary": learning_approval_pack.get("summary", {}),
+        "learning_approval_buckets": approval_bucket_rows,
+        "learning_approval_tasks": approval_task_rows,
+        "learning_approval_manual_gates": approval_manual_gate_rows,
         "manual_gates": manual_gates,
         "positions": positions,
         "collection_targets": collection_targets,
@@ -6253,6 +6496,8 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                 ("Ready prompts", summary.get("ready_prompt_count", 0)),
                 ("Blocking prompts", summary.get("blocking_prompt_count", 0)),
                 ("Learning tasks", summary.get("learning_task_count", 0)),
+                ("Draft answers", summary.get("approval_pack_draft_answer_count", 0)),
+                ("Missing answers", summary.get("approval_pack_missing_user_answer_count", 0)),
                 ("Manual gates", summary.get("manual_gate_count", 0)),
                 ("Closed postings", summary.get("closed_posting_count", 0)),
                 ("Stored answers", summary.get("answer_memory_count", 0)),
@@ -6371,6 +6616,67 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                     row.get("top_labels"),
                 ]
                 for row in export.get("problem_buckets", [])
+            ],
+        ),
+        "</section>",
+        "<section><h2>Learning Approval Pack</h2>",
+        _html_key_value_table(export.get("learning_approval_summary", {})),
+        _html_table(
+            [
+                "Priority",
+                "Bucket",
+                "Tasks",
+                "Draft answers",
+                "Missing answers",
+                "Observed",
+                "Required",
+                "Platforms",
+                "Recommended action",
+            ],
+            [
+                [
+                    row.get("priority"),
+                    row.get("title"),
+                    row.get("task_count"),
+                    row.get("draft_answer_count"),
+                    row.get("missing_answer_count"),
+                    row.get("observed_count"),
+                    row.get("required_count"),
+                    row.get("platforms"),
+                    row.get("recommended_action"),
+                ]
+                for row in export.get("learning_approval_buckets", [])
+            ],
+        ),
+        "</section>",
+        "<section><h2>Approval Tasks</h2>",
+        _html_table(
+            [
+                "Bucket",
+                "Question",
+                "Draft answer",
+                "Risk",
+                "Storage",
+                "Scope",
+                "Prompts",
+                "Platforms",
+                "Recommended action",
+                "Approval note",
+            ],
+            [
+                [
+                    row.get("bucket_title"),
+                    row.get("question"),
+                    row.get("draft_answer"),
+                    row.get("approval_risk"),
+                    row.get("recommended_storage"),
+                    row.get("answer_scope"),
+                    row.get("related_prompt_count"),
+                    row.get("platforms"),
+                    row.get("recommended_action"),
+                    row.get("approval_note"),
+                ]
+                for row in export.get("learning_approval_tasks", [])
             ],
         ),
         "</section>",
@@ -10140,6 +10446,83 @@ def _category_default_policy_suggestion(
     return base
 
 
+def _learning_approval_bucket(task: dict[str, Any]) -> dict[str, Any]:
+    storage = str(task.get("recommended_storage") or "")
+    scope = str(
+        task.get("answer_scope")
+        or _learning_task_answer_scope(str(task.get("group_key") or ""), storage)
+    )
+    source = str(task.get("suggested_answer_source") or "")
+    risk = str(task.get("approval_risk") or "")
+    suggested = str(task.get("suggested_answer") or task.get("answer") or "").strip()
+    if storage == "supervised_confirmation" or scope == "supervised_only":
+        return _learning_approval_bucket_definition("supervised_only")
+    if source == "requires_exact_user_confirmation" or risk == "high":
+        return _learning_approval_bucket_definition("exact_user_confirmation")
+    if scope == "category_default_policy":
+        return _learning_approval_bucket_definition("default_policy_review")
+    if storage in {"profile", "local_material", "resume_facts"}:
+        return _learning_approval_bucket_definition("profile_or_resume_fact")
+    if suggested:
+        return _learning_approval_bucket_definition("approve_existing_suggestion")
+    return _learning_approval_bucket_definition("exact_prompt_answer")
+
+
+def _learning_approval_bucket_definition(bucket: str) -> dict[str, Any]:
+    definitions = {
+        "default_policy_review": {
+            "bucket": "default_policy_review",
+            "title": "Review reusable default policies",
+            "recommended_action": "Approve or edit the default policy once; it can cover many similar prompts.",
+            "rank": 1,
+        },
+        "approve_existing_suggestion": {
+            "bucket": "approve_existing_suggestion",
+            "title": "Approve existing suggested answers",
+            "recommended_action": "Review the suggested answer and approve it if it is truthful.",
+            "rank": 2,
+        },
+        "profile_or_resume_fact": {
+            "bucket": "profile_or_resume_fact",
+            "title": "Fill profile or resume facts",
+            "recommended_action": "Add the missing stable profile field, material path, or resume fact.",
+            "rank": 3,
+        },
+        "exact_prompt_answer": {
+            "bucket": "exact_prompt_answer",
+            "title": "Answer exact prompt labels",
+            "recommended_action": "Provide the exact answer to reuse for these specific prompts.",
+            "rank": 4,
+        },
+        "exact_user_confirmation": {
+            "bucket": "exact_user_confirmation",
+            "title": "Confirm high-risk legal or sensitive answers",
+            "recommended_action": "Answer explicitly; do not infer or bulk-approve.",
+            "rank": 5,
+        },
+        "supervised_only": {
+            "bucket": "supervised_only",
+            "title": "Keep supervised only",
+            "recommended_action": "Handle in the browser during supervised review; do not store as reusable automation.",
+            "rank": 6,
+        },
+    }
+    return definitions.get(bucket, definitions["exact_prompt_answer"])
+
+
+def _learning_approval_manual_gate_row(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "coverage_status": item.get("coverage_status"),
+        "label": item.get("label"),
+        "category": item.get("category"),
+        "platforms": _string_list(item.get("platforms")),
+        "observed_count": int(item.get("observed_count") or 0),
+        "required_count": int(item.get("required_count") or 0),
+        "recommended_storage": item.get("recommended_storage"),
+        "handling": item.get("next_action"),
+    }
+
+
 def _location_policy_suggestion(profile: CandidateProfile | None) -> str:
     return "Open to remote, hybrid, onsite, travel, and relocation for the right role; review city-specific requirements before submit."
 
@@ -12723,6 +13106,82 @@ def _learning_task_export_row(task: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _learning_approval_bucket_export_rows(pack: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for bucket in pack.get("buckets", []):
+        if not isinstance(bucket, dict):
+            continue
+        rows.append(
+            {
+                "priority": bucket.get("priority"),
+                "bucket": bucket.get("bucket"),
+                "title": bucket.get("title"),
+                "task_count": bucket.get("task_count", 0),
+                "draft_answer_count": bucket.get("draft_answer_count", 0),
+                "missing_answer_count": int(bucket.get("task_count", 0))
+                - int(bucket.get("draft_answer_count", 0)),
+                "related_prompt_count": bucket.get("related_prompt_count", 0),
+                "observed_count": bucket.get("observed_count", 0),
+                "required_count": bucket.get("required_count", 0),
+                "persist_allowed_count": bucket.get("persist_allowed_count", 0),
+                "platforms": ", ".join(_string_list(bucket.get("platforms"))),
+                "recommended_action": bucket.get("recommended_action"),
+            }
+        )
+    return rows
+
+
+def _learning_approval_task_export_rows(pack: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for task in pack.get("tasks", []):
+        if not isinstance(task, dict):
+            continue
+        rows.append(
+            {
+                "priority": task.get("priority"),
+                "bucket": task.get("bucket"),
+                "bucket_title": task.get("bucket_title"),
+                "recommended_action": task.get("recommended_action"),
+                "question": task.get("question"),
+                "draft_answer": task.get("draft_answer"),
+                "suggested_answer_source": task.get("suggested_answer_source"),
+                "suggestion_confidence": task.get("suggestion_confidence"),
+                "approval_risk": task.get("approval_risk"),
+                "recommended_storage": task.get("recommended_storage"),
+                "answer_scope": task.get("answer_scope"),
+                "persist_allowed": task.get("persist_allowed"),
+                "related_prompt_count": task.get("related_prompt_count", 0),
+                "observed_count": task.get("observed_count", 0),
+                "required_count": task.get("required_count", 0),
+                "platforms": ", ".join(_string_list(task.get("platforms"))),
+                "labels": "\n".join(_string_list(task.get("labels"))),
+                "approval_note": task.get("approval_note"),
+                "group_key": task.get("group_key"),
+            }
+        )
+    return rows
+
+
+def _learning_approval_manual_gate_export_rows(pack: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for gate in pack.get("manual_gates", []):
+        if not isinstance(gate, dict):
+            continue
+        rows.append(
+            {
+                "coverage_status": gate.get("coverage_status"),
+                "label": gate.get("label"),
+                "category": gate.get("category"),
+                "platforms": ", ".join(_string_list(gate.get("platforms"))),
+                "observed_count": gate.get("observed_count", 0),
+                "required_count": gate.get("required_count", 0),
+                "recommended_storage": gate.get("recommended_storage"),
+                "handling": gate.get("handling"),
+            }
+        )
+    return rows
+
+
 def _manual_gate_export_row(item: dict[str, Any]) -> dict[str, Any]:
     return {
         "coverage_status": item.get("coverage_status"),
@@ -12785,6 +13244,9 @@ def _write_question_export_xlsx(export: dict[str, Any], path: Path) -> None:
         ("Manual Gates", _table_rows(export.get("manual_gates", []))),
         ("Answer Memory", _table_rows(export.get("answer_memory", []))),
         ("Closed Postings", _table_rows(export.get("closed_postings", []))),
+        ("Approval Buckets", _table_rows(export.get("learning_approval_buckets", []))),
+        ("Approval Tasks", _table_rows(export.get("learning_approval_tasks", []))),
+        ("Approval Manual Gates", _table_rows(export.get("learning_approval_manual_gates", []))),
     ]
     sheet_names = [_safe_sheet_name(name) for name, _rows in sheets]
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:

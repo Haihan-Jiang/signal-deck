@@ -27,6 +27,7 @@ from job_apply_agent.core import (
     build_form_fill_plan,
     build_fake_learning_probe,
     build_fake_position_rehearsal,
+    build_learning_approval_pack,
     build_learning_task_template,
     build_pre_submit_review,
     build_position_readiness_report,
@@ -74,6 +75,7 @@ from job_apply_agent.core import (
     render_form_fill_plan_markdown,
     render_fake_learning_probe_markdown,
     render_fake_position_rehearsal_markdown,
+    render_learning_approval_pack_markdown,
     render_learning_task_template_markdown,
     render_pre_submit_review_markdown,
     render_position_readiness_markdown,
@@ -103,6 +105,7 @@ from job_apply_agent.core import (
     write_form_fill_plan,
     write_fake_learning_probe,
     write_fake_position_rehearsal,
+    write_learning_approval_pack,
     write_learning_task_template,
     write_pre_submit_review,
     write_position_readiness_report,
@@ -2321,6 +2324,14 @@ class JobApplyAgentTests(unittest.TestCase):
             "unless a specific employer",
             template_tasks["answer_memory:employment_history:default_policy"]["suggested_answer"],
         )
+        self.assertEqual(
+            template_tasks["answer_memory:employment_history:default_policy"]["related_prompt_count"],
+            2,
+        )
+        self.assertEqual(
+            template_tasks["answer_memory:employment_history:default_policy"]["observed_count"],
+            5,
+        )
 
     def test_learning_task_template_suggests_from_profile_and_memory(self) -> None:
         readiness = {
@@ -2393,6 +2404,114 @@ class JobApplyAgentTests(unittest.TestCase):
             tasks["answer_memory:citizenship_status:default_policy"]["approval_risk"],
             "high",
         )
+
+    def test_learning_approval_pack_groups_tasks_by_review_action(self) -> None:
+        learning_tasks = {
+            "task_count": 4,
+            "tasks": [
+                {
+                    "group_key": "answer_memory:employment_history:default_policy",
+                    "question": "Should automation answer no to prior-employer questions?",
+                    "recommended_storage": "answer_memory",
+                    "answer_scope": "category_default_policy",
+                    "suggested_answer": "No unless an exception is confirmed.",
+                    "suggested_answer_source": "category_default_policy_template",
+                    "suggestion_confidence": "medium",
+                    "approval_risk": "medium",
+                    "labels": ["Have you worked with us before?"],
+                    "platforms": ["Greenhouse"],
+                    "related_prompt_count": 2,
+                    "observed_count": 5,
+                    "required_count": 5,
+                    "persist_allowed": True,
+                },
+                {
+                    "group_key": "profile:zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "recommended_storage": "profile",
+                    "answer_scope": "profile_field",
+                    "suggested_answer": "",
+                    "suggested_answer_source": "needs_user",
+                    "approval_risk": "needs_review",
+                    "labels": ["Zip Code"],
+                    "platforms": ["Ashby"],
+                    "related_prompt_count": 1,
+                    "observed_count": 3,
+                    "required_count": 3,
+                    "persist_allowed": True,
+                },
+                {
+                    "group_key": "answer_memory:citizenship_status:default_policy",
+                    "question": "What citizenship answers should automation use?",
+                    "recommended_storage": "answer_memory",
+                    "answer_scope": "category_default_policy",
+                    "suggested_answer_source": "requires_exact_user_confirmation",
+                    "approval_risk": "high",
+                    "labels": ["Are you a U.S. citizen?"],
+                    "platforms": ["Greenhouse"],
+                    "related_prompt_count": 1,
+                    "observed_count": 2,
+                    "required_count": 2,
+                    "persist_allowed": True,
+                },
+                {
+                    "group_key": "supervised_confirmation:policy_acknowledgement",
+                    "question": "May automation mark applicant privacy acknowledgement?",
+                    "recommended_storage": "supervised_confirmation",
+                    "answer_scope": "supervised_only",
+                    "suggested_answer": "",
+                    "approval_risk": "needs_review",
+                    "labels": ["Privacy policy"],
+                    "platforms": ["Lever"],
+                    "related_prompt_count": 1,
+                    "observed_count": 1,
+                    "required_count": 1,
+                    "persist_allowed": False,
+                },
+            ],
+        }
+        readiness = {
+            "readiness_counts": {"needs_learning": 2, "supervised_ready": 1},
+            "learning_queue_count": 10,
+            "manual_gates": [
+                {
+                    "coverage_status": "final_submit_confirmation",
+                    "label": "Submit application",
+                    "category": "final_submit",
+                    "platforms": ["Greenhouse"],
+                    "observed_count": 7,
+                    "required_count": 0,
+                    "recommended_storage": "do_not_automate",
+                    "next_action": "human must approve final submit",
+                }
+            ],
+        }
+
+        pack = build_learning_approval_pack(learning_tasks, readiness)
+        buckets = {row["bucket"]: row for row in pack["buckets"]}
+
+        self.assertEqual(pack["summary"]["task_count"], 4)
+        self.assertEqual(pack["summary"]["draft_answer_count"], 1)
+        self.assertEqual(pack["summary"]["missing_user_answer_count"], 3)
+        self.assertEqual(pack["summary"]["exact_user_confirmation_count"], 1)
+        self.assertEqual(pack["summary"]["manual_gate_count"], 1)
+        self.assertEqual(buckets["default_policy_review"]["task_count"], 1)
+        self.assertEqual(buckets["profile_or_resume_fact"]["task_count"], 1)
+        self.assertEqual(buckets["exact_user_confirmation"]["task_count"], 1)
+        self.assertEqual(buckets["supervised_only"]["task_count"], 1)
+        markdown = render_learning_approval_pack_markdown(pack)
+        self.assertIn("Learning Approval Pack", markdown)
+        self.assertIn("Review reusable default policies", markdown)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            json_output = Path(temp_dir) / "approval.json"
+            markdown_output = Path(temp_dir) / "approval.md"
+            written = write_learning_approval_pack(learning_tasks, readiness, json_output, markdown_output)
+
+            self.assertEqual(written["summary"]["task_count"], 4)
+            self.assertTrue(json_output.exists())
+            self.assertTrue(markdown_output.exists())
+            self.assertIn("Learning Approval Pack", markdown_output.read_text())
 
     def test_write_position_readiness_report_outputs_json_and_markdown(self) -> None:
         research = {
@@ -5637,6 +5756,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Answer Memory Index", html)
         self.assertIn("No longer accepting applications", html)
         self.assertIn("Problem Buckets", html)
+        self.assertIn("Learning Approval Pack", html)
+        self.assertIn("Approval Tasks", html)
         self.assertIn("Real Platform Shortfalls", html)
         self.assertIn("Collection Tasks", html)
         self.assertIn("Manual Gates", html)
@@ -5664,6 +5785,8 @@ class JobApplyAgentTests(unittest.TestCase):
 
             self.assertEqual(len(result["question_rows"]), 2)
             self.assertEqual(result["problem_buckets"][0]["coverage_status"], "needs_user_confirmation")
+            self.assertEqual(result["summary"]["approval_pack_task_count"], 1)
+            self.assertEqual(len(result["learning_approval_tasks"]), 1)
             self.assertEqual(result["summary"]["answer_memory_count"], 1)
             self.assertEqual(result["summary"]["closed_posting_count"], 1)
             self.assertTrue(xlsx_output.exists())
@@ -5675,6 +5798,8 @@ class JobApplyAgentTests(unittest.TestCase):
                 self.assertIn("xl/worksheets/sheet2.xml", names)
                 self.assertIn("xl/worksheets/sheet7.xml", names)
                 self.assertIn("xl/worksheets/sheet19.xml", names)
+                self.assertIn("xl/worksheets/sheet20.xml", names)
+                self.assertIn("xl/worksheets/sheet21.xml", names)
                 source_sheet = workbook.read("xl/worksheets/sheet2.xml").decode("utf-8")
                 self.assertIn("Answer gaps", source_sheet)
                 synthetic_sheet = workbook.read("xl/worksheets/sheet3.xml").decode("utf-8")
@@ -5691,6 +5816,10 @@ class JobApplyAgentTests(unittest.TestCase):
                 self.assertIn("Greenhouse", platform_shortfalls)
                 closed_postings = workbook.read("xl/worksheets/sheet19.xml").decode("utf-8")
                 self.assertIn("No longer accepting applications", closed_postings)
+                approval_buckets = workbook.read("xl/worksheets/sheet20.xml").decode("utf-8")
+                self.assertIn("exact_prompt_answer", approval_buckets)
+                approval_tasks = workbook.read("xl/worksheets/sheet21.xml").decode("utf-8")
+                self.assertIn("Have you worked at DoorDash?", approval_tasks)
 
 
 if __name__ == "__main__":

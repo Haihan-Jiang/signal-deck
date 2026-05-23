@@ -38,6 +38,7 @@ from .core import (
     write_form_fill_plan,
     write_fake_learning_probe,
     write_fake_position_rehearsal,
+    write_learning_approval_pack,
     write_learning_task_template,
     write_pre_submit_review,
     write_question_export,
@@ -77,6 +78,8 @@ DEFAULT_PRE_SUBMIT_REVIEW_JSON = Path(__file__).with_name("outbox") / "pre_submi
 DEFAULT_PRE_SUBMIT_REVIEW_MARKDOWN = Path(__file__).with_name("outbox") / "pre_submit_review_latest.md"
 DEFAULT_LEARNING_TASKS_JSON = Path(__file__).with_name("outbox") / "learning_tasks_latest.json"
 DEFAULT_LEARNING_TASKS_MARKDOWN = Path(__file__).with_name("outbox") / "learning_tasks_latest.md"
+DEFAULT_LEARNING_APPROVAL_PACK_JSON = Path(__file__).with_name("outbox") / "learning_approval_pack_latest.json"
+DEFAULT_LEARNING_APPROVAL_PACK_MARKDOWN = Path(__file__).with_name("outbox") / "learning_approval_pack_latest.md"
 DEFAULT_FAKE_LEARNING_PROBE_JSON = Path(__file__).with_name("outbox") / "fake_learning_probe_latest.json"
 DEFAULT_FAKE_LEARNING_PROBE_MARKDOWN = Path(__file__).with_name("outbox") / "fake_learning_probe_latest.md"
 DEFAULT_FAKE_POSITION_REHEARSAL_JSON = Path(__file__).with_name("outbox") / "fake_position_rehearsal_latest.json"
@@ -342,6 +345,18 @@ def main() -> int:
     learning_template_parser.add_argument("--json-output", default=str(DEFAULT_LEARNING_TASKS_JSON))
     learning_template_parser.add_argument("--markdown-output", default=str(DEFAULT_LEARNING_TASKS_MARKDOWN))
 
+    learning_approval_pack_parser = subparsers.add_parser(
+        "learning-approval-pack",
+        help="group remaining learning tasks into approval buckets for full automation readiness",
+    )
+    learning_approval_pack_parser.add_argument("--learning-tasks-json", default=str(DEFAULT_LEARNING_TASKS_JSON))
+    learning_approval_pack_parser.add_argument("--readiness-json", default=str(DEFAULT_READINESS_JSON))
+    learning_approval_pack_parser.add_argument("--json-output", default=str(DEFAULT_LEARNING_APPROVAL_PACK_JSON))
+    learning_approval_pack_parser.add_argument(
+        "--markdown-output",
+        default=str(DEFAULT_LEARNING_APPROVAL_PACK_MARKDOWN),
+    )
+
     apply_learning_parser = subparsers.add_parser(
         "apply-learning",
         help="apply approved learning-template answers to profile and answer memory",
@@ -551,6 +566,10 @@ def main() -> int:
     )
     export_questions_parser.add_argument("--fake-learning-probe-json", default=str(DEFAULT_FAKE_LEARNING_PROBE_JSON))
     export_questions_parser.add_argument("--fake-position-rehearsal-json", default=str(DEFAULT_FAKE_POSITION_REHEARSAL_JSON))
+    export_questions_parser.add_argument(
+        "--learning-approval-pack-json",
+        default=str(DEFAULT_LEARNING_APPROVAL_PACK_JSON),
+    )
     export_questions_parser.add_argument("--answer-memory-json", default=str(DEFAULT_MEMORY))
     export_questions_parser.add_argument("--closed-jobs-json", default=str(DEFAULT_CLOSED_JOBS))
     export_questions_parser.add_argument("--xlsx-output", default=str(DEFAULT_QUESTION_EXPORT_XLSX))
@@ -688,6 +707,7 @@ def main() -> int:
                     "Synthetic browser execution": args.synthetic_browser_exec_json,
                     "Fake learning probe": args.fake_learning_probe_json,
                     "Fake position rehearsal": args.fake_position_rehearsal_json,
+                    "Learning approval pack": args.learning_approval_pack_json,
                     "Answer memory": args.answer_memory_json,
                     "Closed postings": args.closed_jobs_json,
                 }
@@ -695,6 +715,7 @@ def main() -> int:
             synthetic_browser_execution=_load_optional_json(args.synthetic_browser_exec_json),
             fake_learning_probe=_load_optional_json(args.fake_learning_probe_json),
             fake_position_rehearsal=_load_optional_json(args.fake_position_rehearsal_json),
+            learning_approval_pack=_load_optional_json(args.learning_approval_pack_json),
             answer_memory=_load_optional_json(args.answer_memory_json),
             closed_jobs=_load_optional_json(args.closed_jobs_json),
         )
@@ -926,6 +947,29 @@ def main() -> int:
         print(f"Wrote learning task JSON to {args.json_output}")
         print(f"Wrote learning task Markdown to {args.markdown_output}")
         print(f"Tasks: {template.get('task_count', 0)}")
+        return 0
+
+    if args.command == "learning-approval-pack":
+        tasks_path = Path(args.learning_tasks_json)
+        readiness_path = Path(args.readiness_json)
+        if not tasks_path.exists():
+            raise FileNotFoundError(f"learning tasks not found: {args.learning_tasks_json}")
+        if not readiness_path.exists():
+            raise FileNotFoundError(f"readiness report not found: {args.readiness_json}")
+        pack = write_learning_approval_pack(
+            json.loads(tasks_path.read_text(encoding="utf-8")),
+            json.loads(readiness_path.read_text(encoding="utf-8")),
+            args.json_output,
+            args.markdown_output,
+        )
+        summary = pack.get("summary") or {}
+        print(f"Wrote learning approval pack JSON to {args.json_output}")
+        print(f"Wrote learning approval pack Markdown to {args.markdown_output}")
+        print(f"Tasks: {summary.get('task_count', 0)}")
+        print(f"Draft answers: {summary.get('draft_answer_count', 0)}")
+        print(f"Missing user answers: {summary.get('missing_user_answer_count', 0)}")
+        print(f"Exact confirmations: {summary.get('exact_user_confirmation_count', 0)}")
+        print(f"Manual gates: {summary.get('manual_gate_count', 0)}")
         return 0
 
     if args.command == "apply-learning":

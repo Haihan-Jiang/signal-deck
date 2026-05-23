@@ -349,8 +349,9 @@ job_apply_agent/outbox/application_questions_latest.html
 
 The Excel workbook includes sheets for summary metrics, user questions,
 blocking prompts, all observed prompts, per-position readiness, collection
-targets, collection tasks, and manual gates. The HTML file presents the same
-information as a dashboard for quick review.
+targets, collection tasks, manual gates, approval buckets, approval tasks, and
+approval-only manual gates. The HTML file presents the same information as a
+dashboard for quick review.
 
 Turn that learning queue into a fill-in template:
 
@@ -358,6 +359,24 @@ Turn that learning queue into a fill-in template:
 python3 -m job_apply_agent learning-template \
   --readiness-json job_apply_agent/outbox/automation_readiness_latest.json
 ```
+
+Group the remaining learning tasks into a smaller approval checklist:
+
+```bash
+python3 -m job_apply_agent learning-approval-pack
+```
+
+This writes:
+
+```text
+job_apply_agent/outbox/learning_approval_pack_latest.json
+job_apply_agent/outbox/learning_approval_pack_latest.md
+```
+
+The approval pack groups tasks into reusable default policies, profile or
+resume facts, exact prompt answers, high-risk confirmations, and supervised-only
+items. Use it to decide what can be approved once versus what still needs an
+exact user answer before automation can safely fill real applications.
 
 After editing the JSON so only approved non-sensitive tasks have
 `approved: true` and an `answer`, apply those approved answers locally:
