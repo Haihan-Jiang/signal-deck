@@ -20144,13 +20144,17 @@ def build_final_answer_blocker_report(
             )
         ),
     }
+    reply_template_lines = _final_answer_blocker_reply_template_lines(blocker_rows)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source": "final_answer_blocker_report",
         "ready_for_post_answer_pipeline": bool(summary["blocker_count"] == 0),
         "summary": summary,
         "blockers": blocker_rows,
+        "reply_template": "\n".join(reply_template_lines),
+        "reply_template_lines": reply_template_lines,
         "next_commands": [
+            "python3 -m job_apply_agent final-answer-reply --reply-file /path/to/reply.txt --finalize --fail-on-not-ready",
             "python3 -m job_apply_agent final-answer-intake-server --open-browser --finalize --confirm-high-risk",
             "python3 -m job_apply_agent post-answer-pipeline --final-answer-intake-json job_apply_agent/outbox/final_answer_intake_template_latest.json --confirm-high-risk --apply --live-check --fail-on-not-ready",
         ],
@@ -20216,6 +20220,12 @@ def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
         )
     else:
         lines.append("- None")
+    reply_template = str(report.get("reply_template") or "").strip()
+    lines.extend(["", "## Reply Template", ""])
+    if reply_template:
+        lines.extend(["```text", reply_template, "```"])
+    else:
+        lines.append("- None")
     lines.extend(["", "## Next Commands", ""])
     for command in report.get("next_commands") or []:
         lines.append(f"- `{command}`")
@@ -20255,8 +20265,28 @@ def build_telegram_final_answer_blocker_alert(
     if len(blockers) > max_items:
         lines.append(f"... {len(blockers) - max_items} more in job_apply_agent/outbox")
     lines.append("")
-    lines.append("Open Codex final-answer intake. This alert does not include your answers.")
+    reply_template_lines = report.get("reply_template_lines") or []
+    if reply_template_lines:
+        lines.append("Reply format:")
+        for line in reply_template_lines[: max_items * 2]:
+            lines.append(line)
+        if len(reply_template_lines) > max_items * 2:
+            lines.append("... full template in job_apply_agent/outbox/final_answer_blockers_latest.md")
+        lines.append("")
+    lines.append("Paste filled lines back to Codex. This alert does not include your answers.")
     return _truncate_telegram_text("\n".join(lines))
+
+
+def _final_answer_blocker_reply_template_lines(blockers: list[dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    for row in blockers:
+        alias = str(row.get("alias") or "").strip()
+        if not alias:
+            continue
+        lines.append(f"{alias}: <fill>")
+        if row.get("high_risk"):
+            lines.append(f"{alias}_confirmed: yes")
+    return lines
 
 
 def notify_telegram_for_final_answer_blockers(

@@ -6931,10 +6931,19 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["summary"]["missing_answer_count"], 0)
         self.assertEqual(report["summary"]["unconfirmed_high_risk_count"], 1)
         self.assertEqual(report["blockers"][0]["alias"], "citizenship_status")
+        self.assertEqual(
+            report["reply_template_lines"],
+            ["citizenship_status: <fill>", "citizenship_status_confirmed: yes"],
+        )
         self.assertIn("Final Answer Blockers", markdown)
         self.assertIn("citizenship_status", markdown)
+        self.assertIn("## Reply Template", markdown)
+        self.assertIn("citizenship_status: <fill>", markdown)
         self.assertIn("Job automation needs final answers", alert)
         self.assertIn("citizenship_status", alert)
+        self.assertIn("Reply format:", alert)
+        self.assertIn("citizenship_status: <fill>", alert)
+        self.assertIn("citizenship_status_confirmed: yes", alert)
         self.assertNotIn("98004", json.dumps(report))
         self.assertNotIn("98004", markdown)
         self.assertNotIn("98004", alert)
