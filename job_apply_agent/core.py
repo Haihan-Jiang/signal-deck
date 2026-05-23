@@ -12532,6 +12532,480 @@ def render_position_execution_audit_html(report: dict[str, Any]) -> str:
     )
 
 
+def build_selected_final_answer_dependency_report(
+    research: dict[str, Any],
+    position_execution_audit: dict[str, Any],
+    final_answer_blockers: dict[str, Any] | None = None,
+    *,
+    target_count: int = 100,
+) -> dict[str, Any]:
+    if not isinstance(research, dict):
+        raise ValueError("research must be a JSON object")
+    if not isinstance(position_execution_audit, dict):
+        raise ValueError("position execution audit must be a JSON object")
+    blockers = final_answer_blockers or {}
+    known_aliases = unresolved_final_answer_aliases_from_blocker_report(blockers)
+    known_alias_set = set(known_aliases)
+    all_final_answer_aliases = set(FINAL_ANSWER_INTAKE_ALIASES.values())
+    items_by_position = _research_items_by_position(research)
+    selected_positions = [
+        row
+        for row in (position_execution_audit.get("positions") or [])[: max(int(target_count), 0)]
+        if isinstance(row, dict)
+    ]
+    rows: list[dict[str, Any]] = []
+    unknown_dependency_aliases: set[str] = set()
+    for index, position in enumerate(selected_positions, start=1):
+        position_key = _position_execution_key(position)
+        items = items_by_position.get(position_key, [])
+        all_matches = _position_unresolved_final_answer_matches(items, all_final_answer_aliases)
+        unresolved_matches = [
+            match
+            for match in all_matches
+            if str(match.get("alias") or "").strip() in known_alias_set
+        ]
+        resolved_or_nonblocking_aliases = sorted(
+            {
+                str(match.get("alias") or "").strip()
+                for match in all_matches
+                if str(match.get("alias") or "").strip()
+                and str(match.get("alias") or "").strip() not in known_alias_set
+            }
+        )
+        aliases = sorted(
+            {
+                str(match.get("alias") or "").strip()
+                for match in unresolved_matches
+                if str(match.get("alias") or "").strip()
+            }
+        )
+        for alias in aliases:
+            if alias not in known_alias_set:
+                unknown_dependency_aliases.add(alias)
+        status = str(position.get("status") or "")
+        ready_after_truthful_answers = (
+            not any(alias not in known_alias_set for alias in aliases)
+            and status
+            in {
+                "ready_after_confirmed_answers",
+                "ready_for_supervised_autofill",
+                "ready_with_supervised_submit_gates",
+                "ready_now",
+            }
+        )
+        rows.append(
+            {
+                "index": index,
+                "status": status,
+                "platform": position.get("platform"),
+                "company": position.get("company"),
+                "title": position.get("title"),
+                "role_family": position.get("role_family"),
+                "position_key": position_key,
+                "apply_url": position.get("apply_url"),
+                "queue_status": position.get("queue_status"),
+                "packet_status": position.get("packet_status"),
+                "live_status": position.get("live_status"),
+                "unresolved_final_answer_aliases": aliases,
+                "unresolved_final_answer_prompt_count": len(unresolved_matches),
+                "unresolved_final_answer_prompts": unresolved_matches[:10],
+                "resolved_or_nonblocking_final_answer_aliases": resolved_or_nonblocking_aliases,
+                "ready_after_truthful_answers": ready_after_truthful_answers,
+                "final_submit_supervised_gate": "final_submit_supervised_gate"
+                in set(_string_list(position.get("blockers_or_gates"))),
+            }
+        )
+    rows_with_dependencies = [row for row in rows if row.get("unresolved_final_answer_aliases")]
+    alias_position_counts = _final_answer_alias_counts(rows_with_dependencies)
+    alias_prompt_counts: dict[str, int] = {}
+    for row in rows:
+        for prompt in row.get("unresolved_final_answer_prompts") or []:
+            alias = str(prompt.get("alias") or "").strip()
+            if alias:
+                alias_prompt_counts[alias] = alias_prompt_counts.get(alias, 0) + 1
+    selected_dependency_aliases = sorted(alias_position_counts)
+    blocker_rows = [
+        row
+        for row in (blockers.get("blockers") or blockers.get("fields") or [])
+        if isinstance(row, dict)
+    ]
+    blocker_by_alias = {
+        str(row.get("alias") or "").strip(): row
+        for row in blocker_rows
+        if str(row.get("alias") or "").strip()
+    }
+    selected_count = len(rows)
+    ready_after_count = sum(1 for row in rows if bool(row.get("ready_after_truthful_answers")))
+    status = _selected_final_answer_dependency_status(
+        selected_count=selected_count,
+        target_count=target_count,
+        known_aliases=known_aliases,
+        rows_with_dependencies=rows_with_dependencies,
+        unknown_dependency_aliases=unknown_dependency_aliases,
+    )
+    summary = {
+        "target_count": int(target_count),
+        "selected_position_count": selected_count,
+        "known_unresolved_alias_count": len(known_aliases),
+        "known_unresolved_aliases": known_aliases,
+        "selected_dependency_alias_count": len(selected_dependency_aliases),
+        "selected_dependency_aliases": selected_dependency_aliases,
+        "positions_with_final_answer_dependencies": len(rows_with_dependencies),
+        "positions_without_final_answer_dependencies": selected_count - len(rows_with_dependencies),
+        "direct_dependency_prompt_count": sum(
+            int(row.get("unresolved_final_answer_prompt_count") or 0) for row in rows
+        ),
+        "ready_after_truthful_answers_count": ready_after_count,
+        "alias_position_counts": alias_position_counts,
+        "alias_prompt_counts": dict(sorted(alias_prompt_counts.items())),
+        "global_blocker_required_counts": {
+            alias: int((blocker_by_alias.get(alias) or {}).get("required_count") or 0)
+            for alias in known_aliases
+        },
+        "global_blockers_not_seen_in_selected_positions": [
+            alias for alias in known_aliases if alias not in selected_dependency_aliases
+        ],
+        "all_selected_dependencies_accounted_for": not unknown_dependency_aliases,
+        "unknown_dependency_aliases": sorted(unknown_dependency_aliases),
+        "position_execution_status": position_execution_audit.get("status", ""),
+        "position_execution_ready_after_answers_count": int(
+            ((position_execution_audit.get("summary") or {}).get("ready_after_answers_count")) or 0
+        ),
+        "position_execution_selector_miss_count": int(
+            ((position_execution_audit.get("summary") or {}).get("selector_miss_count")) or 0
+        ),
+        "position_execution_final_submit_stop_count": int(
+            ((position_execution_audit.get("summary") or {}).get("final_submit_stop_count")) or 0
+        ),
+    }
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "selected_final_answer_dependency_report",
+        "status": status,
+        "summary": summary,
+        "requirements": _selected_final_answer_dependency_requirements(summary),
+        "blockers": [
+            _selected_final_answer_dependency_blocker_row(alias, blocker_by_alias.get(alias, {}))
+            for alias in known_aliases
+        ],
+        "positions": rows,
+        "policy": {
+            "uses_fake_candidate_data": False,
+            "submits_real_applications": False,
+            "writes_real_profile_or_memory": False,
+            "purpose": "Map the selected 100-position queue to unresolved reusable answers before supervised autofill.",
+            "final_submit": "Real employer final submit remains supervised and is not automated here.",
+        },
+    }
+
+
+def _selected_final_answer_dependency_status(
+    *,
+    selected_count: int,
+    target_count: int,
+    known_aliases: list[str],
+    rows_with_dependencies: list[dict[str, Any]],
+    unknown_dependency_aliases: set[str],
+) -> str:
+    if selected_count < int(target_count):
+        return "incomplete_selected_queue"
+    if unknown_dependency_aliases:
+        return "needs_dependency_classification"
+    if not known_aliases:
+        return "ready_for_supervised_autofill"
+    if rows_with_dependencies:
+        return "waiting_for_truthful_answers_for_selected_positions"
+    return "waiting_for_truthful_answers_global_gate"
+
+
+def _selected_final_answer_dependency_requirements(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    target = int(summary.get("target_count") or 100)
+    selected = int(summary.get("selected_position_count") or 0)
+    unknown_aliases = _string_list(summary.get("unknown_dependency_aliases"))
+    known_aliases = _string_list(summary.get("known_unresolved_aliases"))
+    ready_after = int(summary.get("ready_after_truthful_answers_count") or 0)
+    selector_misses = int(summary.get("position_execution_selector_miss_count") or 0)
+    return [
+        {
+            "id": "selected_100_present",
+            "status": "achieved" if selected >= target else "needs_more_positions",
+            "evidence": f"selected={selected}/{target}",
+            "blocking": selected < target,
+        },
+        {
+            "id": "answer_dependencies_classified",
+            "status": "achieved" if not unknown_aliases else "needs_classification",
+            "evidence": "unknown_aliases=" + (", ".join(unknown_aliases) or "none"),
+            "blocking": bool(unknown_aliases),
+        },
+        {
+            "id": "truthful_answers_remaining",
+            "status": "needs_user_answers" if known_aliases else "achieved",
+            "evidence": "known_unresolved_aliases=" + (", ".join(known_aliases) or "none"),
+            "blocking": bool(known_aliases),
+        },
+        {
+            "id": "selected_queue_ready_after_answers",
+            "status": "achieved" if ready_after >= target and selector_misses == 0 else "needs_attention",
+            "evidence": f"ready_after_truthful_answers={ready_after}/{target}; selector_misses={selector_misses}",
+            "blocking": not (ready_after >= target and selector_misses == 0),
+        },
+        {
+            "id": "real_employer_final_submit",
+            "status": "supervised_policy_gate",
+            "evidence": "final submit remains a supervised stop in the selected 100-position queue",
+            "blocking": False,
+        },
+    ]
+
+
+def _selected_final_answer_dependency_blocker_row(
+    alias: str,
+    blocker: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "alias": alias,
+        "input_id": blocker.get("input_id"),
+        "high_risk": bool(blocker.get("high_risk")),
+        "required_count": int(blocker.get("required_count") or 0),
+        "platforms": _string_list(blocker.get("platforms")),
+        "question": blocker.get("question"),
+        "answer_format_hint": blocker.get("answer_format_hint"),
+        "required_user_response": blocker.get("required_user_response"),
+        "why_not_inferred": blocker.get("why_not_inferred"),
+    }
+
+
+def write_selected_final_answer_dependency_report(
+    research_path: str | Path,
+    position_execution_audit_path: str | Path,
+    final_answer_blockers_path: str | Path,
+    json_output: str | Path,
+    markdown_output: str | Path,
+    html_output: str | Path,
+    *,
+    target_count: int = 100,
+) -> dict[str, Any]:
+    research = _read_json_file(Path(research_path))
+    position_execution = _read_json_file(Path(position_execution_audit_path))
+    blockers = _read_json_file(Path(final_answer_blockers_path))
+    report = build_selected_final_answer_dependency_report(
+        research,
+        position_execution,
+        blockers,
+        target_count=target_count,
+    )
+    report["source_paths"] = {
+        "research": str(research_path),
+        "position_execution_audit": str(position_execution_audit_path),
+        "final_answer_blockers": str(final_answer_blockers_path),
+    }
+    report["outputs"] = {
+        "json": str(json_output),
+        "markdown": str(markdown_output),
+        "html": str(html_output),
+    }
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    html_path = Path(html_output)
+    for path in [json_path, markdown_path, html_path]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write_json(json_path, report)
+    markdown_path.write_text(
+        render_selected_final_answer_dependency_markdown(report),
+        encoding="utf-8",
+    )
+    html_path.write_text(render_selected_final_answer_dependency_html(report), encoding="utf-8")
+    return report
+
+
+def render_selected_final_answer_dependency_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    lines = [
+        "# Selected Final-Answer Dependencies",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        f"Status: {report.get('status')}",
+        "Real platform submission: false",
+        "",
+        "## Summary",
+        "",
+        f"- selected positions: {summary.get('selected_position_count', 0)} / {summary.get('target_count', 0)}",
+        f"- known unresolved aliases: {summary.get('known_unresolved_alias_count', 0)}",
+        f"- positions with direct final-answer dependencies: {summary.get('positions_with_final_answer_dependencies', 0)}",
+        f"- direct dependency prompts: {summary.get('direct_dependency_prompt_count', 0)}",
+        f"- ready after truthful answers: {summary.get('ready_after_truthful_answers_count', 0)}",
+        f"- all selected dependencies accounted for: {str(bool(summary.get('all_selected_dependencies_accounted_for'))).lower()}",
+        "- selected dependency aliases: "
+        + (", ".join(summary.get("selected_dependency_aliases") or []) or "none"),
+        "- global blockers not seen in selected rows: "
+        + (", ".join(summary.get("global_blockers_not_seen_in_selected_positions") or []) or "none"),
+        "",
+        "## Requirement Status",
+        "",
+    ]
+    lines.extend(
+        _simple_markdown_table(
+            ["ID", "Status", "Evidence"],
+            [
+                [row.get("id"), row.get("status"), row.get("evidence")]
+                for row in report.get("requirements") or []
+            ],
+        )
+    )
+    lines.extend(["", "## Blockers", ""])
+    lines.extend(
+        _simple_markdown_table(
+            ["Alias", "High risk", "Required count", "Platforms", "Question"],
+            [
+                [
+                    row.get("alias"),
+                    str(bool(row.get("high_risk"))).lower(),
+                    row.get("required_count"),
+                    ", ".join(_string_list(row.get("platforms"))),
+                    row.get("question"),
+                ]
+                for row in report.get("blockers") or []
+            ],
+        )
+    )
+    lines.extend(["", "## Positions", ""])
+    lines.extend(
+        _simple_markdown_table(
+            [
+                "#",
+                "Status",
+                "Platform",
+                "Company",
+                "Title",
+                "Aliases",
+                "Prompt count",
+                "Ready after answers",
+                "Final submit gate",
+            ],
+            [
+                [
+                    row.get("index"),
+                    row.get("status"),
+                    row.get("platform"),
+                    row.get("company"),
+                    row.get("title"),
+                    ", ".join(_string_list(row.get("unresolved_final_answer_aliases"))),
+                    row.get("unresolved_final_answer_prompt_count"),
+                    str(bool(row.get("ready_after_truthful_answers"))).lower(),
+                    str(bool(row.get("final_submit_supervised_gate"))).lower(),
+                ]
+                for row in report.get("positions") or []
+            ],
+        )
+    )
+    lines.extend(["", "## Policy", ""])
+    for key, value in sorted((report.get("policy") or {}).items()):
+        lines.append(f"- {key}: {value}")
+    return "\n".join(lines) + "\n"
+
+
+def render_selected_final_answer_dependency_html(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    return "\n".join(
+        [
+            "<!doctype html>",
+            '<html lang="en">',
+            "<head>",
+            '<meta charset="utf-8">',
+            '<meta name="viewport" content="width=device-width, initial-scale=1">',
+            "<title>Selected Final-Answer Dependencies</title>",
+            "<style>",
+            _question_export_css(),
+            "</style>",
+            "</head>",
+            "<body>",
+            "<main>",
+            "<h1>Selected Final-Answer Dependencies</h1>",
+            f"<p class=\"muted\">Generated: {_html_escape(report.get('generated_at'))}</p>",
+            _html_kpis(
+                [
+                    ("Status", report.get("status")),
+                    (
+                        "Selected",
+                        f"{summary.get('selected_position_count', 0)} / {summary.get('target_count', 0)}",
+                    ),
+                    ("Known aliases", summary.get("known_unresolved_alias_count", 0)),
+                    ("Direct rows", summary.get("positions_with_final_answer_dependencies", 0)),
+                    ("Direct prompts", summary.get("direct_dependency_prompt_count", 0)),
+                    ("Ready after answers", summary.get("ready_after_truthful_answers_count", 0)),
+                    (
+                        "Accounted for",
+                        _yes_no(summary.get("all_selected_dependencies_accounted_for")),
+                    ),
+                ]
+            ),
+            "<section><h2>Requirement Status</h2>",
+            _html_table(
+                ["ID", "Status", "Evidence"],
+                [
+                    [row.get("id"), row.get("status"), row.get("evidence")]
+                    for row in report.get("requirements") or []
+                ],
+            ),
+            "</section>",
+            "<section><h2>Blockers</h2>",
+            _html_table(
+                ["Alias", "High risk", "Required count", "Platforms", "Question", "Why not inferred"],
+                [
+                    [
+                        row.get("alias"),
+                        _yes_no(row.get("high_risk")),
+                        row.get("required_count"),
+                        ", ".join(_string_list(row.get("platforms"))),
+                        row.get("question"),
+                        row.get("why_not_inferred"),
+                    ]
+                    for row in report.get("blockers") or []
+                ],
+            ),
+            "</section>",
+            "<section><h2>Positions</h2>",
+            _html_table(
+                [
+                    "#",
+                    "Status",
+                    "Platform",
+                    "Company",
+                    "Title",
+                    "Aliases",
+                    "Prompt count",
+                    "Ready after answers",
+                    "Final submit gate",
+                    "Apply URL",
+                ],
+                [
+                    [
+                        row.get("index"),
+                        row.get("status"),
+                        row.get("platform"),
+                        row.get("company"),
+                        row.get("title"),
+                        ", ".join(_string_list(row.get("unresolved_final_answer_aliases"))),
+                        row.get("unresolved_final_answer_prompt_count"),
+                        _yes_no(row.get("ready_after_truthful_answers")),
+                        _yes_no(row.get("final_submit_supervised_gate")),
+                        row.get("apply_url"),
+                    ]
+                    for row in report.get("positions") or []
+                ],
+            ),
+            "</section>",
+            "<section><h2>Policy</h2>",
+            _html_key_value_table(report.get("policy") or {}),
+            "</section>",
+            "</main>",
+            "</body>",
+            "</html>",
+        ]
+    )
+
+
 def _position_execution_key(row: dict[str, Any]) -> str:
     return str(row.get("position_key") or row.get("apply_url") or row.get("url") or row.get("index") or "")
 
@@ -17498,6 +17972,7 @@ def _automation_handoff_next_commands(summary: dict[str, Any]) -> list[str]:
         "python3 -m job_apply_agent apply-queue-handoff",
         "python3 -m job_apply_agent apply-queue-autofill-packet --include-values",
         "python3 -m job_apply_agent position-execution-audit",
+        "python3 -m job_apply_agent selected-answer-dependencies",
         "python3 -m job_apply_agent apply-queue-handoff --open-browser --open-limit 100",
         "python3 -m job_apply_agent automation-handoff",
         "python3 -m job_apply_agent export-questions",

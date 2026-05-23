@@ -94,6 +94,7 @@ from .core import (
     write_platform_question_playbook,
     write_position_execution_audit,
     write_research_coverage_gate,
+    write_selected_final_answer_dependency_report,
     write_synthetic_unblocker_proof,
     write_submission_safety_audit,
     write_synthetic_apply_execution,
@@ -400,6 +401,15 @@ DEFAULT_POSITION_EXECUTION_AUDIT_MARKDOWN = (
 )
 DEFAULT_POSITION_EXECUTION_AUDIT_HTML = (
     Path(__file__).with_name("outbox") / "position_execution_audit_latest.html"
+)
+DEFAULT_SELECTED_ANSWER_DEPENDENCIES_JSON = (
+    Path(__file__).with_name("outbox") / "selected_answer_dependencies_latest.json"
+)
+DEFAULT_SELECTED_ANSWER_DEPENDENCIES_MARKDOWN = (
+    Path(__file__).with_name("outbox") / "selected_answer_dependencies_latest.md"
+)
+DEFAULT_SELECTED_ANSWER_DEPENDENCIES_HTML = (
+    Path(__file__).with_name("outbox") / "selected_answer_dependencies_latest.html"
 )
 DEFAULT_SUBMISSION_SAFETY_AUDIT_JSON = (
     Path(__file__).with_name("outbox") / "submission_safety_audit_latest.json"
@@ -2099,6 +2109,33 @@ def main() -> int:
     )
     position_execution_audit_parser.add_argument("--html-output", default=str(DEFAULT_POSITION_EXECUTION_AUDIT_HTML))
 
+    selected_answer_dependencies_parser = subparsers.add_parser(
+        "selected-answer-dependencies",
+        help="map unresolved final-answer blockers to the selected 100-position queue",
+    )
+    selected_answer_dependencies_parser.add_argument("--research-json", default=str(DEFAULT_RESEARCH_JSON))
+    selected_answer_dependencies_parser.add_argument(
+        "--position-execution-audit-json",
+        default=str(DEFAULT_POSITION_EXECUTION_AUDIT_JSON),
+    )
+    selected_answer_dependencies_parser.add_argument(
+        "--final-answer-blockers-json",
+        default=str(DEFAULT_FINAL_ANSWER_BLOCKERS_JSON),
+    )
+    selected_answer_dependencies_parser.add_argument("--target-count", type=int, default=100)
+    selected_answer_dependencies_parser.add_argument(
+        "--json-output",
+        default=str(DEFAULT_SELECTED_ANSWER_DEPENDENCIES_JSON),
+    )
+    selected_answer_dependencies_parser.add_argument(
+        "--markdown-output",
+        default=str(DEFAULT_SELECTED_ANSWER_DEPENDENCIES_MARKDOWN),
+    )
+    selected_answer_dependencies_parser.add_argument(
+        "--html-output",
+        default=str(DEFAULT_SELECTED_ANSWER_DEPENDENCIES_HTML),
+    )
+
     submission_safety_audit_parser = subparsers.add_parser(
         "submission-safety-audit",
         help="aggregate proof that fake rehearsals and autofill packets did not submit to real employers",
@@ -2458,6 +2495,33 @@ def main() -> int:
         print(f"Selector miss positions: {summary.get('selector_miss_position_count', 0)}")
         print(f"Final submit stop positions: {summary.get('final_submit_stop_position_count', 0)}")
         print(f"Remaining user answers: {summary.get('remaining_user_answer_count', 0)}")
+        return 0
+
+    if args.command == "selected-answer-dependencies":
+        report = write_selected_final_answer_dependency_report(
+            args.research_json,
+            args.position_execution_audit_json,
+            args.final_answer_blockers_json,
+            args.json_output,
+            args.markdown_output,
+            args.html_output,
+            target_count=args.target_count,
+        )
+        summary = report.get("summary") or {}
+        print(f"Wrote selected answer dependency JSON to {args.json_output}")
+        print(f"Wrote selected answer dependency Markdown to {args.markdown_output}")
+        print(f"Wrote selected answer dependency HTML to {args.html_output}")
+        print(f"Status: {report.get('status')}")
+        print(f"Selected positions: {summary.get('selected_position_count', 0)} / {summary.get('target_count', 0)}")
+        print(
+            "Positions with direct answer dependencies: "
+            f"{summary.get('positions_with_final_answer_dependencies', 0)}"
+        )
+        print(f"Known unresolved aliases: {summary.get('known_unresolved_alias_count', 0)}")
+        print(
+            "Ready after truthful answers: "
+            f"{summary.get('ready_after_truthful_answers_count', 0)}"
+        )
         return 0
 
     if args.command == "submission-safety-audit":

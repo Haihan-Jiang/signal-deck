@@ -59,6 +59,7 @@ from job_apply_agent.core import (
     build_learning_approval_pack,
     build_platform_question_playbook,
     build_position_execution_audit,
+    build_selected_final_answer_dependency_report,
     build_learning_task_template,
     build_pre_submit_review,
     build_position_readiness_report,
@@ -157,6 +158,8 @@ from job_apply_agent.core import (
     render_position_readiness_markdown,
     render_platform_question_playbook_html,
     render_platform_question_playbook_markdown,
+    render_selected_final_answer_dependency_html,
+    render_selected_final_answer_dependency_markdown,
     render_research_coverage_gate_markdown,
     render_synthetic_apply_execution_markdown,
     render_synthetic_browser_action_execution_markdown,
@@ -217,6 +220,7 @@ from job_apply_agent.core import (
     write_platform_question_playbook,
     write_position_execution_audit,
     write_research_coverage_gate,
+    write_selected_final_answer_dependency_report,
     write_synthetic_apply_execution,
     write_synthetic_application_simulation,
     write_synthetic_browser_action_execution,
@@ -4862,6 +4866,150 @@ class JobApplyAgentTests(unittest.TestCase):
             {"ashby:citizenship:1", "greenhouse:zip:1"},
         )
         self.assertIn("Unresolved final-answer positions excluded: 2", render_autofill_batch_plan_markdown(report))
+
+    def test_selected_final_answer_dependency_report_maps_selected_queue(self) -> None:
+        positions = [
+            {
+                "position_key": "ashby:citizenship:1",
+                "platform": "Ashby",
+                "company": "A Co",
+                "title": "Site Reliability Engineer",
+                "role_family": "SRE",
+                "apply_url": "https://jobs.ashbyhq.com/a/1",
+            },
+            {
+                "position_key": "greenhouse:zip:1",
+                "platform": "Greenhouse",
+                "company": "B Co",
+                "title": "Platform Engineer",
+                "role_family": "Platform",
+                "apply_url": "https://job-boards.greenhouse.io/b/jobs/1",
+            },
+            {
+                "position_key": "lever:clean:1",
+                "platform": "Lever",
+                "company": "C Co",
+                "title": "DevOps Engineer",
+                "role_family": "DevOps",
+                "apply_url": "https://jobs.lever.co/c/1",
+            },
+        ]
+        research = {
+            "positions": positions,
+            "items": [
+                {
+                    "position_key": "ashby:citizenship:1",
+                    "label": "Are you a U.S. Citizen?",
+                    "category": "citizenship_status",
+                    "automation_action": "human_review_required",
+                    "required": True,
+                    "platform": "Ashby",
+                },
+                {
+                    "position_key": "greenhouse:zip:1",
+                    "label": "Zip Code",
+                    "category": "profile_identity",
+                    "automation_action": "auto_fill_from_profile",
+                    "required": True,
+                    "platform": "Greenhouse",
+                },
+                {
+                    "position_key": "lever:clean:1",
+                    "label": "Email",
+                    "category": "profile_identity",
+                    "automation_action": "auto_fill_from_profile",
+                    "required": True,
+                    "platform": "Lever",
+                },
+            ],
+        }
+        position_execution = {
+            "status": "ready_after_confirmed_answers",
+            "summary": {
+                "ready_after_answers_count": 3,
+                "selector_miss_count": 0,
+                "final_submit_stop_count": 3,
+            },
+            "positions": [
+                {
+                    **position,
+                    "index": index,
+                    "status": "ready_after_confirmed_answers",
+                    "packet_status": "ready_after_confirmed_answers",
+                    "live_status": "open_live_checked",
+                    "blockers_or_gates": ["waiting_for_confirmed_answers", "final_submit_supervised_gate"],
+                }
+                for index, position in enumerate(positions, start=1)
+            ],
+        }
+        blockers = {
+            "blockers": [
+                {
+                    "alias": "citizenship_status",
+                    "input_id": "answer_memory_citizenship_status_default_policy",
+                    "high_risk": True,
+                    "required_count": 4,
+                    "platforms": ["Ashby"],
+                    "question": "What citizenship answers should automation use?",
+                },
+                {
+                    "alias": "zip_or_postal_code",
+                    "input_id": "profile_zip_or_postal_code",
+                    "high_risk": False,
+                    "required_count": 2,
+                    "platforms": ["Greenhouse"],
+                    "question": "What ZIP/postal code should automation use?",
+                },
+            ]
+        }
+
+        report = build_selected_final_answer_dependency_report(
+            research,
+            position_execution,
+            blockers,
+            target_count=3,
+        )
+
+        self.assertEqual(report["status"], "waiting_for_truthful_answers_for_selected_positions")
+        self.assertEqual(report["summary"]["positions_with_final_answer_dependencies"], 2)
+        self.assertEqual(
+            report["summary"]["alias_position_counts"],
+            {"citizenship_status": 1, "zip_or_postal_code": 1},
+        )
+        self.assertEqual(report["summary"]["ready_after_truthful_answers_count"], 3)
+        self.assertEqual(
+            report["positions"][0]["unresolved_final_answer_aliases"],
+            ["citizenship_status"],
+        )
+        self.assertEqual(
+            report["positions"][1]["unresolved_final_answer_aliases"],
+            ["zip_or_postal_code"],
+        )
+        self.assertEqual(report["positions"][2]["unresolved_final_answer_aliases"], [])
+        self.assertIn("Selected Final-Answer Dependencies", render_selected_final_answer_dependency_markdown(report))
+        self.assertIn("citizenship_status", render_selected_final_answer_dependency_html(report))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            research_path = temp_path / "research.json"
+            execution_path = temp_path / "execution.json"
+            blockers_path = temp_path / "blockers.json"
+            research_path.write_text(json.dumps(research), encoding="utf-8")
+            execution_path.write_text(json.dumps(position_execution), encoding="utf-8")
+            blockers_path.write_text(json.dumps(blockers), encoding="utf-8")
+            written = write_selected_final_answer_dependency_report(
+                research_path,
+                execution_path,
+                blockers_path,
+                temp_path / "dependencies.json",
+                temp_path / "dependencies.md",
+                temp_path / "dependencies.html",
+                target_count=3,
+            )
+
+            self.assertEqual(written["summary"]["selected_position_count"], 3)
+            self.assertTrue((temp_path / "dependencies.json").exists())
+            self.assertTrue((temp_path / "dependencies.html").exists())
 
     def test_write_browser_action_manifest_outputs_reports(self) -> None:
         plan = {
