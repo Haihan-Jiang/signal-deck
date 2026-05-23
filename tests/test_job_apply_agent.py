@@ -52,6 +52,7 @@ from job_apply_agent.core import (
     build_position_readiness_report,
     build_research_coverage_gate,
     build_telegram_job_alert,
+    build_synthetic_unblocker_compact_updates,
     classify_application_prompt,
     closed_application_match,
     closed_application_reason,
@@ -6499,6 +6500,26 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("critical_input_confirmed_updates_latest.json", ready["workflow_command"])
         self.assertIn("Ready for workflow: true", markdown)
 
+        synthetic_compact = build_synthetic_unblocker_compact_updates(unblockers)
+        self.assertEqual(synthetic_compact["profile_zip_or_postal_code"], "99999")
+        self.assertTrue(
+            synthetic_compact["answer_memory_citizenship_status_default_policy"][
+                "high_risk_user_confirmed"
+            ]
+        )
+        self.assertIn(
+            "Synthetic rehearsal answer",
+            synthetic_compact["answer_memory_citizenship_status_default_policy"]["user_answer"],
+        )
+        synthetic_ready = build_critical_input_unblocker_final_update(
+            synthetic_compact,
+            full_template,
+            unblocker_packet=unblockers,
+        )
+        self.assertTrue(synthetic_ready["ready_for_workflow"])
+        self.assertEqual(synthetic_ready["summary"]["missing_unblocker_count"], 0)
+        self.assertEqual(synthetic_ready["summary"]["unconfirmed_high_risk_count"], 0)
+
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             compact_path = root / "compact.json"
@@ -7966,11 +7987,12 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertTrue(report["summary"]["synthetic_unblocker_proof_complete"])
         self.assertEqual(report["summary"]["synthetic_final_unblocker_update_count"], 6)
         self.assertEqual(report["confirmed_answer_runbook"][0]["status"], "waiting_for_user")
-        self.assertIn("post-answer-pipeline --fail-on-not-ready", report["next_commands"][0])
-        self.assertIn("post-answer-pipeline --apply --live-check", report["next_commands"][1])
-        self.assertIn("critical-input-unblockers-finalize", report["next_commands"][2])
-        self.assertIn("--approve-high-risk", report["next_commands"][3])
-        self.assertIn("critical_input_confirmed_updates_latest.json", report["next_commands"][3])
+        self.assertIn("post-answer-pipeline --synthetic-final-answers", report["next_commands"][0])
+        self.assertIn("post-answer-pipeline --fail-on-not-ready", report["next_commands"][1])
+        self.assertIn("post-answer-pipeline --apply --live-check", report["next_commands"][2])
+        self.assertIn("critical-input-unblockers-finalize", report["next_commands"][3])
+        self.assertIn("--approve-high-risk", report["next_commands"][4])
+        self.assertIn("critical_input_confirmed_updates_latest.json", report["next_commands"][4])
         self.assertIn("closed-preflight --jobs", " ".join(report["next_commands"]))
         self.assertEqual(report["answer_impact_queue"][0]["input_id"], "answer_memory_citizenship_status_default_policy")
         self.assertEqual(report["answer_impact_queue"][0]["handoff_action"], "confirm_truthful_answer_before_persisting")

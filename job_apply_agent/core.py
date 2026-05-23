@@ -4844,6 +4844,102 @@ def build_critical_input_unblocker_final_update(
     }
 
 
+def build_synthetic_unblocker_compact_updates(unblocker_packet: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(unblocker_packet, dict):
+        raise ValueError("critical input unblockers must be a JSON object")
+    rows = unblocker_packet.get("unblockers") or []
+    if not isinstance(rows, list):
+        raise ValueError("critical input unblockers must contain an unblockers list")
+    updates: dict[str, Any] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        input_id = str(row.get("input_id") or "").strip()
+        if not input_id:
+            continue
+        answer = _synthetic_final_unblocker_answer(row)
+        if _synthetic_final_unblocker_is_high_risk(row):
+            updates[input_id] = {
+                "user_answer": answer,
+                "approval_decision": "approved",
+                "high_risk_user_confirmed": True,
+            }
+        else:
+            updates[input_id] = answer
+    return updates
+
+
+def _synthetic_final_unblocker_is_high_risk(row: dict[str, Any]) -> bool:
+    return bool(row.get("high_risk")) or str(row.get("input_type") or "") == "high_risk_exact_confirmation"
+
+
+def _synthetic_final_unblocker_answer(row: dict[str, Any]) -> str:
+    input_id = str(row.get("input_id") or "")
+    group_key = str(row.get("group_key") or "")
+    category = _category_default_policy_from_group_key(group_key)
+    label_text = " ".join(_string_list(row.get("labels")))
+    normalized = _normalize(
+        " ".join(
+            [
+                input_id,
+                group_key,
+                str(row.get("question") or ""),
+                str(row.get("required_user_response") or ""),
+                label_text,
+            ]
+        )
+    )
+    if input_id == "profile_zip_or_postal_code" or group_key == "profile:zip_or_postal_code":
+        return "99999"
+    if category == "citizenship_status" or "citizenship" in normalized:
+        return (
+            "Synthetic rehearsal answer: eligible to work; no restricted-country "
+            "citizenship or permanent residency."
+        )
+    if category == "background_or_export_control" or any(
+        token in normalized
+        for token in [
+            "background",
+            "export",
+            "indictment",
+            "debarment",
+            "substance",
+            "firearm",
+            "felony",
+            "legal eligibility",
+        ]
+    ):
+        return (
+            "Synthetic rehearsal answer: no background, export-control, indictment, "
+            "debarment, substance, firearm, felony, or legal-eligibility restriction."
+        )
+    if category == "country_work_permit" or "work permit" in normalized:
+        return (
+            "Synthetic rehearsal answer: authorized for the target work location; "
+            "no additional non-U.S. permit exception unless specified."
+        )
+    if category == "interview_recording_consent" or any(
+        token in normalized for token in ["recording", "transcription", "notetaker", "interview analysis"]
+    ):
+        return (
+            "Synthetic rehearsal answer: yes, consent to interview recording, "
+            "transcription, AI notetakers, and interview analysis for rehearsal."
+        )
+    if category == "health_requirement" or any(
+        token in normalized for token in ["vaccination", "vaccine", "health requirement"]
+    ):
+        return (
+            "Synthetic rehearsal answer: able to meet stated in-person health or "
+            "vaccination requirements for rehearsal."
+        )
+    if _synthetic_final_unblocker_is_high_risk(row):
+        return (
+            "Synthetic rehearsal answer: approved for local rehearsal only; replace "
+            "with exact truthful answer before real use."
+        )
+    return "Synthetic placeholder answer for local rehearsal only."
+
+
 def write_critical_input_unblocker_final_update(
     compact_updates_path: str | Path,
     full_updates_template_path: str | Path,
@@ -12851,55 +12947,62 @@ def _automation_handoff_confirmed_answer_runbook(summary: dict[str, Any]) -> lis
         },
         {
             "step": 2,
+            "name": "Run synthetic local rehearsal",
+            "status": "ready",
+            "action": "python3 -m job_apply_agent post-answer-pipeline --synthetic-final-answers --fail-on-not-ready",
+            "expected_result": "Fake local answers prove the final-answer gate without writing real profile or answer memory.",
+        },
+        {
+            "step": 3,
             "name": "Run safe post-answer preflight",
             "status": "ready_after_confirmation" if final_blanks else "ready",
             "action": "python3 -m job_apply_agent post-answer-pipeline --fail-on-not-ready",
             "expected_result": "The six answers are merged with the prefilled drafts and verified without writing profile or answer memory.",
         },
         {
-            "step": 3,
+            "step": 4,
             "name": "Build full confirmed updates",
             "status": "ready_after_confirmation" if final_blanks else "ready",
             "action": "python3 -m job_apply_agent critical-input-unblockers-finalize --fail-on-not-ready",
             "expected_result": "The six answers are merged with the prefilled draft updates into critical_input_confirmed_updates_latest.json.",
         },
         {
-            "step": 4,
+            "step": 5,
             "name": "Apply approved answers",
             "status": "ready_after_confirmation" if final_blanks else "ready",
             "action": "python3 -m job_apply_agent critical-inputs-workflow --updates job_apply_agent/outbox/critical_input_confirmed_updates_latest.json --approve --approve-high-risk --apply",
             "expected_result": "Profile and answer memory are updated, then reports are refreshed.",
         },
         {
-            "step": 5,
+            "step": 6,
             "name": "Refresh 100-position queue",
             "status": "ready_after_answers",
             "action": "python3 -m job_apply_agent apply-queue",
             "expected_result": "A fresh live-check job payload is written for the 100-position queue.",
         },
         {
-            "step": 6,
+            "step": 7,
             "name": "Recheck live postings",
             "status": "ready_after_answers",
             "action": "python3 -m job_apply_agent closed-preflight --jobs job_apply_agent/outbox/apply_queue_live_check_jobs_latest.json --live-check-limit 100 --live-check-timeout 25",
             "expected_result": "Pages that now say No longer accepting applications are persisted and excluded.",
         },
         {
-            "step": 7,
+            "step": 8,
             "name": "Build open-page handoff",
             "status": "ready_after_answers" if manual_live_checks == 0 else "manual_live_check_needed",
             "action": "python3 -m job_apply_agent apply-queue-handoff",
             "expected_result": f"{open_after_answers} open-after-answer rows become open-ready after answers and live checks.",
         },
         {
-            "step": 8,
+            "step": 9,
             "name": "Build supervised autofill packet",
             "status": "ready_after_answers" if packet_selector_misses == 0 else "fix_selectors",
             "action": "python3 -m job_apply_agent apply-queue-autofill-packet --include-values",
             "expected_result": f"{packet_selected} selected rows, {packet_submit_stops} final-submit stops, 0 selector misses.",
         },
         {
-            "step": 9,
+            "step": 10,
             "name": "Open verified pages",
             "status": "supervised_only",
             "action": "python3 -m job_apply_agent apply-queue-handoff --open-browser --open-limit 100",
@@ -12910,6 +13013,7 @@ def _automation_handoff_confirmed_answer_runbook(summary: dict[str, Any]) -> lis
 
 def _automation_handoff_next_commands(summary: dict[str, Any]) -> list[str]:
     commands = [
+        "python3 -m job_apply_agent post-answer-pipeline --synthetic-final-answers --fail-on-not-ready",
         "python3 -m job_apply_agent post-answer-pipeline --fail-on-not-ready",
         "python3 -m job_apply_agent post-answer-pipeline --apply --live-check --include-values",
         "python3 -m job_apply_agent critical-input-unblockers-finalize --fail-on-not-ready",
@@ -12923,7 +13027,7 @@ def _automation_handoff_next_commands(summary: dict[str, Any]) -> list[str]:
         "python3 -m job_apply_agent export-questions",
     ]
     if summary.get("updates_ready_for_apply"):
-        return commands[1:]
+        return commands[2:]
     return commands
 
 

@@ -54,6 +54,7 @@ from .core import (
     write_fake_learning_probe,
     write_fake_critical_input_probe,
     write_fake_position_rehearsal,
+    build_synthetic_unblocker_compact_updates,
     write_goal_readiness_audit,
     write_critical_input_suggestion_packet,
     write_learning_approval_pack,
@@ -171,6 +172,18 @@ DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_JSON = (
 )
 DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_MARKDOWN = (
     Path(__file__).with_name("outbox") / "critical_input_confirmed_updates_report_latest.md"
+)
+DEFAULT_POST_ANSWER_SYNTHETIC_COMPACT_UPDATES_JSON = (
+    Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_unblockers_updates_latest.json"
+)
+DEFAULT_POST_ANSWER_SYNTHETIC_CONFIRMED_UPDATES_JSON = (
+    Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_confirmed_updates_latest.json"
+)
+DEFAULT_POST_ANSWER_SYNTHETIC_CONFIRMED_UPDATES_REPORT_JSON = (
+    Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_confirmed_updates_report_latest.json"
+)
+DEFAULT_POST_ANSWER_SYNTHETIC_CONFIRMED_UPDATES_REPORT_MARKDOWN = (
+    Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_confirmed_updates_report_latest.md"
 )
 DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_JSON = Path(__file__).with_name("outbox") / "synthetic_unblocker_proof_latest.json"
 DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_MARKDOWN = (
@@ -713,6 +726,14 @@ def main() -> int:
     post_answer_pipeline_parser.add_argument(
         "--confirmed-updates-output",
         default=str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_JSON),
+    )
+    post_answer_pipeline_parser.add_argument(
+        "--synthetic-final-answers",
+        action="store_true",
+        help=(
+            "use fake final answers for local rehearsal only; cannot be combined "
+            "with --apply, --live-check, or --open-browser"
+        ),
     )
     post_answer_pipeline_parser.add_argument(
         "--apply",
@@ -2747,21 +2768,48 @@ def main() -> int:
 
 
 def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
-    for label, path_value in [
-        ("compact updates", args.compact_updates),
+    synthetic_final_answers = bool(args.synthetic_final_answers)
+    if synthetic_final_answers and (args.apply or args.live_check or args.open_browser):
+        raise ValueError("synthetic final answers cannot be combined with --apply, --live-check, or --open-browser")
+
+    required_paths = [
         ("full updates template", args.full_template),
         ("critical input unblockers", args.unblockers),
-    ]:
+    ]
+    if not synthetic_final_answers:
+        required_paths.insert(0, ("compact updates", args.compact_updates))
+    for label, path_value in required_paths:
         if not Path(path_value).exists():
             raise FileNotFoundError(f"{label} not found: {path_value}")
+
+    compact_updates_path = Path(args.compact_updates)
+    confirmed_updates_output = Path(args.confirmed_updates_output)
+    final_report_json = DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_JSON
+    final_report_markdown = DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_MARKDOWN
+    synthetic_compact_updates_output = None
+    if synthetic_final_answers:
+        unblockers_payload = json.loads(Path(args.unblockers).read_text(encoding="utf-8"))
+        synthetic_compact_updates = build_synthetic_unblocker_compact_updates(unblockers_payload)
+        compact_updates_path = DEFAULT_POST_ANSWER_SYNTHETIC_COMPACT_UPDATES_JSON
+        compact_updates_path.parent.mkdir(parents=True, exist_ok=True)
+        compact_updates_path.write_text(
+            json.dumps(synthetic_compact_updates, ensure_ascii=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        synthetic_compact_updates_output = str(compact_updates_path)
+        if _same_path(args.confirmed_updates_output, DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_JSON):
+            confirmed_updates_output = DEFAULT_POST_ANSWER_SYNTHETIC_CONFIRMED_UPDATES_JSON
+        final_report_json = DEFAULT_POST_ANSWER_SYNTHETIC_CONFIRMED_UPDATES_REPORT_JSON
+        final_report_markdown = DEFAULT_POST_ANSWER_SYNTHETIC_CONFIRMED_UPDATES_REPORT_MARKDOWN
+
     steps: list[dict[str, object]] = []
     final_report = write_critical_input_unblocker_final_update(
-        args.compact_updates,
+        compact_updates_path,
         args.full_template,
         args.unblockers,
-        args.confirmed_updates_output,
-        DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_JSON,
-        DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_MARKDOWN,
+        confirmed_updates_output,
+        final_report_json,
+        final_report_markdown,
     )
     final_summary = final_report.get("summary") or {}
     steps.append(
@@ -2790,7 +2838,7 @@ def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
             workflow = write_critical_input_answer_workflow(
                 DEFAULT_LEARNING_APPROVAL_PACK_JSON,
                 DEFAULT_CRITICAL_INPUT_ANSWERS_JSON,
-                json.loads(Path(args.confirmed_updates_output).read_text(encoding="utf-8")),
+                json.loads(Path(confirmed_updates_output).read_text(encoding="utf-8")),
                 DEFAULT_PERSONAL_PROFILE if DEFAULT_PERSONAL_PROFILE.exists() else DEFAULT_PROFILE,
                 DEFAULT_MEMORY,
                 DEFAULT_CRITICAL_INPUT_WORKFLOW_JSON,
@@ -2945,6 +2993,13 @@ def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
         "live_check_requested": bool(args.live_check),
         "open_browser_requested": bool(args.open_browser),
         "include_values": bool(args.include_values),
+        "synthetic_final_answers": synthetic_final_answers,
+        "synthetic_compact_updates_output": synthetic_compact_updates_output,
+        "confirmed_updates_output": str(confirmed_updates_output),
+        "final_update_report_outputs": {
+            "json": str(final_report_json),
+            "markdown": str(final_report_markdown),
+        },
         "final_update_report": {
             key: value for key, value in final_report.items() if key != "merged_updates"
         },
@@ -2968,6 +3023,8 @@ def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
             "live_page_check_requires_live_check": True,
             "open_browser_requires_open_browser": True,
             "final_submit_remains_supervised": True,
+            "synthetic_answers_never_written_to_real_profile_or_memory": True,
+            "synthetic_answers_forbid_apply_live_check_and_open_browser": True,
         },
     }
     _write_post_answer_pipeline_report(report, args.json_output, args.markdown_output)
@@ -2975,6 +3032,7 @@ def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
     print(f"Wrote post-answer pipeline Markdown to {args.markdown_output}")
     print(f"Status: {report.get('status')}")
     print(f"Ready for workflow: {str(bool(report.get('ready_for_workflow'))).lower()}")
+    print(f"Synthetic final answers: {str(synthetic_final_answers).lower()}")
     print(f"Apply requested: {str(bool(args.apply)).lower()}")
     print(f"Live check requested: {str(bool(args.live_check)).lower()}")
     print(f"Open browser requested: {str(bool(args.open_browser)).lower()}")
@@ -3007,9 +3065,11 @@ def _render_post_answer_pipeline_markdown(report: dict[str, object]) -> str:
         f"Generated: {report.get('generated_at')}",
         f"Status: {report.get('status')}",
         f"Ready for workflow: {str(bool(report.get('ready_for_workflow'))).lower()}",
+        f"Synthetic final answers: {str(bool(report.get('synthetic_final_answers'))).lower()}",
         f"Apply requested: {str(bool(report.get('apply_requested'))).lower()}",
         f"Live check requested: {str(bool(report.get('live_check_requested'))).lower()}",
         f"Open browser requested: {str(bool(report.get('open_browser_requested'))).lower()}",
+        f"Confirmed updates output: {report.get('confirmed_updates_output')}",
         "",
         "## Final Answer Gate",
         "",
@@ -3038,6 +3098,7 @@ def _render_post_answer_pipeline_markdown(report: dict[str, object]) -> str:
             "- Profile and answer-memory writes require `--apply`.",
             "- Live page checks require `--live-check`.",
             "- Browser opening requires `--open-browser` and still stops before final submit.",
+            "- Synthetic final answers cannot be applied, live-checked, or opened in browser.",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -3051,6 +3112,10 @@ def _load_optional_json(path_value: str | None) -> dict | None:
         return None
     payload = json.loads(path.read_text(encoding="utf-8"))
     return payload if isinstance(payload, dict) else None
+
+
+def _same_path(path_value: str | Path, other_path: str | Path) -> bool:
+    return Path(path_value).expanduser().resolve() == Path(other_path).expanduser().resolve()
 
 
 def _refresh_application_automation_reports() -> dict[str, object]:
