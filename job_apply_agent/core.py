@@ -4125,6 +4125,90 @@ def render_learning_approval_pack_markdown(pack: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def build_critical_input_answer_template(approval_pack: dict[str, Any]) -> dict[str, Any]:
+    answers: list[dict[str, Any]] = []
+    for index, item in enumerate(approval_pack.get("critical_inputs", []), start=1):
+        if not isinstance(item, dict):
+            continue
+        answers.append(
+            {
+                "input_id": _critical_input_answer_id(item, index),
+                "input_type": item.get("input_type"),
+                "group_key": item.get("group_key"),
+                "question": item.get("question"),
+                "approval_decision": "",
+                "user_answer": "",
+                "required_user_response": item.get("required_user_response"),
+                "approval_risk": item.get("approval_risk"),
+                "storage_after_approval": item.get("storage_after_approval"),
+                "automation_after_answer": item.get("automation_after_answer"),
+                "persist_allowed": bool(item.get("persist_allowed")),
+                "required_count": item.get("required_count", 0),
+                "platforms": item.get("platforms") or [],
+                "labels": item.get("labels") or [],
+            }
+        )
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "learning_approval_pack.critical_inputs",
+        "answer_count": len(answers),
+        "instructions": (
+            "Fill user_answer and set approval_decision=approved only for truthful reusable answers. "
+            "Leave supervised_browser_review_only rows blank; they stay browser-supervised."
+        ),
+        "answers": answers,
+    }
+
+
+def write_critical_input_answer_template(
+    approval_pack: dict[str, Any],
+    json_output: str | Path,
+    markdown_output: str | Path,
+) -> dict[str, Any]:
+    template = build_critical_input_answer_template(approval_pack)
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(template, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(render_critical_input_answer_template_markdown(template), encoding="utf-8")
+    return template
+
+
+def render_critical_input_answer_template_markdown(template: dict[str, Any]) -> str:
+    lines = [
+        "# Critical Input Answer Template",
+        "",
+        f"Generated: {template.get('generated_at')}",
+        f"Answers needed: {template.get('answer_count', 0)}",
+        "",
+        str(template.get("instructions") or ""),
+        "",
+        "## Answers",
+        "",
+    ]
+    answers = template.get("answers") or []
+    if not answers:
+        lines.append("- None")
+        return "\n".join(lines) + "\n"
+    for item in answers:
+        lines.append(
+            "- [ ] {input_type}: {question}".format(
+                input_type=item.get("input_type"),
+                question=item.get("question") or "Unknown question",
+            )
+        )
+        lines.append(f"  input_id: {item.get('input_id')}")
+        lines.append(f"  approval_decision: {item.get('approval_decision') or ''}")
+        lines.append(f"  user_answer: {item.get('user_answer') or ''}")
+        lines.append(f"  response needed: {item.get('required_user_response')}")
+        lines.append(f"  automation after answer: {item.get('automation_after_answer')}")
+        labels = item.get("labels") or []
+        if labels:
+            lines.append(f"  labels: {'; '.join(str(label) for label in labels[:3])}")
+    return "\n".join(lines) + "\n"
+
+
 def apply_learning_task_answers(
     tasks_path: str | Path,
     profile_path: str | Path,
@@ -4142,12 +4226,18 @@ def apply_critical_input_answers(
     approval_pack_path: str | Path,
     profile_path: str | Path,
     memory_path: str | Path,
+    answers_path: str | Path | None = None,
     source: str = "critical_inputs",
     dry_run: bool = False,
 ) -> dict[str, Any]:
     payload = _read_json_file(Path(approval_pack_path))
     if not isinstance(payload, dict):
         raise ValueError("approval pack must be a JSON object")
+    answers_payload = _read_json_file(Path(answers_path)) if answers_path else None
+    if answers_path and not isinstance(answers_payload, dict):
+        raise ValueError("critical input answers file must be a JSON object")
+    if isinstance(answers_payload, dict):
+        payload = _approval_pack_with_answer_template(payload, answers_payload)
     tasks_by_key = {
         _critical_input_task_key(task): task
         for task in payload.get("tasks", [])
@@ -4311,6 +4401,55 @@ def _apply_learning_task_payload(
         "skipped": skipped,
         "answer_memory_count": len(memory.get("answers", [])),
     }
+
+
+def _approval_pack_with_answer_template(
+    approval_pack: dict[str, Any],
+    answers_payload: dict[str, Any],
+) -> dict[str, Any]:
+    merged = {
+        **approval_pack,
+        "critical_inputs": [dict(item) for item in approval_pack.get("critical_inputs", []) if isinstance(item, dict)],
+    }
+    answer_rows = answers_payload.get("answers")
+    if not isinstance(answer_rows, list):
+        answer_rows = answers_payload.get("critical_inputs")
+    if not isinstance(answer_rows, list):
+        answer_rows = []
+    answer_index: dict[str, dict[str, Any]] = {}
+    for index, row in enumerate(answer_rows, start=1):
+        if not isinstance(row, dict):
+            continue
+        keys = {
+            str(row.get("input_id") or ""),
+            _critical_input_task_key(row),
+            str(row.get("group_key") or ""),
+            _critical_input_answer_id(row, index),
+        }
+        for key in keys:
+            if key:
+                answer_index[key] = row
+    for index, item in enumerate(merged["critical_inputs"], start=1):
+        answer = (
+            answer_index.get(str(item.get("input_id") or ""))
+            or answer_index.get(_critical_input_task_key(item))
+            or answer_index.get(str(item.get("group_key") or ""))
+            or answer_index.get(_critical_input_answer_id(item, index))
+        )
+        if not answer:
+            continue
+        if "approval_decision" in answer:
+            item["approval_decision"] = answer.get("approval_decision")
+        if "user_answer" in answer:
+            item["user_answer"] = answer.get("user_answer")
+    return merged
+
+
+def _critical_input_answer_id(item: dict[str, Any], index: int) -> str:
+    group_key = _normalize(str(item.get("group_key") or ""))
+    question = _normalize(str(item.get("question") or ""))
+    seed = group_key or question or f"critical input {index}"
+    return re.sub(r"[^a-z0-9]+", "_", seed).strip("_")[:80] or f"critical_input_{index}"
 
 
 def _critical_input_task_key(item: dict[str, Any]) -> str:

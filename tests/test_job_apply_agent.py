@@ -19,6 +19,7 @@ from job_apply_agent.core import (
     build_application_playbook,
     build_application_research,
     build_collection_plan_from_coverage_gate,
+    build_critical_input_answer_template,
     build_question_export,
     build_browser_action_manifest,
     build_closed_posting_preflight,
@@ -72,6 +73,7 @@ from job_apply_agent.core import (
     render_collection_plan_markdown,
     render_browser_action_manifest_markdown,
     render_closed_posting_preflight_markdown,
+    render_critical_input_answer_template_markdown,
     render_browser_dom_execution_plan_markdown,
     render_form_fill_plan_markdown,
     render_fake_learning_probe_markdown,
@@ -101,6 +103,7 @@ from job_apply_agent.core import (
     write_candidate_topup_selection_report,
     write_closed_posting_preflight,
     write_collection_plan,
+    write_critical_input_answer_template,
     write_question_export,
     write_browser_dom_harness,
     write_form_fill_plan,
@@ -4174,6 +4177,87 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertIsNotNone(find_learned_answer(memory, "What is your favorite restaurant?"))
             self.assertIsNotNone(find_learned_answer(memory, "Are you a U.S. citizen?"))
             self.assertEqual(result["category_policy_updates"], ["citizenship_status"])
+
+    def test_critical_input_answer_template_can_drive_apply_command(self) -> None:
+        learning_tasks = {
+            "tasks": [
+                {
+                    "group_key": "profile:zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "recommended_storage": "profile",
+                    "labels": ["Zip Code"],
+                    "platforms": ["Ashby"],
+                    "related_prompt_count": 1,
+                    "observed_count": 4,
+                    "required_count": 4,
+                    "persist_allowed": True,
+                },
+                {
+                    "group_key": "answer_memory:favorite_junk_food",
+                    "question": "What's your favorite junk food?",
+                    "recommended_storage": "answer_memory",
+                    "labels": ["What's your favorite junk food?"],
+                    "platforms": ["Greenhouse"],
+                    "related_prompt_count": 1,
+                    "observed_count": 2,
+                    "required_count": 2,
+                    "persist_allowed": True,
+                },
+            ],
+        }
+        pack = build_learning_approval_pack(learning_tasks, {})
+        template = build_critical_input_answer_template(pack)
+        self.assertEqual(template["answer_count"], 2)
+        self.assertEqual(template["answers"][0]["approval_decision"], "")
+        markdown = render_critical_input_answer_template_markdown(template)
+        self.assertIn("Critical Input Answer Template", markdown)
+
+        for answer in template["answers"]:
+            if answer["group_key"] == "profile:zip_or_postal_code":
+                answer["user_answer"] = "94105"
+                answer["approval_decision"] = "approved"
+            else:
+                answer["user_answer"] = "Potato chips"
+                answer["approval_decision"] = "approved"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pack_path = Path(temp_dir) / "approval_pack.json"
+            answers_path = Path(temp_dir) / "critical_input_answers.json"
+            answers_md_path = Path(temp_dir) / "critical_input_answers.md"
+            profile_path = Path(temp_dir) / "profile.json"
+            memory_path = Path(temp_dir) / "memory.json"
+            pack_path.write_text(json.dumps(pack), encoding="utf-8")
+            answers_path.write_text(json.dumps(template), encoding="utf-8")
+            profile_path.write_text(
+                json.dumps(
+                    {
+                        "candidate": {"name": "Test User"},
+                        "preferences": {},
+                        "resume_facts": {},
+                        "question_answers": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            written = write_critical_input_answer_template(pack, answers_path, answers_md_path)
+            self.assertEqual(written["answer_count"], 2)
+            self.assertTrue(answers_md_path.exists())
+            answers_path.write_text(json.dumps(template), encoding="utf-8")
+
+            result = apply_critical_input_answers(
+                pack_path,
+                profile_path,
+                memory_path,
+                answers_path=answers_path,
+            )
+
+            self.assertEqual(result["approved_input_count"], 2)
+            self.assertEqual(result["skipped_input_count"], 0)
+            profile = json.loads(profile_path.read_text(encoding="utf-8"))
+            self.assertEqual(profile["question_answers"]["zip_code"], "94105")
+            memory = load_answer_memory(memory_path)
+            self.assertIsNotNone(find_learned_answer(memory, "What's your favorite junk food?"))
 
     def test_fake_learning_probe_clears_learning_blockers_without_real_submission(self) -> None:
         research = {

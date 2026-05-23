@@ -41,6 +41,7 @@ from .core import (
     write_fake_position_rehearsal,
     write_learning_approval_pack,
     write_learning_task_template,
+    write_critical_input_answer_template,
     write_pre_submit_review,
     write_question_export,
     write_position_readiness_report,
@@ -81,6 +82,8 @@ DEFAULT_LEARNING_TASKS_JSON = Path(__file__).with_name("outbox") / "learning_tas
 DEFAULT_LEARNING_TASKS_MARKDOWN = Path(__file__).with_name("outbox") / "learning_tasks_latest.md"
 DEFAULT_LEARNING_APPROVAL_PACK_JSON = Path(__file__).with_name("outbox") / "learning_approval_pack_latest.json"
 DEFAULT_LEARNING_APPROVAL_PACK_MARKDOWN = Path(__file__).with_name("outbox") / "learning_approval_pack_latest.md"
+DEFAULT_CRITICAL_INPUT_ANSWERS_JSON = Path(__file__).with_name("outbox") / "critical_input_answers_latest.json"
+DEFAULT_CRITICAL_INPUT_ANSWERS_MARKDOWN = Path(__file__).with_name("outbox") / "critical_input_answers_latest.md"
 DEFAULT_FAKE_LEARNING_PROBE_JSON = Path(__file__).with_name("outbox") / "fake_learning_probe_latest.json"
 DEFAULT_FAKE_LEARNING_PROBE_MARKDOWN = Path(__file__).with_name("outbox") / "fake_learning_probe_latest.md"
 DEFAULT_FAKE_POSITION_REHEARSAL_JSON = Path(__file__).with_name("outbox") / "fake_position_rehearsal_latest.json"
@@ -358,6 +361,17 @@ def main() -> int:
         default=str(DEFAULT_LEARNING_APPROVAL_PACK_MARKDOWN),
     )
 
+    critical_inputs_template_parser = subparsers.add_parser(
+        "critical-inputs-template",
+        help="write a small fill-in answer template for critical application inputs",
+    )
+    critical_inputs_template_parser.add_argument("--approval-pack", default=str(DEFAULT_LEARNING_APPROVAL_PACK_JSON))
+    critical_inputs_template_parser.add_argument("--json-output", default=str(DEFAULT_CRITICAL_INPUT_ANSWERS_JSON))
+    critical_inputs_template_parser.add_argument(
+        "--markdown-output",
+        default=str(DEFAULT_CRITICAL_INPUT_ANSWERS_MARKDOWN),
+    )
+
     apply_learning_parser = subparsers.add_parser(
         "apply-learning",
         help="apply approved learning-template answers to profile and answer memory",
@@ -376,6 +390,7 @@ def main() -> int:
         help="apply approved critical input answers from the learning approval pack",
     )
     apply_critical_inputs_parser.add_argument("--approval-pack", default=str(DEFAULT_LEARNING_APPROVAL_PACK_JSON))
+    apply_critical_inputs_parser.add_argument("--answers", default=None)
     apply_critical_inputs_parser.add_argument(
         "--profile",
         default=str(DEFAULT_PERSONAL_PROFILE if DEFAULT_PERSONAL_PROFILE.exists() else DEFAULT_PROFILE),
@@ -988,6 +1003,20 @@ def main() -> int:
         print(f"Manual gates: {summary.get('manual_gate_count', 0)}")
         return 0
 
+    if args.command == "critical-inputs-template":
+        approval_pack_path = Path(args.approval_pack)
+        if not approval_pack_path.exists():
+            raise FileNotFoundError(f"approval pack not found: {args.approval_pack}")
+        template = write_critical_input_answer_template(
+            json.loads(approval_pack_path.read_text(encoding="utf-8")),
+            args.json_output,
+            args.markdown_output,
+        )
+        print(f"Wrote critical input answer JSON to {args.json_output}")
+        print(f"Wrote critical input answer Markdown to {args.markdown_output}")
+        print(f"Answers needed: {template.get('answer_count', 0)}")
+        return 0
+
     if args.command == "apply-learning":
         result = apply_learning_task_answers(
             args.tasks,
@@ -1007,6 +1036,7 @@ def main() -> int:
             args.approval_pack,
             args.profile,
             args.memory,
+            answers_path=args.answers,
             source=args.source,
             dry_run=args.dry_run,
         )

@@ -382,18 +382,34 @@ resume facts, exact prompt answers, high-risk confirmations, and supervised-only
 items. Use it to decide what can be approved once versus what still needs an
 exact user answer before automation can safely fill real applications.
 
+Create a small fill-in file for just those critical inputs:
+
+```bash
+python3 -m job_apply_agent critical-inputs-template
+```
+
+This writes:
+
+```text
+job_apply_agent/outbox/critical_input_answers_latest.json
+job_apply_agent/outbox/critical_input_answers_latest.md
+```
+
 After filling `user_answer` and setting `approval_decision` to `approved` for
-truthful reusable rows in `learning_approval_pack_latest.json`, apply the
+truthful reusable rows in `critical_input_answers_latest.json`, apply the
 critical inputs with a dry run first:
 
 ```bash
-python3 -m job_apply_agent apply-critical-inputs --dry-run
+python3 -m job_apply_agent apply-critical-inputs \
+  --answers job_apply_agent/outbox/critical_input_answers_latest.json \
+  --dry-run
 ```
 
 Then apply the approved values:
 
 ```bash
-python3 -m job_apply_agent apply-critical-inputs
+python3 -m job_apply_agent apply-critical-inputs \
+  --answers job_apply_agent/outbox/critical_input_answers_latest.json
 ```
 
 This writes approved profile fields, resume facts, and reusable answer memory.
