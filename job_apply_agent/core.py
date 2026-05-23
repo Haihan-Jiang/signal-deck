@@ -15576,6 +15576,28 @@ def _standard_learning_answer_suggestion(
                 "profile.question_answers.start_date",
                 "Drafted from stored availability; verify before approving.",
             )
+    if "current c2c" in text or "current ctc" in text or "current compensation" in text:
+        expected = (profile.question_answers.get("compensation") if profile else "") or ""
+        answer = "I prefer not to disclose current compensation."
+        if expected:
+            answer = f"{answer} {_clean_sentence(expected)}."
+        return _suggested_learning_answer(
+            answer,
+            "standard_current_compensation_non_disclosure",
+            "Current compensation draft avoids disclosing private salary; approve only if this is your preferred wording.",
+        )
+    if "favorite junk food" in text:
+        return _suggested_learning_answer(
+            "No strong preference.",
+            "standard_low_stakes_personal_preference",
+            "Low-stakes personal preference draft; replace with your real preference if you want one stored.",
+        )
+    if "favorite restaurant" in text:
+        return _suggested_learning_answer(
+            "No strong preference.",
+            "standard_low_stakes_personal_preference",
+            "Low-stakes personal preference draft; replace with your real preference if you want one stored.",
+        )
     if "platform engineer" in text and "big impact" in text and "startup" in text:
         return _suggested_learning_answer(
             (

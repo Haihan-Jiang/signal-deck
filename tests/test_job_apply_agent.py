@@ -3028,6 +3028,36 @@ class JobApplyAgentTests(unittest.TestCase):
                     "observed_count": 1,
                     "required_count": 1,
                 },
+                {
+                    "group_key": "answer_memory:needs_user_confirmation:current_c2c",
+                    "question": "What is your current C2C?",
+                    "recommended_storage": "answer_memory",
+                    "labels": ["What is your current C2C?"],
+                    "platforms": ["Greenhouse"],
+                    "related_prompt_count": 1,
+                    "observed_count": 2,
+                    "required_count": 2,
+                },
+                {
+                    "group_key": "answer_memory:needs_user_confirmation:favorite_junk_food",
+                    "question": "What's your favorite junk food?",
+                    "recommended_storage": "answer_memory",
+                    "labels": ["What's your favorite junk food?"],
+                    "platforms": ["Ashby"],
+                    "related_prompt_count": 1,
+                    "observed_count": 2,
+                    "required_count": 2,
+                },
+                {
+                    "group_key": "answer_memory:needs_user_confirmation:favorite_restaurant",
+                    "question": "What is your favorite restaurant?",
+                    "recommended_storage": "answer_memory",
+                    "labels": ["What is your favorite restaurant?"],
+                    "platforms": ["Lever"],
+                    "related_prompt_count": 1,
+                    "observed_count": 1,
+                    "required_count": 1,
+                },
             ]
         }
 
@@ -3048,7 +3078,11 @@ class JobApplyAgentTests(unittest.TestCase):
                 "current_role": "Operating Rocky Linux migration and Azure VM reliability work",
                 "education": "MS in Computer Science and Software Engineering; BS in Computer Science",
             },
-            question_answers={**self.profile.question_answers, "start_date": "I can start in about two months."},
+            question_answers={
+                **self.profile.question_answers,
+                "start_date": "I can start in about two months.",
+                "compensation": "My expected compensation is $100,000+ base salary.",
+            },
         )
 
         template = build_learning_task_template(readiness, profile=profile)
@@ -3129,6 +3163,22 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn(
             "defining and operating infrastructure",
             tasks["answer_memory:needs_user_confirmation:define_infra"]["suggested_answer"],
+        )
+        self.assertIn(
+            "prefer not to disclose current compensation",
+            tasks["answer_memory:needs_user_confirmation:current_c2c"]["suggested_answer"],
+        )
+        self.assertIn(
+            "$100,000+",
+            tasks["answer_memory:needs_user_confirmation:current_c2c"]["suggested_answer"],
+        )
+        self.assertEqual(
+            tasks["answer_memory:needs_user_confirmation:favorite_junk_food"]["suggested_answer"],
+            "No strong preference.",
+        )
+        self.assertEqual(
+            tasks["answer_memory:needs_user_confirmation:favorite_restaurant"]["suggested_answer"],
+            "No strong preference.",
         )
 
     def test_direct_answers_cover_localized_compensation_and_years_questions(self) -> None:
