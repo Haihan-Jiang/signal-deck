@@ -6054,6 +6054,268 @@ def write_critical_input_preflight(
     return preflight
 
 
+def build_critical_input_updates_readiness(
+    approval_pack: dict[str, Any],
+    answers_payload: dict[str, Any],
+    updates_payload: dict[str, Any] | list[Any],
+    research: dict[str, Any],
+    profile_payload: dict[str, Any],
+    answer_memory: dict[str, Any] | None = None,
+    closed_jobs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    update_report = build_critical_input_answer_update(
+        answers_payload,
+        updates_payload,
+        approve=True,
+        approve_high_risk=True,
+    )
+    updated_answers = update_report.get("updated_answers") or answers_payload
+    status_report = build_critical_input_status_report(approval_pack, updated_answers)
+    preflight = build_critical_input_preflight(
+        approval_pack,
+        answers_payload,
+        updates_payload,
+        research,
+        profile_payload,
+        answer_memory=answer_memory,
+        closed_jobs=closed_jobs,
+        approve=True,
+        approve_high_risk=True,
+        source="critical_input_updates_readiness",
+    )
+    waiting_rows = _critical_input_updates_readiness_waiting_rows(status_report)
+    high_risk_unconfirmed = _critical_input_updates_high_risk_unconfirmed_rows(
+        answers_payload,
+        updates_payload,
+    )
+    preflight_summary = preflight.get("summary") or {}
+    update_summary = update_report.get("summary") or {}
+    data_blockers_after = int(preflight_summary.get("data_blocking_prompts_after") or 0)
+    unknown_updates = int(update_summary.get("unknown_update_count") or 0)
+    high_risk_unconfirmed_count = len(high_risk_unconfirmed)
+    waiting_count = len(waiting_rows)
+    ready_for_apply = bool(
+        waiting_count == 0
+        and unknown_updates == 0
+        and high_risk_unconfirmed_count == 0
+        and data_blockers_after == 0
+    )
+    blocking_reasons = []
+    if waiting_count:
+        blocking_reasons.append("critical_inputs_waiting")
+    if unknown_updates:
+        blocking_reasons.append("unknown_updates")
+    if high_risk_unconfirmed_count:
+        blocking_reasons.append("high_risk_confirmation_missing")
+    if data_blockers_after:
+        blocking_reasons.append("data_blockers_remaining")
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "critical_input_updates_readiness",
+        "ready_for_apply": ready_for_apply,
+        "safe_to_apply_profile_or_memory": ready_for_apply,
+        "real_platform_submission": False,
+        "writes_real_profile_or_memory": False,
+        "summary": {
+            "update_entry_count": int(update_summary.get("update_entry_count") or 0),
+            "matched_updates": int(update_summary.get("matched_update_count") or 0),
+            "unknown_updates": unknown_updates,
+            "high_risk_unconfirmed_count": high_risk_unconfirmed_count,
+            "waiting_after_update_count": waiting_count,
+            "ready_after_update_count": int((status_report.get("summary") or {}).get("ready_to_apply_count") or 0),
+            "data_blocking_prompts_after": data_blockers_after,
+            "positions_ready_for_autofill_after": int(
+                preflight_summary.get("positions_ready_for_autofill_after") or 0
+            ),
+            "blocking_reasons": blocking_reasons,
+        },
+        "waiting_rows": waiting_rows,
+        "high_risk_unconfirmed_rows": high_risk_unconfirmed,
+        "unknown_updates": update_report.get("unknown_updates") or [],
+        "preflight_summary": preflight_summary,
+        "remaining_data_blocker_counts": preflight.get("remaining_data_blocker_counts", {}),
+        "remaining_data_blockers": preflight.get("remaining_data_blockers", []),
+        "policy": {
+            "dry_run_only": True,
+            "writes_real_profile_or_memory": False,
+            "submits_real_applications": False,
+            "requires_high_risk_confirmation": True,
+            "final_submit_remains_supervised": True,
+        },
+        "next_commands": _critical_input_updates_readiness_next_commands(ready_for_apply),
+    }
+
+
+def write_critical_input_updates_readiness(
+    approval_pack_path: str | Path,
+    answers_path: str | Path,
+    updates_path: str | Path,
+    research_path: str | Path,
+    profile_path: str | Path,
+    memory_path: str | Path,
+    json_output: str | Path,
+    markdown_output: str | Path,
+    closed_jobs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    approval_pack = _read_json_file(Path(approval_pack_path))
+    answers_payload = _read_json_file(Path(answers_path))
+    updates_payload = _read_json_file(Path(updates_path))
+    research = _read_json_file(Path(research_path))
+    profile_payload = _read_json_file(Path(profile_path))
+    if not isinstance(approval_pack, dict):
+        raise ValueError("approval pack must be a JSON object")
+    if not isinstance(answers_payload, dict):
+        raise ValueError("critical input answers must be a JSON object")
+    if not isinstance(updates_payload, (dict, list)):
+        raise ValueError("critical input updates must be a JSON object or list")
+    if not isinstance(research, dict):
+        raise ValueError("research report must be a JSON object")
+    if not isinstance(profile_payload, dict):
+        raise ValueError("profile must be a JSON object")
+    report = build_critical_input_updates_readiness(
+        approval_pack,
+        answers_payload,
+        updates_payload,
+        research,
+        profile_payload,
+        answer_memory=load_answer_memory(memory_path),
+        closed_jobs=closed_jobs,
+    )
+    report["source_paths"] = {
+        "approval_pack": str(approval_pack_path),
+        "answers": str(answers_path),
+        "updates": str(updates_path),
+        "research": str(research_path),
+        "profile": str(profile_path),
+        "memory": str(memory_path),
+    }
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    for path in [json_path, markdown_path]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(render_critical_input_updates_readiness_markdown(report), encoding="utf-8")
+    return report
+
+
+def render_critical_input_updates_readiness_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    lines = [
+        "# Critical Input Updates Readiness",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        f"Ready for apply: {str(bool(report.get('ready_for_apply'))).lower()}",
+        "Writes real profile or memory: false",
+        "Submits real applications: false",
+        "",
+        "## Summary",
+        "",
+        f"- update entries: {summary.get('update_entry_count', 0)}",
+        f"- matched updates: {summary.get('matched_updates', 0)}",
+        f"- unknown updates: {summary.get('unknown_updates', 0)}",
+        f"- high-risk confirmations missing: {summary.get('high_risk_unconfirmed_count', 0)}",
+        f"- waiting after update: {summary.get('waiting_after_update_count', 0)}",
+        f"- ready after update: {summary.get('ready_after_update_count', 0)}",
+        f"- data-blocking prompts after: {summary.get('data_blocking_prompts_after', 0)}",
+        f"- positions ready for autofill after: {summary.get('positions_ready_for_autofill_after', 0)}",
+        f"- blocking reasons: {', '.join(summary.get('blocking_reasons') or []) or 'None'}",
+        "",
+        "## Waiting Rows",
+        "",
+    ]
+    waiting_rows = report.get("waiting_rows") or []
+    if waiting_rows:
+        for row in waiting_rows[:80]:
+            lines.append(
+                "- {input_id}: {status}; {question}".format(
+                    input_id=row.get("input_id"),
+                    status=row.get("status"),
+                    question=row.get("question"),
+                )
+            )
+    else:
+        lines.append("- None")
+    lines.extend(["", "## High-Risk Confirmations Missing", ""])
+    high_risk_rows = report.get("high_risk_unconfirmed_rows") or []
+    if high_risk_rows:
+        for row in high_risk_rows[:80]:
+            lines.append(f"- {row.get('input_id')}: {row.get('question')}")
+    else:
+        lines.append("- None")
+    lines.extend(["", "## Remaining Data Blockers", ""])
+    remaining_counts = report.get("remaining_data_blocker_counts") or {}
+    lines.append(f"- total: {remaining_counts.get('total', 0)}")
+    for category, count in sorted((remaining_counts.get("by_category") or {}).items()):
+        lines.append(f"- {category}: {count}")
+    lines.extend(["", "## Next Commands", ""])
+    for command in report.get("next_commands") or []:
+        lines.append(f"- `{command}`")
+    return "\n".join(lines) + "\n"
+
+
+def _critical_input_updates_readiness_waiting_rows(status_report: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = []
+    for row in status_report.get("rows") or []:
+        if row.get("status") not in {"waiting_for_answer", "waiting_for_approval", "approved_missing_answer"}:
+            continue
+        rows.append(
+            {
+                "input_id": row.get("input_id"),
+                "status": row.get("status"),
+                "question": row.get("question"),
+                "input_type": row.get("input_type"),
+                "approval_risk": row.get("approval_risk"),
+                "next_action": row.get("next_action"),
+            }
+        )
+    return rows
+
+
+def _critical_input_updates_high_risk_unconfirmed_rows(
+    answers_payload: dict[str, Any],
+    updates_payload: dict[str, Any] | list[Any],
+) -> list[dict[str, Any]]:
+    rows = _critical_input_answer_rows(answers_payload)
+    row_index = _critical_input_answer_match_index(rows)
+    missing: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for entry in _critical_input_update_entries(updates_payload):
+        match_key = _critical_input_update_match_key(entry)
+        row = row_index.get(match_key) or row_index.get(_normalize(match_key))
+        if not row or not _critical_input_is_high_risk(row):
+            continue
+        answer = _critical_input_update_answer(entry)
+        if not answer or not str(answer).strip():
+            continue
+        input_id = str(row.get("input_id") or _critical_input_answer_id(row, len(seen) + 1))
+        if input_id in seen or _critical_input_update_high_risk_confirmed(entry):
+            continue
+        seen.add(input_id)
+        missing.append(
+            {
+                "input_id": input_id,
+                "question": row.get("question"),
+                "group_key": row.get("group_key"),
+                "reason": "high_risk_user_confirmed_required",
+            }
+        )
+    return missing
+
+
+def _critical_input_updates_readiness_next_commands(ready_for_apply: bool) -> list[str]:
+    if ready_for_apply:
+        return [
+            "python3 -m job_apply_agent critical-inputs-workflow --updates job_apply_agent/outbox/critical_input_full_updates_template.json --approve --approve-high-risk --apply",
+            "python3 -m job_apply_agent goal-audit",
+            "python3 -m job_apply_agent automation-handoff",
+            "python3 -m job_apply_agent export-questions",
+        ]
+    return [
+        "Fill blanks and high-risk confirmations in job_apply_agent/outbox/critical_input_full_updates_template.json",
+        "python3 -m job_apply_agent critical-inputs-readiness",
+    ]
+
+
 def render_critical_input_preflight_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") or {}
     lines = [
@@ -10332,6 +10594,7 @@ def build_automation_handoff_report(
     critical_input_questionnaire: dict[str, Any] | None = None,
     critical_input_impact: dict[str, Any] | None = None,
     autofill_batch: dict[str, Any] | None = None,
+    critical_input_updates_readiness: dict[str, Any] | None = None,
     answer_memory: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
     source_artifacts: list[dict[str, Any]] | None = None,
@@ -10339,6 +10602,8 @@ def build_automation_handoff_report(
     goal = goal_readiness_audit or {}
     questionnaire = critical_input_questionnaire or {}
     impact = critical_input_impact or {}
+    updates_readiness = critical_input_updates_readiness or {}
+    updates_readiness_summary = updates_readiness.get("summary") or {}
     batch = autofill_batch or {}
     blocker_summary = goal.get("blocker_summary") or {}
     impact_summary = impact.get("summary") or {}
@@ -10406,6 +10671,16 @@ def build_automation_handoff_report(
         "synthetic_unblocker_data_blocking_prompts_after": int(
             blocker_summary.get("synthetic_unblocker_data_blocking_prompts_after") or 0
         ),
+        "updates_ready_for_apply": bool(updates_readiness.get("ready_for_apply")),
+        "updates_waiting_after_update_count": int(
+            updates_readiness_summary.get("waiting_after_update_count") or 0
+        ),
+        "updates_high_risk_unconfirmed_count": int(
+            updates_readiness_summary.get("high_risk_unconfirmed_count") or 0
+        ),
+        "updates_data_blocking_prompts_after": int(
+            updates_readiness_summary.get("data_blocking_prompts_after") or 0
+        ),
         "selected_stop_group_count": len(selected_stop_summary),
         "blocked_stop_group_count": len(blocked_stop_summary),
         "missing_profile_input_count": len(missing_profile_inputs),
@@ -10459,6 +10734,7 @@ def write_automation_handoff_report(
     html_output: str | Path,
     answer_memory: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
+    critical_input_updates_readiness: dict[str, Any] | None = None,
     source_artifacts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     report = build_automation_handoff_report(
@@ -10466,6 +10742,7 @@ def write_automation_handoff_report(
         critical_input_questionnaire,
         critical_input_impact,
         autofill_batch,
+        critical_input_updates_readiness=critical_input_updates_readiness,
         answer_memory=answer_memory,
         closed_jobs=closed_jobs,
         source_artifacts=source_artifacts,
@@ -10505,6 +10782,7 @@ def render_automation_handoff_markdown(report: dict[str, Any]) -> str:
         f"- autofill batch: {summary.get('autofill_allowed_count', 0)} / {summary.get('autofill_selected_count', 0)} selected, selector misses {summary.get('autofill_selector_miss_count', 0)}",
         f"- local synthetic submit proof: {summary.get('autofill_local_synthetic_submit_count', 0)} submits, achieved {str(bool(summary.get('autofill_local_synthetic_submit_achieved'))).lower()}, selector misses {summary.get('autofill_local_synthetic_submit_selector_miss_count', 0)}",
         f"- synthetic final unblocker proof: {str(bool(summary.get('synthetic_unblocker_proof_complete'))).lower()}, final blanks {summary.get('synthetic_final_unblocker_update_count', 0)}, prefilled drafts {summary.get('synthetic_unblocker_existing_draft_update_count', 0)}, blockers after {summary.get('synthetic_unblocker_data_blocking_prompts_after', 0)}",
+        f"- updates readiness: {str(bool(summary.get('updates_ready_for_apply'))).lower()}, waiting {summary.get('updates_waiting_after_update_count', 0)}, high-risk unconfirmed {summary.get('updates_high_risk_unconfirmed_count', 0)}, blockers after {summary.get('updates_data_blocking_prompts_after', 0)}",
         "",
         "## Requirement Status",
         "",
@@ -10624,6 +10902,8 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
                     ("Unblocker proof", str(bool(summary.get("synthetic_unblocker_proof_complete"))).lower()),
                     ("Final blanks", summary.get("synthetic_final_unblocker_update_count", 0)),
                     ("Prefilled drafts", summary.get("synthetic_unblocker_existing_draft_update_count", 0)),
+                    ("Updates ready", str(bool(summary.get("updates_ready_for_apply"))).lower()),
+                    ("Updates waiting", summary.get("updates_waiting_after_update_count", 0)),
                 ]
             ),
             "<section><h2>Requirement Status</h2>",

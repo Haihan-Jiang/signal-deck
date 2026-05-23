@@ -45,6 +45,7 @@ from .core import (
     write_critical_input_preflight,
     write_critical_input_questionnaire,
     write_critical_input_unblocker_packet,
+    write_critical_input_updates_readiness,
     write_form_fill_plan,
     write_fake_learning_probe,
     write_fake_critical_input_probe,
@@ -115,6 +116,12 @@ DEFAULT_CRITICAL_INPUT_WORKFLOW_MARKDOWN = Path(__file__).with_name("outbox") / 
 DEFAULT_CRITICAL_INPUT_PREFLIGHT_JSON = Path(__file__).with_name("outbox") / "critical_input_preflight_latest.json"
 DEFAULT_CRITICAL_INPUT_PREFLIGHT_MARKDOWN = Path(__file__).with_name("outbox") / "critical_input_preflight_latest.md"
 DEFAULT_CRITICAL_INPUT_PREFLIGHT_HTML = Path(__file__).with_name("outbox") / "critical_input_preflight_latest.html"
+DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_JSON = (
+    Path(__file__).with_name("outbox") / "critical_input_updates_readiness_latest.json"
+)
+DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_MARKDOWN = (
+    Path(__file__).with_name("outbox") / "critical_input_updates_readiness_latest.md"
+)
 DEFAULT_CRITICAL_INPUT_IMPACT_JSON = Path(__file__).with_name("outbox") / "critical_input_impact_latest.json"
 DEFAULT_CRITICAL_INPUT_IMPACT_MARKDOWN = Path(__file__).with_name("outbox") / "critical_input_impact_latest.md"
 DEFAULT_CRITICAL_INPUT_IMPACT_HTML = Path(__file__).with_name("outbox") / "critical_input_impact_latest.html"
@@ -356,6 +363,10 @@ def main() -> int:
         "--critical-input-impact-json",
         default=str(DEFAULT_CRITICAL_INPUT_IMPACT_JSON),
     )
+    automation_handoff_parser.add_argument(
+        "--critical-input-updates-readiness-json",
+        default=str(DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_JSON),
+    )
     automation_handoff_parser.add_argument("--autofill-batch-json", default=str(DEFAULT_AUTOFILL_BATCH_JSON))
     automation_handoff_parser.add_argument("--answer-memory-json", default=str(DEFAULT_MEMORY))
     automation_handoff_parser.add_argument("--closed-jobs-json", default=str(DEFAULT_CLOSED_JOBS))
@@ -594,6 +605,31 @@ def main() -> int:
         "--approve-high-risk",
         action="store_true",
         help="also approve high-risk rows supplied in this preflight",
+    )
+
+    critical_inputs_readiness_parser = subparsers.add_parser(
+        "critical-inputs-readiness",
+        help="validate confirmed critical-input updates before writing profile or answer memory",
+    )
+    critical_inputs_readiness_parser.add_argument("--approval-pack", default=str(DEFAULT_LEARNING_APPROVAL_PACK_JSON))
+    critical_inputs_readiness_parser.add_argument("--answers", default=str(DEFAULT_CRITICAL_INPUT_ANSWERS_JSON))
+    critical_inputs_readiness_parser.add_argument("--updates", default=str(DEFAULT_CRITICAL_INPUT_FULL_UPDATES_JSON))
+    critical_inputs_readiness_parser.add_argument("--research-json", default=str(DEFAULT_RESEARCH_JSON))
+    critical_inputs_readiness_parser.add_argument(
+        "--profile",
+        default=str(DEFAULT_PERSONAL_PROFILE if DEFAULT_PERSONAL_PROFILE.exists() else DEFAULT_PROFILE),
+    )
+    critical_inputs_readiness_parser.add_argument("--memory", default=str(DEFAULT_MEMORY))
+    critical_inputs_readiness_parser.add_argument("--closed-jobs", default=str(DEFAULT_CLOSED_JOBS))
+    critical_inputs_readiness_parser.add_argument("--json-output", default=str(DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_JSON))
+    critical_inputs_readiness_parser.add_argument(
+        "--markdown-output",
+        default=str(DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_MARKDOWN),
+    )
+    critical_inputs_readiness_parser.add_argument(
+        "--fail-on-not-ready",
+        action="store_true",
+        help="exit non-zero when the updates are not ready to apply",
     )
 
     critical_inputs_impact_parser = subparsers.add_parser(
@@ -959,6 +995,10 @@ def main() -> int:
         default=str(DEFAULT_CRITICAL_INPUT_FULL_UPDATES_JSON),
     )
     export_questions_parser.add_argument(
+        "--critical-input-updates-readiness-json",
+        default=str(DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_JSON),
+    )
+    export_questions_parser.add_argument(
         "--learning-approval-pack-json",
         default=str(DEFAULT_LEARNING_APPROVAL_PACK_JSON),
     )
@@ -1165,6 +1205,7 @@ def main() -> int:
                     "Fake position rehearsal": args.fake_position_rehearsal_json,
                     "Synthetic unblocker proof": args.synthetic_unblocker_proof_json,
                     "Critical input full updates template": args.critical_input_full_updates_json,
+                    "Critical input updates readiness": args.critical_input_updates_readiness_json,
                     "Learning approval pack": args.learning_approval_pack_json,
                     "Answer memory": args.answer_memory_json,
                     "Closed postings": args.closed_jobs_json,
@@ -1367,11 +1408,13 @@ def main() -> int:
             args.html_output,
             answer_memory=_load_optional_json(args.answer_memory_json),
             closed_jobs=_load_optional_json(args.closed_jobs_json),
+            critical_input_updates_readiness=_load_optional_json(args.critical_input_updates_readiness_json),
             source_artifacts=_question_export_source_artifacts(
                 {
                     "Goal readiness audit": args.goal_audit_json,
                     "Critical input questionnaire": args.critical_input_questionnaire_json,
                     "Critical input impact": args.critical_input_impact_json,
+                    "Critical input updates readiness": args.critical_input_updates_readiness_json,
                     "Autofill batch": args.autofill_batch_json,
                     "Answer memory": args.answer_memory_json,
                     "Closed postings": args.closed_jobs_json,
@@ -1725,6 +1768,39 @@ def main() -> int:
             f"{summary.get('positions_ready_for_autofill_before', 0)} -> "
             f"{summary.get('positions_ready_for_autofill_after', 0)}"
         )
+        return 0
+
+    if args.command == "critical-inputs-readiness":
+        for label, path_value in [
+            ("approval pack", args.approval_pack),
+            ("critical input answers", args.answers),
+            ("critical input updates", args.updates),
+            ("research report", args.research_json),
+            ("profile", args.profile),
+        ]:
+            if not Path(path_value).exists():
+                raise FileNotFoundError(f"{label} not found: {path_value}")
+        report = write_critical_input_updates_readiness(
+            args.approval_pack,
+            args.answers,
+            args.updates,
+            args.research_json,
+            args.profile,
+            args.memory,
+            args.json_output,
+            args.markdown_output,
+            closed_jobs=_load_optional_json(args.closed_jobs),
+        )
+        summary = report.get("summary") or {}
+        print(f"Wrote critical input updates readiness JSON to {args.json_output}")
+        print(f"Wrote critical input updates readiness Markdown to {args.markdown_output}")
+        print(f"Ready for apply: {str(bool(report.get('ready_for_apply'))).lower()}")
+        print(f"Waiting after update: {summary.get('waiting_after_update_count', 0)}")
+        print(f"High-risk confirmations missing: {summary.get('high_risk_unconfirmed_count', 0)}")
+        print(f"Unknown updates: {summary.get('unknown_updates', 0)}")
+        print(f"Data-blocking prompts after: {summary.get('data_blocking_prompts_after', 0)}")
+        if args.fail_on_not_ready and not report.get("ready_for_apply"):
+            return 2
         return 0
 
     if args.command == "critical-inputs-impact":
@@ -2375,6 +2451,17 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             json.dumps(unblockers.get("full_updates_template", {}), ensure_ascii=True, indent=2) + "\n",
             encoding="utf-8",
         )
+        write_critical_input_updates_readiness(
+            DEFAULT_LEARNING_APPROVAL_PACK_JSON,
+            DEFAULT_CRITICAL_INPUT_ANSWERS_JSON,
+            DEFAULT_CRITICAL_INPUT_FULL_UPDATES_JSON,
+            DEFAULT_RESEARCH_JSON,
+            profile_path,
+            DEFAULT_MEMORY,
+            DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_JSON,
+            DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_MARKDOWN,
+            closed_jobs=load_closed_jobs(DEFAULT_CLOSED_JOBS),
+        )
     autofill_batch = write_autofill_batch_plan(
         research,
         readiness,
@@ -2422,6 +2509,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
         DEFAULT_AUTOMATION_HANDOFF_HTML,
         answer_memory=_load_optional_json(str(DEFAULT_MEMORY)),
         closed_jobs=_load_optional_json(str(DEFAULT_CLOSED_JOBS)),
+        critical_input_updates_readiness=_load_optional_json(str(DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_JSON)),
         source_artifacts=_question_export_source_artifacts(
             {
                 "Goal readiness audit": str(DEFAULT_GOAL_AUDIT_JSON),
@@ -2430,6 +2518,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                 "Autofill batch": str(DEFAULT_AUTOFILL_BATCH_JSON),
                 "Synthetic unblocker proof": str(DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_JSON),
                 "Critical input full updates template": str(DEFAULT_CRITICAL_INPUT_FULL_UPDATES_JSON),
+                "Critical input updates readiness": str(DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_JSON),
                 "Answer memory": str(DEFAULT_MEMORY),
                 "Closed postings": str(DEFAULT_CLOSED_JOBS),
             }
@@ -2473,6 +2562,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                     "Critical input impact HTML": str(DEFAULT_CRITICAL_INPUT_IMPACT_HTML),
                     "Synthetic unblocker proof": str(DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_JSON),
                     "Critical input full updates template": str(DEFAULT_CRITICAL_INPUT_FULL_UPDATES_JSON),
+                    "Critical input updates readiness": str(DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_JSON),
                 }
             ),
             synthetic_browser_execution=_load_optional_json(str(DEFAULT_SYNTHETIC_BROWSER_EXEC_JSON)),
@@ -2504,6 +2594,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             "critical-inputs-impact",
             "autofill-batch",
             "synthetic-unblocker-proof",
+            "critical-inputs-readiness",
             "goal-audit",
             "automation-handoff",
             "export-questions",
