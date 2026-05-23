@@ -9893,6 +9893,8 @@ def build_question_export(
     autofill_batch_position_rows = _autofill_batch_position_export_rows(autofill_batch)
     answer_memory_rows = _answer_memory_export_rows(answer_memory)
     closed_posting_rows = _closed_posting_export_rows(closed_jobs)
+    platform_role_summary_rows = _platform_role_summary_export_rows(readiness)
+    platform_role_blocker_rows = _platform_role_blocker_export_rows(readiness)
     collection_targets = [
         {
             "platform": target.get("platform"),
@@ -10093,6 +10095,8 @@ def build_question_export(
         "critical_input_impact": critical_impact_rows,
         "autofill_batch": autofill_batch_rows,
         "autofill_batch_positions": autofill_batch_position_rows,
+        "platform_role_summary": platform_role_summary_rows,
+        "platform_role_blockers": platform_role_blocker_rows,
         "answer_memory": answer_memory_rows,
         "closed_postings": closed_posting_rows,
         "coverage_counts": gaps.get("coverage_counts", {}),
@@ -10754,6 +10758,66 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                     row.get("closed_reason"),
                 ]
                 for row in export.get("positions", [])
+            ],
+        ),
+        "</section>",
+        "<section><h2>Platform Role Summary</h2>",
+        _html_table(
+            [
+                "Platform",
+                "Role family",
+                "Positions",
+                "Autofill ready",
+                "Needs learning",
+                "Supervised ready",
+                "Closed skip",
+                "Prompts",
+                "Required prompts",
+                "Covered prompts",
+                "Top blockers",
+            ],
+            [
+                [
+                    row.get("platform"),
+                    row.get("role_family"),
+                    row.get("position_count"),
+                    row.get("autofill_ready_count"),
+                    row.get("needs_learning_count"),
+                    row.get("supervised_ready_count"),
+                    row.get("closed_skip_count"),
+                    row.get("prompt_count"),
+                    row.get("required_prompt_count"),
+                    row.get("covered_prompt_count"),
+                    row.get("top_blockers"),
+                ]
+                for row in export.get("platform_role_summary", [])
+            ],
+        ),
+        "</section>",
+        "<section><h2>Platform Role Blockers</h2>",
+        _html_table(
+            [
+                "Platform",
+                "Role family",
+                "Blocker",
+                "Category",
+                "Coverage status",
+                "Positions",
+                "Required prompts",
+                "Next action",
+            ],
+            [
+                [
+                    row.get("platform"),
+                    row.get("role_family"),
+                    row.get("label"),
+                    row.get("category"),
+                    row.get("coverage_status"),
+                    row.get("position_count"),
+                    row.get("required_count"),
+                    row.get("next_action"),
+                ]
+                for row in export.get("platform_role_blockers", [])
             ],
         ),
         "</section>",
@@ -18024,6 +18088,111 @@ def _position_export_row(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _platform_role_summary_export_rows(readiness: dict[str, Any]) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    blocker_counts: dict[tuple[str, str], dict[str, int]] = {}
+    for position in readiness.get("positions", []) or []:
+        if not isinstance(position, dict):
+            continue
+        platform = str(position.get("platform") or "Unknown")
+        role_family = str(position.get("role_family") or "Unknown")
+        key = (platform, role_family)
+        row = grouped.setdefault(
+            key,
+            {
+                "platform": platform,
+                "role_family": role_family,
+                "position_count": 0,
+                "autofill_ready_count": 0,
+                "needs_learning_count": 0,
+                "supervised_ready_count": 0,
+                "closed_skip_count": 0,
+                "prompt_count": 0,
+                "required_prompt_count": 0,
+                "covered_prompt_count": 0,
+                "top_blockers": "",
+            },
+        )
+        row["position_count"] += 1
+        readiness_state = str(position.get("readiness") or "")
+        if readiness_state == "autofill_ready":
+            row["autofill_ready_count"] += 1
+        elif readiness_state == "needs_learning":
+            row["needs_learning_count"] += 1
+        elif readiness_state == "supervised_ready":
+            row["supervised_ready_count"] += 1
+        elif readiness_state == "closed_skip":
+            row["closed_skip_count"] += 1
+        row["prompt_count"] += int(position.get("prompt_count") or 0)
+        row["required_prompt_count"] += int(position.get("required_prompt_count") or 0)
+        row["covered_prompt_count"] += int(position.get("covered_prompt_count") or 0)
+        counts = blocker_counts.setdefault(key, {})
+        for blocker in position.get("learning_blockers") or []:
+            if not isinstance(blocker, dict):
+                continue
+            label = str(blocker.get("label") or blocker.get("coverage_status") or "").strip()
+            if not label:
+                continue
+            counts[label] = counts.get(label, 0) + 1
+
+    for key, row in grouped.items():
+        top = sorted(blocker_counts.get(key, {}).items(), key=lambda item: (-item[1], item[0]))[:5]
+        row["top_blockers"] = "; ".join(f"{label} ({count})" for label, count in top)
+    return sorted(
+        grouped.values(),
+        key=lambda row: (
+            str(row.get("platform") or ""),
+            str(row.get("role_family") or ""),
+        ),
+    )
+
+
+def _platform_role_blocker_export_rows(readiness: dict[str, Any]) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
+    for position in readiness.get("positions", []) or []:
+        if not isinstance(position, dict):
+            continue
+        platform = str(position.get("platform") or "Unknown")
+        role_family = str(position.get("role_family") or "Unknown")
+        for blocker in position.get("learning_blockers") or []:
+            if not isinstance(blocker, dict):
+                continue
+            label = str(blocker.get("label") or "").strip()
+            if not label:
+                continue
+            category = str(blocker.get("category") or "")
+            status = str(blocker.get("coverage_status") or "")
+            next_action = str(blocker.get("next_action") or "")
+            key = (platform, role_family, label, category, status)
+            row = grouped.setdefault(
+                key,
+                {
+                    "platform": platform,
+                    "role_family": role_family,
+                    "label": label,
+                    "category": category,
+                    "coverage_status": status,
+                    "position_count": 0,
+                    "required_count": 0,
+                    "next_action": next_action,
+                },
+            )
+            row["position_count"] += 1
+            if blocker.get("required"):
+                row["required_count"] += 1
+            if next_action and not row.get("next_action"):
+                row["next_action"] = next_action
+    return sorted(
+        grouped.values(),
+        key=lambda row: (
+            str(row.get("platform") or ""),
+            str(row.get("role_family") or ""),
+            -int(row.get("position_count") or 0),
+            str(row.get("label") or ""),
+        ),
+    )
+
+
 def _write_question_export_xlsx(export: dict[str, Any], path: Path) -> None:
     sheets = [
         ("Summary", _question_export_summary_rows(export)),
@@ -18045,6 +18214,8 @@ def _write_question_export_xlsx(export: dict[str, Any], path: Path) -> None:
         ("Blocking Prompts", _table_rows(export.get("blocker_rows", []))),
         ("All Prompts", _table_rows(export.get("question_rows", []))),
         ("Positions", _table_rows(export.get("positions", []))),
+        ("Platform Role Summary", _table_rows(export.get("platform_role_summary", []))),
+        ("Platform Role Blockers", _table_rows(export.get("platform_role_blockers", []))),
         ("Platform Counts", _mapping_rows(export.get("real_platform_counts", {}), "Platform", "Observed")),
         ("Platform Shortfalls", _mapping_rows(export.get("real_platform_shortfalls", {}), "Platform", "Remaining")),
         ("Collection Targets", _table_rows(export.get("collection_targets", []))),
