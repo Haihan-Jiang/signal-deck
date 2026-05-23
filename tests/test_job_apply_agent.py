@@ -5254,8 +5254,26 @@ class JobApplyAgentTests(unittest.TestCase):
         pack = build_learning_approval_pack(learning_tasks, {})
         template = build_critical_input_answer_template(pack)
         suggestions = build_critical_input_suggestion_packet(template, profile=profile)
+        impact = {
+            "input_impacts": [
+                {
+                    "input_id": "answer_memory_citizenship_status_default_policy",
+                    "data_blocking_prompts_delta": -5,
+                    "ready_prompts_delta": 5,
+                    "positions_ready_for_autofill_delta": 12,
+                    "simulated_answer": "Synthetic user confirms citizenship policy.",
+                },
+                {
+                    "input_id": "profile_zip_or_postal_code",
+                    "data_blocking_prompts_delta": -2,
+                    "ready_prompts_delta": 2,
+                    "positions_ready_for_autofill_delta": 3,
+                    "simulated_answer": "98004",
+                },
+            ]
+        }
 
-        questionnaire = build_critical_input_questionnaire(template, suggestions)
+        questionnaire = build_critical_input_questionnaire(template, suggestions, impact_payload=impact)
         html = render_critical_input_questionnaire_html(questionnaire)
         markdown = render_critical_input_questionnaire_markdown(questionnaire)
 
@@ -5263,6 +5281,11 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(questionnaire["answerable_question_count"], 2)
         self.assertEqual(questionnaire["high_risk_question_count"], 1)
         self.assertEqual(questionnaire["supervised_only_count"], 1)
+        self.assertEqual(
+            questionnaire["questions"][0]["input_id"],
+            "answer_memory_citizenship_status_default_policy",
+        )
+        self.assertEqual(questionnaire["questions"][0]["impact_rank"], 1)
         self.assertEqual(questionnaire["compact_updates_template"]["profile_zip_or_postal_code"], "")
         self.assertFalse(
             questionnaire["compact_updates_template"][
@@ -5277,7 +5300,9 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("buildCriticalInputUpdates", html)
         self.assertIn("critical-inputs-workflow", html)
         self.assertIn("High risk", html)
+        self.assertIn("Impact -5 blockers", html)
         self.assertIn("Compact Updates Template", markdown)
+        self.assertIn("impact: data blockers -5", markdown)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             json_output = Path(temp_dir) / "questionnaire.json"
@@ -5289,6 +5314,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 markdown_output,
                 html_output,
                 suggestions_payload=suggestions,
+                impact_payload=impact,
             )
             self.assertEqual(written["answerable_question_count"], 2)
             self.assertTrue(json_output.exists())
@@ -7540,6 +7566,96 @@ class JobApplyAgentTests(unittest.TestCase):
                 }
             ],
         }
+        critical_input_questionnaire = {
+            "question_count": 1,
+            "answerable_question_count": 1,
+            "instructions": "Fill truthful answers.",
+            "workflow_command": "python3 -m job_apply_agent critical-inputs-workflow --updates confirmed.json --approve --apply",
+            "questions": [
+                {
+                    "impact_rank": 1,
+                    "input_id": "profile_zip_or_postal_code",
+                    "input_type": "profile_or_resume_fact",
+                    "question": "What ZIP/postal code should automation use?",
+                    "required_user_response": "Provide exact ZIP/postal code.",
+                    "approval_risk": "needs_review",
+                    "high_risk": False,
+                    "supervised_only": False,
+                    "suggested_answer": "98004",
+                    "suggestion_source": "profile.question_answers",
+                    "suggestion_confidence": "high",
+                    "impact": {
+                        "data_blocking_prompts_delta": -2,
+                        "ready_prompts_delta": 2,
+                        "positions_ready_for_autofill_delta": 3,
+                    },
+                    "platforms": ["Ashby"],
+                    "labels": ["Zip Code"],
+                    "required_count": 4,
+                    "workflow_update_shape": "string_value",
+                }
+            ],
+        }
+        critical_input_impact = {
+            "input_count": 1,
+            "summary": {
+                "combined_data_blocking_prompts_delta": -2,
+                "combined_positions_ready_for_autofill_delta": 3,
+                "top_input_id": "profile_zip_or_postal_code",
+            },
+            "input_impacts": [
+                {
+                    "input_id": "profile_zip_or_postal_code",
+                    "input_type": "profile_or_resume_fact",
+                    "question": "What ZIP/postal code should automation use?",
+                    "approval_risk": "needs_review",
+                    "simulated_answer": "98004",
+                    "data_blocking_prompts_before": 253,
+                    "data_blocking_prompts_after": 251,
+                    "data_blocking_prompts_delta": -2,
+                    "ready_prompts_delta": 2,
+                    "positions_ready_for_autofill_delta": 3,
+                    "temp_profile_updates": 1,
+                    "temp_answer_memory_updates": 0,
+                }
+            ],
+        }
+        critical_input_preflight = {
+            "summary": {"data_blocking_prompts_delta": -2, "matched_updates": 1},
+            "deltas": {"positions_ready_for_autofill_delta": 3},
+            "policy": {"writes_real_profile_or_memory": False},
+            "next_commands": ["python3 -m job_apply_agent critical-inputs-workflow --apply"],
+        }
+        autofill_batch = {
+            "generated_at": "2026-05-22T00:00:00+00:00",
+            "requested_count": 100,
+            "selected_count": 1,
+            "selected_autofill_allowed_count": 1,
+            "browser_action_count": 7,
+            "selector_miss_count": 0,
+            "would_submit_count": 0,
+            "real_platform_submission": False,
+            "platform_counts": {"Greenhouse": 1},
+            "positions": [
+                {
+                    "index": 1,
+                    "platform": "Greenhouse",
+                    "company": "DoorDash",
+                    "title": "Software Engineer",
+                    "role_family": "Software Backend",
+                    "apply_url": "https://job-boards.greenhouse.io/doordash/jobs/1",
+                    "readiness": "autofill_ready",
+                    "manifest_status": "autofill_ready_with_supervised_gates",
+                    "autofill_allowed": True,
+                    "browser_action_count": 7,
+                    "stop_action_count": 1,
+                    "local_check_policy_stop": "final_submit_confirmation",
+                    "local_check_selector_miss_count": 0,
+                    "would_submit": False,
+                    "real_platform_submission": False,
+                }
+            ],
+        }
         answer_memory = {
             "answers": [
                 {
@@ -7579,6 +7695,10 @@ class JobApplyAgentTests(unittest.TestCase):
             fake_position_rehearsal=fake_position_rehearsal,
             goal_readiness_audit=goal_readiness_audit,
             critical_input_suggestions=critical_input_suggestions,
+            critical_input_questionnaire=critical_input_questionnaire,
+            critical_input_preflight=critical_input_preflight,
+            critical_input_impact=critical_input_impact,
+            autofill_batch=autofill_batch,
             answer_memory=answer_memory,
             closed_jobs=closed_jobs,
         )
@@ -7594,6 +7714,11 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("profile_zip_or_postal_code", html)
         self.assertIn("critical-inputs-update", html)
         self.assertIn("critical-inputs-workflow", html)
+        self.assertIn("Critical Input Questionnaire", html)
+        self.assertIn("Critical Input Impact", html)
+        self.assertIn("Critical Input Preflight", html)
+        self.assertIn("Autofill Batch", html)
+        self.assertIn("Impact blockers", html)
         self.assertIn("Fake Learning Probe", html)
         self.assertIn("Fake Critical Input Probe", html)
         self.assertIn("Fake Position Rehearsal", html)
@@ -7633,6 +7758,10 @@ class JobApplyAgentTests(unittest.TestCase):
                 fake_position_rehearsal=fake_position_rehearsal,
                 goal_readiness_audit=goal_readiness_audit,
                 critical_input_suggestions=critical_input_suggestions,
+                critical_input_questionnaire=critical_input_questionnaire,
+                critical_input_preflight=critical_input_preflight,
+                critical_input_impact=critical_input_impact,
+                autofill_batch=autofill_batch,
                 answer_memory=answer_memory,
                 closed_jobs=closed_jobs,
             )
@@ -7646,6 +7775,9 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(result["summary"]["fake_critical_input_ready_count"], 10)
             self.assertEqual(result["summary"]["goal_audit_status"], "needs_user_answers")
             self.assertEqual(result["summary"]["critical_input_direct_suggestion_count"], 1)
+            self.assertEqual(result["summary"]["critical_questionnaire_question_count"], 1)
+            self.assertEqual(result["summary"]["critical_impact_top_input_id"], "profile_zip_or_postal_code")
+            self.assertEqual(result["summary"]["autofill_batch_selected_count"], 1)
             self.assertEqual(result["summary"]["answer_memory_count"], 1)
             self.assertEqual(result["summary"]["closed_posting_count"], 1)
             self.assertTrue(xlsx_output.exists())
@@ -7656,12 +7788,12 @@ class JobApplyAgentTests(unittest.TestCase):
                 self.assertIn("xl/worksheets/sheet1.xml", names)
                 self.assertIn("xl/worksheets/sheet2.xml", names)
                 self.assertIn("xl/worksheets/sheet8.xml", names)
-                self.assertIn("xl/worksheets/sheet21.xml", names)
-                self.assertIn("xl/worksheets/sheet22.xml", names)
-                self.assertIn("xl/worksheets/sheet23.xml", names)
-                self.assertIn("xl/worksheets/sheet24.xml", names)
-                self.assertIn("xl/worksheets/sheet25.xml", names)
                 self.assertIn("xl/worksheets/sheet26.xml", names)
+                self.assertIn("xl/worksheets/sheet27.xml", names)
+                self.assertIn("xl/worksheets/sheet28.xml", names)
+                self.assertIn("xl/worksheets/sheet29.xml", names)
+                self.assertIn("xl/worksheets/sheet30.xml", names)
+                self.assertIn("xl/worksheets/sheet31.xml", names)
                 critical_inputs = workbook.read("xl/worksheets/sheet2.xml").decode("utf-8")
                 self.assertIn("exact_prompt_answer", critical_inputs)
                 self.assertIn("user_answer", critical_inputs)
@@ -7676,21 +7808,31 @@ class JobApplyAgentTests(unittest.TestCase):
                 self.assertIn("writes_real_profile_or_memory", fake_critical_inputs)
                 fake_position = workbook.read("xl/worksheets/sheet9.xml").decode("utf-8")
                 self.assertIn("observed_prompt_local_browser_manifest_executor", fake_position)
-                problem_buckets = workbook.read("xl/worksheets/sheet10.xml").decode("utf-8")
+                questionnaire_sheet = workbook.read("xl/worksheets/sheet10.xml").decode("utf-8")
+                self.assertIn("profile_zip_or_postal_code", questionnaire_sheet)
+                impact_sheet = workbook.read("xl/worksheets/sheet11.xml").decode("utf-8")
+                self.assertIn("simulated_answer", impact_sheet)
+                preflight_sheet = workbook.read("xl/worksheets/sheet12.xml").decode("utf-8")
+                self.assertIn("writes_real_profile_or_memory", preflight_sheet)
+                autofill_sheet = workbook.read("xl/worksheets/sheet13.xml").decode("utf-8")
+                self.assertIn("selected_count", autofill_sheet)
+                autofill_positions = workbook.read("xl/worksheets/sheet14.xml").decode("utf-8")
+                self.assertIn("final_submit_confirmation", autofill_positions)
+                problem_buckets = workbook.read("xl/worksheets/sheet15.xml").decode("utf-8")
                 self.assertIn("needs_user_confirmation", problem_buckets)
-                user_questions = workbook.read("xl/worksheets/sheet11.xml").decode("utf-8")
+                user_questions = workbook.read("xl/worksheets/sheet16.xml").decode("utf-8")
                 self.assertIn("Have you worked at DoorDash?", user_questions)
-                platform_shortfalls = workbook.read("xl/worksheets/sheet16.xml").decode("utf-8")
+                platform_shortfalls = workbook.read("xl/worksheets/sheet21.xml").decode("utf-8")
                 self.assertIn("Greenhouse", platform_shortfalls)
-                closed_postings = workbook.read("xl/worksheets/sheet21.xml").decode("utf-8")
+                closed_postings = workbook.read("xl/worksheets/sheet26.xml").decode("utf-8")
                 self.assertIn("No longer accepting applications", closed_postings)
-                approval_buckets = workbook.read("xl/worksheets/sheet22.xml").decode("utf-8")
+                approval_buckets = workbook.read("xl/worksheets/sheet27.xml").decode("utf-8")
                 self.assertIn("exact_prompt_answer", approval_buckets)
-                approval_tasks = workbook.read("xl/worksheets/sheet23.xml").decode("utf-8")
+                approval_tasks = workbook.read("xl/worksheets/sheet28.xml").decode("utf-8")
                 self.assertIn("Have you worked at DoorDash?", approval_tasks)
-                goal_audit = workbook.read("xl/worksheets/sheet25.xml").decode("utf-8")
+                goal_audit = workbook.read("xl/worksheets/sheet30.xml").decode("utf-8")
                 self.assertIn("needs_user_answers", goal_audit)
-                critical_suggestions = workbook.read("xl/worksheets/sheet26.xml").decode("utf-8")
+                critical_suggestions = workbook.read("xl/worksheets/sheet31.xml").decode("utf-8")
                 self.assertIn("profile_zip_or_postal_code", critical_suggestions)
 
 

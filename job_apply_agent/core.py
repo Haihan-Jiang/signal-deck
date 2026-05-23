@@ -4372,6 +4372,7 @@ def write_critical_input_suggestion_packet(
 def build_critical_input_questionnaire(
     answers_payload: dict[str, Any],
     suggestions_payload: dict[str, Any] | None = None,
+    impact_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not isinstance(answers_payload, dict):
         raise ValueError("critical input answers must be a JSON object")
@@ -4380,11 +4381,16 @@ def build_critical_input_questionnaire(
         for row in (suggestions_payload or {}).get("critical_inputs", [])
         if isinstance(row, dict)
     }
+    impacts_by_id = {
+        str(row.get("input_id") or ""): row
+        for row in (impact_payload or {}).get("input_impacts", [])
+        if isinstance(row, dict)
+    }
     questions: list[dict[str, Any]] = []
-    compact_updates_template: dict[str, Any] = {}
     for item in _critical_input_answer_rows(answers_payload):
         input_id = str(item.get("input_id") or "")
         suggestion = suggestions_by_id.get(input_id, {})
+        impact = impacts_by_id.get(input_id, {})
         high_risk = _critical_input_is_high_risk(item)
         supervised_only = item.get("input_type") == "supervised_browser_review_only"
         question = {
@@ -4403,6 +4409,14 @@ def build_critical_input_questionnaire(
             "required_count": item.get("required_count", 0),
             "platforms": item.get("platforms") or [],
             "labels": item.get("labels") or [],
+            "impact": {
+                "data_blocking_prompts_delta": int(impact.get("data_blocking_prompts_delta") or 0),
+                "ready_prompts_delta": int(impact.get("ready_prompts_delta") or 0),
+                "positions_ready_for_autofill_delta": int(
+                    impact.get("positions_ready_for_autofill_delta") or 0
+                ),
+                "simulated_answer": impact.get("simulated_answer", ""),
+            },
             "workflow_update_shape": "supervised_only"
             if supervised_only
             else "high_risk_object"
@@ -4410,6 +4424,14 @@ def build_critical_input_questionnaire(
             else "string_value",
         }
         questions.append(question)
+    questions.sort(key=_critical_input_questionnaire_sort_key)
+    for rank, question in enumerate(questions, start=1):
+        question["impact_rank"] = rank
+    compact_updates_template: dict[str, Any] = {}
+    for question in questions:
+        input_id = str(question.get("input_id") or "")
+        high_risk = bool(question.get("high_risk"))
+        supervised_only = bool(question.get("supervised_only"))
         if supervised_only:
             continue
         if high_risk:
@@ -4447,16 +4469,26 @@ def build_critical_input_questionnaire(
     }
 
 
+def _critical_input_questionnaire_sort_key(question: dict[str, Any]) -> tuple[int, int, int, str]:
+    impact = question.get("impact") or {}
+    data_delta = int(impact.get("data_blocking_prompts_delta") or 0)
+    position_delta = int(impact.get("positions_ready_for_autofill_delta") or 0)
+    ready_delta = int(impact.get("ready_prompts_delta") or 0)
+    return (data_delta, -position_delta, -ready_delta, str(question.get("input_id") or ""))
+
+
 def write_critical_input_questionnaire(
     answers_payload: dict[str, Any],
     json_output: str | Path,
     markdown_output: str | Path,
     html_output: str | Path,
     suggestions_payload: dict[str, Any] | None = None,
+    impact_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     questionnaire = build_critical_input_questionnaire(
         answers_payload,
         suggestions_payload=suggestions_payload,
+        impact_payload=impact_payload,
     )
     json_path = Path(json_output)
     markdown_path = Path(markdown_output)
@@ -4499,6 +4531,19 @@ def render_critical_input_questionnaire_markdown(questionnaire: dict[str, Any]) 
             flags.append("supervised-only")
         flag_text = f" ({', '.join(flags)})" if flags else ""
         lines.append(f"- {row.get('input_id')}{flag_text}: {row.get('question')}")
+        impact = row.get("impact") or {}
+        if any(int(impact.get(key) or 0) for key in [
+            "data_blocking_prompts_delta",
+            "ready_prompts_delta",
+            "positions_ready_for_autofill_delta",
+        ]):
+            lines.append(
+                "  impact: data blockers {data}; ready prompts +{ready}; positions +{positions}".format(
+                    data=impact.get("data_blocking_prompts_delta", 0),
+                    ready=impact.get("ready_prompts_delta", 0),
+                    positions=impact.get("positions_ready_for_autofill_delta", 0),
+                )
+            )
         if row.get("suggested_answer"):
             lines.append(f"  suggested: {row.get('suggested_answer')}")
         if row.get("required_user_response"):
@@ -4531,6 +4576,17 @@ def render_critical_input_questionnaire_html(questionnaire: dict[str, Any]) -> s
             flags.append("Supervised only")
         if not flags:
             flags.append("Reusable answer")
+        impact = row.get("impact") or {}
+        data_delta = int(impact.get("data_blocking_prompts_delta") or 0)
+        ready_delta = int(impact.get("ready_prompts_delta") or 0)
+        position_delta = int(impact.get("positions_ready_for_autofill_delta") or 0)
+        if data_delta or ready_delta or position_delta:
+            flags.append(
+                "Impact {data} blockers, +{positions} positions".format(
+                    data=data_delta,
+                    positions=position_delta,
+                )
+            )
         flag_html = "".join(f"<span>{_html_escape(flag)}</span>" for flag in flags)
         textarea = (
             "<p class=\"muted\">Handle this in supervised browser review; it is not included in compact JSON.</p>"
@@ -4554,6 +4610,7 @@ def render_critical_input_questionnaire_html(questionnaire: dict[str, Any]) -> s
   <h2>{question}</h2>
   <p><strong>Input ID:</strong> <code>{input_id}</code></p>
   <p><strong>Needed:</strong> {needed}</p>
+  <p><strong>Impact:</strong> {impact_text}</p>
   <p><strong>Suggested answer:</strong> {suggested}</p>
   <p><strong>Context:</strong> {context}</p>
   {textarea}
@@ -4566,6 +4623,13 @@ def render_critical_input_questionnaire_html(questionnaire: dict[str, Any]) -> s
                 flags=flag_html,
                 question=_html_escape(row.get("question")),
                 needed=_html_escape(row.get("required_user_response")),
+                impact_text=_html_escape(
+                    "data blockers {data}; ready prompts +{ready}; autofill positions +{positions}".format(
+                        data=data_delta,
+                        ready=ready_delta,
+                        positions=position_delta,
+                    )
+                ),
                 suggested=_html_escape(row.get("suggested_answer") or ""),
                 context=_html_escape(row.get("review_context") or row.get("suggestion_note") or ""),
                 textarea=textarea,
@@ -9727,6 +9791,10 @@ def write_question_export(
     fake_position_rehearsal: dict[str, Any] | None = None,
     goal_readiness_audit: dict[str, Any] | None = None,
     critical_input_suggestions: dict[str, Any] | None = None,
+    critical_input_questionnaire: dict[str, Any] | None = None,
+    critical_input_preflight: dict[str, Any] | None = None,
+    critical_input_impact: dict[str, Any] | None = None,
+    autofill_batch: dict[str, Any] | None = None,
     learning_approval_pack: dict[str, Any] | None = None,
     answer_memory: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
@@ -9744,6 +9812,10 @@ def write_question_export(
         fake_position_rehearsal=fake_position_rehearsal,
         goal_readiness_audit=goal_readiness_audit,
         critical_input_suggestions=critical_input_suggestions,
+        critical_input_questionnaire=critical_input_questionnaire,
+        critical_input_preflight=critical_input_preflight,
+        critical_input_impact=critical_input_impact,
+        autofill_batch=autofill_batch,
         learning_approval_pack=learning_approval_pack,
         answer_memory=answer_memory,
         closed_jobs=closed_jobs,
@@ -9771,6 +9843,10 @@ def build_question_export(
     fake_position_rehearsal: dict[str, Any] | None = None,
     goal_readiness_audit: dict[str, Any] | None = None,
     critical_input_suggestions: dict[str, Any] | None = None,
+    critical_input_questionnaire: dict[str, Any] | None = None,
+    critical_input_preflight: dict[str, Any] | None = None,
+    critical_input_impact: dict[str, Any] | None = None,
+    autofill_batch: dict[str, Any] | None = None,
     learning_approval_pack: dict[str, Any] | None = None,
     answer_memory: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
@@ -9810,6 +9886,11 @@ def build_question_export(
     fake_position_rehearsal_rows = _fake_position_rehearsal_export_rows(fake_position_rehearsal)
     goal_audit_rows = _goal_audit_export_rows(goal_readiness_audit)
     critical_suggestion_rows = _critical_input_suggestion_export_rows(critical_input_suggestions)
+    critical_questionnaire_rows = _critical_input_questionnaire_export_rows(critical_input_questionnaire)
+    critical_preflight_rows = _critical_input_preflight_export_rows(critical_input_preflight)
+    critical_impact_rows = _critical_input_impact_export_rows(critical_input_impact)
+    autofill_batch_rows = _autofill_batch_export_rows(autofill_batch)
+    autofill_batch_position_rows = _autofill_batch_position_export_rows(autofill_batch)
     answer_memory_rows = _answer_memory_export_rows(answer_memory)
     closed_posting_rows = _closed_posting_export_rows(closed_jobs)
     collection_targets = [
@@ -9945,6 +10026,48 @@ def build_question_export(
         "critical_input_exact_user_answer_required_count": int(
             (critical_input_suggestions or {}).get("exact_user_answer_required_count") or 0
         ),
+        "critical_questionnaire_question_count": int(
+            (critical_input_questionnaire or {}).get("question_count") or len(critical_questionnaire_rows)
+        ),
+        "critical_questionnaire_answerable_count": int(
+            (critical_input_questionnaire or {}).get("answerable_question_count") or 0
+        ),
+        "critical_impact_input_count": int(
+            (critical_input_impact or {}).get("input_count") or len(critical_impact_rows)
+        ),
+        "critical_impact_data_blocking_delta": int(
+            ((critical_input_impact or {}).get("summary") or {}).get(
+                "combined_data_blocking_prompts_delta"
+            )
+            or 0
+        ),
+        "critical_impact_positions_ready_delta": int(
+            ((critical_input_impact or {}).get("summary") or {}).get(
+                "combined_positions_ready_for_autofill_delta"
+            )
+            or 0
+        ),
+        "critical_impact_top_input_id": (
+            ((critical_input_impact or {}).get("summary") or {}).get("top_input_id") or ""
+        ),
+        "critical_preflight_data_blocking_delta": int(
+            ((critical_input_preflight or {}).get("summary") or {}).get(
+                "data_blocking_prompts_delta"
+            )
+            or 0
+        ),
+        "autofill_batch_selected_count": int((autofill_batch or {}).get("selected_count") or 0),
+        "autofill_batch_autofill_allowed_count": int(
+            (autofill_batch or {}).get("selected_autofill_allowed_count")
+            or (autofill_batch or {}).get("autofill_allowed_count")
+            or 0
+        ),
+        "autofill_batch_browser_action_count": int(
+            (autofill_batch or {}).get("browser_action_count") or 0
+        ),
+        "autofill_batch_selector_miss_count": int(
+            (autofill_batch or {}).get("selector_miss_count") or 0
+        ),
     }
     return {
         "generated_at": summary["generated_at"],
@@ -9959,6 +10082,17 @@ def build_question_export(
         "goal_audit": goal_audit_rows,
         "critical_input_suggestions": critical_suggestion_rows,
         "critical_input_suggestion_instructions": (critical_input_suggestions or {}).get("instructions", ""),
+        "critical_input_questionnaire": critical_questionnaire_rows,
+        "critical_input_questionnaire_instructions": (critical_input_questionnaire or {}).get(
+            "instructions", ""
+        ),
+        "critical_input_questionnaire_workflow_command": (critical_input_questionnaire or {}).get(
+            "workflow_command", ""
+        ),
+        "critical_input_preflight": critical_preflight_rows,
+        "critical_input_impact": critical_impact_rows,
+        "autofill_batch": autofill_batch_rows,
+        "autofill_batch_positions": autofill_batch_position_rows,
         "answer_memory": answer_memory_rows,
         "closed_postings": closed_posting_rows,
         "coverage_counts": gaps.get("coverage_counts", {}),
@@ -10017,6 +10151,9 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                 ("Manual gates", summary.get("manual_gate_count", 0)),
                 ("Closed postings", summary.get("closed_posting_count", 0)),
                 ("Stored answers", summary.get("answer_memory_count", 0)),
+                ("Questionnaire", summary.get("critical_questionnaire_question_count", 0)),
+                ("Impact blockers", summary.get("critical_impact_data_blocking_delta", 0)),
+                ("Autofill batch", summary.get("autofill_batch_selected_count", 0)),
             ]
         ),
         "<section><h2>Source Artifacts</h2>",
@@ -10084,6 +10221,45 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                 [
                     "Critical exact answers required",
                     summary.get("critical_input_exact_user_answer_required_count", 0),
+                ],
+                [
+                    "Critical questionnaire answerable",
+                    "{answerable} / {total}".format(
+                        answerable=summary.get("critical_questionnaire_answerable_count", 0),
+                        total=summary.get("critical_questionnaire_question_count", 0),
+                    ),
+                ],
+                [
+                    "Critical impact top input",
+                    summary.get("critical_impact_top_input_id", ""),
+                ],
+                [
+                    "Critical impact data blockers delta",
+                    summary.get("critical_impact_data_blocking_delta", 0),
+                ],
+                [
+                    "Critical impact autofill positions delta",
+                    summary.get("critical_impact_positions_ready_delta", 0),
+                ],
+                [
+                    "Critical preflight data blockers delta",
+                    summary.get("critical_preflight_data_blocking_delta", 0),
+                ],
+                [
+                    "Autofill batch selected",
+                    summary.get("autofill_batch_selected_count", 0),
+                ],
+                [
+                    "Autofill batch allowed",
+                    summary.get("autofill_batch_autofill_allowed_count", 0),
+                ],
+                [
+                    "Autofill browser actions",
+                    summary.get("autofill_batch_browser_action_count", 0),
+                ],
+                [
+                    "Autofill selector misses",
+                    summary.get("autofill_batch_selector_miss_count", 0),
                 ],
                 [
                     "Fake observed-position submit count",
@@ -10253,6 +10429,122 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                     row.get("suggestion_note"),
                 ]
                 for row in export.get("critical_input_suggestions", [])
+            ],
+        ),
+        "</section>",
+        "<section><h2>Critical Input Questionnaire</h2>",
+        _html_key_value_table(
+            {
+                "Instructions": export.get("critical_input_questionnaire_instructions", ""),
+                "Workflow command": export.get("critical_input_questionnaire_workflow_command", ""),
+            }
+        ),
+        _html_table(
+            [
+                "Impact rank",
+                "Input ID",
+                "Risk",
+                "Question",
+                "Needed",
+                "Suggested answer",
+                "Data blockers delta",
+                "Ready prompts delta",
+                "Autofill positions delta",
+                "High risk",
+                "Supervised only",
+                "Platforms",
+            ],
+            [
+                [
+                    row.get("impact_rank"),
+                    row.get("input_id"),
+                    row.get("approval_risk"),
+                    row.get("question"),
+                    row.get("required_user_response"),
+                    row.get("suggested_answer"),
+                    row.get("data_blocking_prompts_delta"),
+                    row.get("ready_prompts_delta"),
+                    row.get("positions_ready_for_autofill_delta"),
+                    _yes_no(row.get("high_risk")),
+                    _yes_no(row.get("supervised_only")),
+                    row.get("platforms"),
+                ]
+                for row in export.get("critical_input_questionnaire", [])
+            ],
+        ),
+        "</section>",
+        "<section><h2>Critical Input Impact</h2>",
+        _html_table(
+            [
+                "Input ID",
+                "Risk",
+                "Question",
+                "Simulated answer",
+                "Data blockers delta",
+                "Ready prompts delta",
+                "Autofill positions delta",
+                "Temp profile updates",
+                "Temp answer memory updates",
+            ],
+            [
+                [
+                    row.get("input_id"),
+                    row.get("approval_risk"),
+                    row.get("question"),
+                    row.get("simulated_answer"),
+                    row.get("data_blocking_prompts_delta"),
+                    row.get("ready_prompts_delta"),
+                    row.get("positions_ready_for_autofill_delta"),
+                    row.get("temp_profile_updates"),
+                    row.get("temp_answer_memory_updates"),
+                ]
+                for row in export.get("critical_input_impact", [])
+            ],
+        ),
+        "</section>",
+        "<section><h2>Critical Input Preflight</h2>",
+        _html_table(
+            ["Section", "Metric", "Value"],
+            [
+                [row.get("section"), row.get("metric"), row.get("value")]
+                for row in export.get("critical_input_preflight", [])
+            ],
+        ),
+        "</section>",
+        "<section><h2>Autofill Batch</h2>",
+        _html_table(
+            ["Metric", "Value"],
+            [[row.get("metric"), row.get("value")] for row in export.get("autofill_batch", [])],
+        ),
+        _html_table(
+            [
+                "Index",
+                "Platform",
+                "Company",
+                "Title",
+                "Role family",
+                "Manifest status",
+                "Autofill",
+                "Actions",
+                "Stop",
+                "Selector misses",
+                "URL",
+            ],
+            [
+                [
+                    row.get("index"),
+                    row.get("platform"),
+                    row.get("company"),
+                    row.get("title"),
+                    row.get("role_family"),
+                    row.get("manifest_status"),
+                    _yes_no(row.get("autofill_allowed")),
+                    row.get("browser_action_count"),
+                    row.get("local_check_policy_stop"),
+                    row.get("selector_miss_count"),
+                    row.get("apply_url"),
+                ]
+                for row in export.get("autofill_batch_positions", [])
             ],
         ),
         "</section>",
@@ -17298,6 +17590,155 @@ def _critical_input_suggestion_export_rows(
     return rows
 
 
+def _critical_input_questionnaire_export_rows(
+    critical_input_questionnaire: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if not critical_input_questionnaire:
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in critical_input_questionnaire.get("questions") or []:
+        if not isinstance(item, dict):
+            continue
+        impact = item.get("impact") or {}
+        rows.append(
+            {
+                "impact_rank": item.get("impact_rank"),
+                "input_id": item.get("input_id"),
+                "input_type": item.get("input_type"),
+                "question": item.get("question"),
+                "required_user_response": item.get("required_user_response"),
+                "approval_risk": item.get("approval_risk"),
+                "high_risk": item.get("high_risk"),
+                "supervised_only": item.get("supervised_only"),
+                "suggested_answer": item.get("suggested_answer"),
+                "suggestion_source": item.get("suggestion_source"),
+                "suggestion_confidence": item.get("suggestion_confidence"),
+                "data_blocking_prompts_delta": impact.get("data_blocking_prompts_delta", 0),
+                "ready_prompts_delta": impact.get("ready_prompts_delta", 0),
+                "positions_ready_for_autofill_delta": impact.get(
+                    "positions_ready_for_autofill_delta", 0
+                ),
+                "workflow_update_shape": item.get("workflow_update_shape"),
+                "required_count": item.get("required_count", 0),
+                "platforms": ", ".join(_string_list(item.get("platforms"))),
+                "labels": "\n".join(_string_list(item.get("labels"))),
+            }
+        )
+    return rows
+
+
+def _critical_input_preflight_export_rows(
+    critical_input_preflight: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if not critical_input_preflight:
+        return []
+    rows: list[dict[str, Any]] = []
+    for section in ["summary", "deltas"]:
+        for key, value in sorted((critical_input_preflight.get(section) or {}).items()):
+            rows.append({"section": section, "metric": key, "value": value})
+    for key, value in sorted((critical_input_preflight.get("policy") or {}).items()):
+        rows.append({"section": "policy", "metric": key, "value": value})
+    for command in critical_input_preflight.get("next_commands") or []:
+        rows.append({"section": "next_command", "metric": "command", "value": command})
+    return rows
+
+
+def _critical_input_impact_export_rows(
+    critical_input_impact: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if not critical_input_impact:
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in critical_input_impact.get("input_impacts") or []:
+        if not isinstance(item, dict):
+            continue
+        rows.append(
+            {
+                "input_id": item.get("input_id"),
+                "input_type": item.get("input_type"),
+                "question": item.get("question"),
+                "approval_risk": item.get("approval_risk"),
+                "high_risk": item.get("high_risk"),
+                "supervised_only": item.get("supervised_only"),
+                "simulated_answer": item.get("simulated_answer"),
+                "data_blocking_prompts_before": item.get("data_blocking_prompts_before"),
+                "data_blocking_prompts_after": item.get("data_blocking_prompts_after"),
+                "data_blocking_prompts_delta": item.get("data_blocking_prompts_delta"),
+                "ready_prompts_delta": item.get("ready_prompts_delta"),
+                "positions_ready_for_autofill_delta": item.get(
+                    "positions_ready_for_autofill_delta"
+                ),
+                "temp_profile_updates": item.get("temp_profile_updates"),
+                "temp_resume_fact_updates": item.get("temp_resume_fact_updates"),
+                "temp_answer_memory_updates": item.get("temp_answer_memory_updates"),
+                "temp_category_policy_updates": item.get("temp_category_policy_updates"),
+            }
+        )
+    return rows
+
+
+def _autofill_batch_export_rows(autofill_batch: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not autofill_batch:
+        return []
+    metrics = {
+        "generated_at": autofill_batch.get("generated_at"),
+        "requested_count": autofill_batch.get("requested_count"),
+        "selected_count": autofill_batch.get("selected_count"),
+        "selected_autofill_allowed_count": autofill_batch.get("selected_autofill_allowed_count"),
+        "blocked_candidate_count": autofill_batch.get("blocked_candidate_count"),
+        "excluded_closed_position_count": autofill_batch.get("excluded_closed_position_count"),
+        "browser_action_count": autofill_batch.get("browser_action_count"),
+        "stop_action_count": autofill_batch.get("stop_action_count"),
+        "selector_miss_count": autofill_batch.get("selector_miss_count"),
+        "would_submit_count": autofill_batch.get("would_submit_count"),
+        "real_platform_submission": autofill_batch.get("real_platform_submission"),
+    }
+    rows = [{"metric": key, "value": value} for key, value in metrics.items()]
+    for prefix, values in [
+        ("platform", autofill_batch.get("platform_counts") or {}),
+        ("role_family", autofill_batch.get("role_family_counts") or {}),
+        ("platform_role_family", autofill_batch.get("platform_role_family_counts") or {}),
+        ("manifest_status", autofill_batch.get("manifest_status_counts") or {}),
+        ("local_outcome", autofill_batch.get("local_outcome_counts") or {}),
+        ("local_policy_stop", autofill_batch.get("local_policy_stop_counts") or {}),
+    ]:
+        for key, value in sorted(values.items()):
+            rows.append({"metric": f"{prefix}:{key}", "value": value})
+    return rows
+
+
+def _autofill_batch_position_export_rows(
+    autofill_batch: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if not autofill_batch:
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in autofill_batch.get("positions") or []:
+        if not isinstance(item, dict):
+            continue
+        rows.append(
+            {
+                "index": item.get("index"),
+                "platform": item.get("platform"),
+                "company": item.get("company"),
+                "title": item.get("title"),
+                "role_family": item.get("role_family"),
+                "apply_url": item.get("apply_url"),
+                "readiness": item.get("readiness"),
+                "manifest_status": item.get("manifest_status"),
+                "autofill_allowed": item.get("autofill_allowed"),
+                "browser_action_count": item.get("browser_action_count"),
+                "stop_action_count": item.get("stop_action_count"),
+                "local_check_outcome": item.get("local_check_outcome"),
+                "local_check_policy_stop": item.get("local_check_policy_stop"),
+                "selector_miss_count": item.get("local_check_selector_miss_count"),
+                "would_submit": item.get("would_submit"),
+                "real_platform_submission": item.get("real_platform_submission"),
+            }
+        )
+    return rows
+
+
 def _answer_memory_export_rows(answer_memory: dict[str, Any] | None) -> list[dict[str, Any]]:
     if not answer_memory:
         return []
@@ -17594,6 +18035,11 @@ def _write_question_export_xlsx(export: dict[str, Any], path: Path) -> None:
         ("Fake Learning Probe", _table_rows(export.get("fake_learning_probe", []))),
         ("Fake Critical Inputs", _table_rows(export.get("fake_critical_input_probe", []))),
         ("Fake Position Rehearsal", _table_rows(export.get("fake_position_rehearsal", []))),
+        ("Critical Questionnaire", _table_rows(export.get("critical_input_questionnaire", []))),
+        ("Critical Input Impact", _table_rows(export.get("critical_input_impact", []))),
+        ("Critical Input Preflight", _table_rows(export.get("critical_input_preflight", []))),
+        ("Autofill Batch", _table_rows(export.get("autofill_batch", []))),
+        ("Autofill Batch Positions", _table_rows(export.get("autofill_batch_positions", []))),
         ("Problem Buckets", _table_rows(export.get("problem_buckets", []))),
         ("User Questions", _table_rows(export.get("user_questions", []))),
         ("Blocking Prompts", _table_rows(export.get("blocker_rows", []))),

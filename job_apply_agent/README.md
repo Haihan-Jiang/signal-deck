@@ -368,11 +368,12 @@ job_apply_agent/outbox/application_questions_latest.html
 ```
 
 The Excel workbook includes sheets for summary metrics, critical inputs still
-needed from the user, user questions, blocking prompts, all observed prompts,
-per-position readiness, fake learning and critical-input probe metrics,
-collection targets, collection tasks, manual gates, approval buckets, approval
-tasks, and approval-only manual gates. The HTML file presents the same
-information as a dashboard for quick review.
+needed from the user, the impact-ranked questionnaire, critical-input impact
+and preflight results, the 100-position autofill batch, user questions,
+blocking prompts, all observed prompts, per-position readiness, fake learning
+and critical-input probe metrics, collection targets, collection tasks, manual
+gates, approval buckets, approval tasks, and approval-only manual gates. The
+HTML file presents the same information as a dashboard for quick review.
 
 Turn that learning queue into a fill-in template:
 
@@ -456,7 +457,8 @@ job_apply_agent/outbox/critical_input_questionnaire_latest.html
 
 The HTML file is an offline form that builds the compact updates JSON expected
 by `critical-inputs-workflow`; it does not submit applications or write profile
-data by itself.
+data by itself. When `critical_input_impact_latest.json` exists, the form is
+sorted by the highest blocker-reduction impact first.
 
 For faster intake, put the answers you confirm into a compact JSON map:
 

@@ -461,6 +461,10 @@ def main() -> int:
         "--suggestions",
         default=str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON),
     )
+    critical_inputs_questionnaire_parser.add_argument(
+        "--impact",
+        default=str(DEFAULT_CRITICAL_INPUT_IMPACT_JSON),
+    )
     critical_inputs_questionnaire_parser.add_argument("--json-output", default=str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_JSON))
     critical_inputs_questionnaire_parser.add_argument(
         "--markdown-output",
@@ -1057,6 +1061,10 @@ def main() -> int:
             fake_position_rehearsal=_load_optional_json(args.fake_position_rehearsal_json),
             goal_readiness_audit=_load_optional_json(args.goal_audit_json),
             critical_input_suggestions=_load_optional_json(args.critical_input_suggestions_json),
+            critical_input_questionnaire=_load_optional_json(args.critical_input_questionnaire_json),
+            critical_input_preflight=_load_optional_json(args.critical_input_preflight_json),
+            critical_input_impact=_load_optional_json(args.critical_input_impact_json),
+            autofill_batch=_load_optional_json(args.autofill_batch_json),
             learning_approval_pack=_load_optional_json(args.learning_approval_pack_json),
             answer_memory=_load_optional_json(args.answer_memory_json),
             closed_jobs=_load_optional_json(args.closed_jobs_json),
@@ -1434,6 +1442,7 @@ def main() -> int:
             args.markdown_output,
             args.html_output,
             suggestions_payload=_load_optional_json(args.suggestions),
+            impact_payload=_load_optional_json(args.impact),
         )
         print(f"Wrote critical input questionnaire JSON to {args.json_output}")
         print(f"Wrote critical input questionnaire Markdown to {args.markdown_output}")
@@ -2080,14 +2089,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             profile=profile,
             answer_memory=answer_memory,
         )
-        write_critical_input_questionnaire(
-            answers_payload,
-            DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_JSON,
-            DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_MARKDOWN,
-            DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_HTML,
-            suggestions_payload=_load_optional_json(str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON)),
-        )
-        write_critical_input_impact_report(
+        critical_input_impact = write_critical_input_impact_report(
             approval_pack,
             answers_payload,
             research,
@@ -2097,6 +2099,14 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             DEFAULT_CRITICAL_INPUT_IMPACT_HTML,
             answer_memory=answer_memory,
             closed_jobs=load_closed_jobs(DEFAULT_CLOSED_JOBS),
+        )
+        write_critical_input_questionnaire(
+            answers_payload,
+            DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_JSON,
+            DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_MARKDOWN,
+            DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_HTML,
+            suggestions_payload=_load_optional_json(str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON)),
+            impact_payload=critical_input_impact,
         )
     write_autofill_batch_plan(
         research,
@@ -2163,6 +2173,10 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             fake_position_rehearsal=_load_optional_json(str(DEFAULT_FAKE_POSITION_REHEARSAL_JSON)),
             goal_readiness_audit=goal,
             critical_input_suggestions=_load_optional_json(str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON)),
+            critical_input_questionnaire=_load_optional_json(str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_JSON)),
+            critical_input_preflight=_load_optional_json(str(DEFAULT_CRITICAL_INPUT_PREFLIGHT_JSON)),
+            critical_input_impact=_load_optional_json(str(DEFAULT_CRITICAL_INPUT_IMPACT_JSON)),
+            autofill_batch=_load_optional_json(str(DEFAULT_AUTOFILL_BATCH_JSON)),
             learning_approval_pack=approval_pack,
             answer_memory=_load_optional_json(str(DEFAULT_MEMORY)),
             closed_jobs=_load_optional_json(str(DEFAULT_CLOSED_JOBS)),
