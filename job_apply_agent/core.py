@@ -10707,6 +10707,7 @@ def build_apply_queue_readiness(
     updates_ready = bool(updates.get("ready_for_apply"))
     update_summary = updates.get("summary") or {}
     selected_count = int(autofill_batch.get("selected_count") or len(positions))
+    target_count = int(autofill_batch.get("target_count") or autofill_batch.get("requested_count") or 100)
     selected_allowed = int(autofill_batch.get("selected_autofill_allowed_count") or 0)
     selector_miss_count = int(autofill_batch.get("selector_miss_count") or 0)
     local_synthetic_submit_count = int(autofill_batch.get("local_synthetic_submit_count") or 0)
@@ -10759,11 +10760,13 @@ def build_apply_queue_readiness(
         "ready_for_unattended_real_submit": False,
         "real_platform_submission": False,
         "position_count": len(queue_positions),
+        "target_count": target_count,
         "live_check_job_count": len(live_check_jobs),
         "queue_status_counts": status_counts,
         "global_blockers": global_blockers,
         "summary": {
             "selected_count": selected_count,
+            "target_count": target_count,
             "selected_autofill_allowed_count": selected_allowed,
             "selector_miss_count": selector_miss_count,
             "local_synthetic_submit_count": local_synthetic_submit_count,
@@ -10876,17 +10879,21 @@ def build_apply_queue_handoff(
     status_counts = _count_by(rows, "handoff_status")
     apply_queue_ready = bool(apply_queue.get("ready_for_supervised_autofill"))
     position_count = len(rows)
+    target_count = int(apply_queue.get("target_count") or (apply_queue.get("summary") or {}).get("target_count") or 100)
     open_ready_count = len(open_ready_jobs)
+    open_after_answers_count = len(open_after_answers_jobs)
     uncertain_count = sum(
         1
         for row in rows
         if row.get("handoff_status") in {"requires_manual_live_check", "requires_live_preflight"}
     )
     closed_or_skipped_count = sum(1 for row in rows if row.get("handoff_status") == "skip_closed")
+    live_open_after_answers_count = open_ready_count + open_after_answers_count
+    top_up_required_count = max(0, target_count - live_open_after_answers_count - uncertain_count)
     full_batch_open_ready = bool(
         apply_queue_ready
-        and position_count >= 100
-        and open_ready_count >= 100
+        and position_count >= target_count
+        and open_ready_count >= target_count
         and open_ready_count == position_count
         and not uncertain_count
         and not closed_or_skipped_count
@@ -10901,9 +10908,11 @@ def build_apply_queue_handoff(
         blockers.append("live_preflight_uncertain_or_missing")
     if closed_or_skipped_count:
         blockers.append("live_preflight_closed_or_skipped")
-    if position_count < 100:
+    if top_up_required_count:
+        blockers.append("live_open_after_answers_below_target")
+    if position_count < target_count:
         blockers.append("handoff_position_count_below_100")
-    if apply_queue_ready and open_ready_count < 100:
+    if apply_queue_ready and open_ready_count < target_count:
         blockers.append("open_ready_count_below_100")
     preflight_summary = {
         "source_report_count": 1 + len(supplemental_preflights),
@@ -10934,21 +10943,27 @@ def build_apply_queue_handoff(
         "ready_for_unattended_real_submit": False,
         "real_platform_submission": False,
         "position_count": position_count,
+        "target_count": target_count,
         "handoff_status_counts": status_counts,
         "open_ready_count": open_ready_count,
-        "open_after_answers_count": len(open_after_answers_jobs),
+        "open_after_answers_count": open_after_answers_count,
         "manual_live_check_count": len(manual_live_check_jobs),
         "closed_or_skipped_count": closed_or_skipped_count,
+        "live_open_after_answers_count": live_open_after_answers_count,
+        "top_up_required_count": top_up_required_count,
         "preflight": preflight_summary,
         "summary": {
             "apply_queue_status": apply_queue.get("status"),
             "apply_queue_ready_for_supervised_autofill": apply_queue_ready,
             "apply_queue_position_count": apply_queue.get("position_count", position_count),
+            "target_count": target_count,
             "apply_queue_live_check_job_count": apply_queue.get("live_check_job_count", 0),
             "open_ready_count": open_ready_count,
-            "open_after_answers_count": len(open_after_answers_jobs),
+            "open_after_answers_count": open_after_answers_count,
+            "live_open_after_answers_count": live_open_after_answers_count,
             "manual_live_check_count": len(manual_live_check_jobs),
             "closed_or_skipped_count": closed_or_skipped_count,
+            "top_up_required_count": top_up_required_count,
             "final_submit_supervised_count": sum(
                 1 for row in rows if row.get("final_submit_supervised")
             ),
@@ -10959,7 +10974,11 @@ def build_apply_queue_handoff(
         "open_after_answers_jobs": open_after_answers_jobs,
         "manual_live_check_jobs": manual_live_check_jobs,
         "open_ready_jobs_payload": {"jobs": open_ready_jobs},
-        "next_commands": _apply_queue_handoff_next_commands(status, manual_live_check_jobs),
+        "next_commands": _apply_queue_handoff_next_commands(
+            status,
+            manual_live_check_jobs,
+            top_up_required_count=top_up_required_count,
+        ),
         "policy": {
             "open_only_live_verified_candidates": True,
             "do_not_open_uncertain_candidates": True,
@@ -11031,7 +11050,7 @@ def render_apply_queue_handoff_markdown(report: dict[str, Any]) -> str:
         "",
         "## Summary",
         "",
-        f"- positions: {report.get('position_count', 0)}",
+        f"- positions: {report.get('position_count', 0)} / {report.get('target_count', 100)}",
         f"- apply queue status: {summary.get('apply_queue_status')}",
         f"- apply queue ready: {str(bool(summary.get('apply_queue_ready_for_supervised_autofill'))).lower()}",
         f"- live checked: {preflight.get('live_checked_count', 0)} / {preflight.get('candidate_count', 0)}",
@@ -11040,7 +11059,9 @@ def render_apply_queue_handoff_markdown(report: dict[str, Any]) -> str:
         f"- live uncertain: {preflight.get('uncertain_count', 0)}",
         f"- open ready now: {summary.get('open_ready_count', 0)}",
         f"- open after answers: {summary.get('open_after_answers_count', 0)}",
+        f"- live open after answers: {summary.get('live_open_after_answers_count', 0)}",
         f"- manual live checks: {summary.get('manual_live_check_count', 0)}",
+        f"- top-up required: {summary.get('top_up_required_count', 0)}",
         "",
         "## Global Blockers",
         "",
@@ -11115,9 +11136,10 @@ def render_apply_queue_handoff_html(report: dict[str, Any]) -> str:
             _html_kpis(
                 [
                     ("Status", report.get("status")),
-                    ("Positions", report.get("position_count", 0)),
+                    ("Positions", f"{report.get('position_count', 0)} / {report.get('target_count', 100)}"),
                     ("Open ready", report.get("open_ready_count", 0)),
                     ("After answers", report.get("open_after_answers_count", 0)),
+                    ("Top-up", report.get("top_up_required_count", 0)),
                     ("Manual check", report.get("manual_live_check_count", 0)),
                     ("Live checked", preflight.get("live_checked_count", 0)),
                     ("Live open", preflight.get("open_eligible_count", 0)),
@@ -12492,6 +12514,7 @@ def _apply_queue_handoff_next_action(handoff_status: str) -> str:
 def _apply_queue_handoff_next_commands(
     status: str,
     manual_live_check_jobs: list[dict[str, Any]],
+    top_up_required_count: int = 0,
 ) -> list[str]:
     commands = [
         "python3 -m job_apply_agent critical-inputs-readiness",
@@ -12505,6 +12528,15 @@ def _apply_queue_handoff_next_commands(
         )
     if manual_live_check_jobs:
         commands.append("rerun closed-preflight for manual_live_check_jobs before opening those URLs")
+    if top_up_required_count > 0:
+        commands.extend(
+            [
+                "python3 -m job_apply_agent autofill-batch --limit 100",
+                "python3 -m job_apply_agent apply-queue",
+                "python3 -m job_apply_agent closed-preflight --jobs job_apply_agent/outbox/apply_queue_live_check_jobs_latest.json --live-check-limit 100",
+                "python3 -m job_apply_agent apply-queue-handoff",
+            ]
+        )
     if status == "ready_to_open_for_supervised_autofill":
         commands.append("python3 -m job_apply_agent apply-queue-handoff --open-browser --open-limit 100")
     return commands

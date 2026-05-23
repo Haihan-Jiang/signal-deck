@@ -9417,6 +9417,7 @@ class JobApplyAgentTests(unittest.TestCase):
             "status": "waiting_for_confirmed_answers",
             "ready_for_supervised_autofill": False,
             "position_count": 3,
+            "target_count": 3,
             "live_check_job_count": 3,
             "global_blockers": ["critical_input_updates_not_ready"],
             "positions": [
@@ -9507,6 +9508,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["open_after_answers_count"], 1)
         self.assertEqual(report["manual_live_check_count"], 1)
         self.assertEqual(report["closed_or_skipped_count"], 1)
+        self.assertEqual(report["top_up_required_count"], 1)
         self.assertEqual(report["positions"][0]["handoff_status"], "waiting_for_answers_before_open")
         self.assertEqual(report["positions"][1]["handoff_status"], "requires_manual_live_check")
         self.assertEqual(report["positions"][2]["handoff_status"], "skip_closed")
@@ -9514,6 +9516,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("live_preflight_uncertain_or_missing", report["global_blockers"])
         self.assertTrue(report["policy"]["do_not_open_uncertain_candidates"])
         self.assertIn("Apply Queue Handoff", markdown)
+        self.assertIn("top-up required: 1", markdown)
         self.assertIn("waiting_for_answers_before_open", html)
 
     def test_apply_queue_handoff_ready_writes_open_ready_jobs(self) -> None:
@@ -9597,6 +9600,77 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(jobs_output.exists())
             jobs_payload = json.loads(jobs_output.read_text(encoding="utf-8"))
             self.assertEqual(len(jobs_payload["jobs"]), 100)
+
+    def test_apply_queue_handoff_closed_live_check_requires_topup_before_open_batch(self) -> None:
+        positions = []
+        checks = []
+        for index in range(1, 101):
+            url = f"https://jobs.lever.co/example/{index}"
+            positions.append(
+                {
+                    "index": index,
+                    "queue_status": "ready_for_live_closed_preflight",
+                    "position_key": f"url:{url}",
+                    "platform": "Lever",
+                    "company": "Example",
+                    "title": f"SRE {index}",
+                    "role_family": "SRE",
+                    "apply_url": url,
+                    "final_submit_supervised": True,
+                    "blockers": [],
+                }
+            )
+            checks.append(
+                {
+                    "key": f"url:{url}",
+                    "url": url,
+                    "status": "open_live_checked",
+                    "open_eligible": True,
+                    "closed": False,
+                }
+            )
+        checks[-1].update(
+            {
+                "status": "closed_live_text",
+                "open_eligible": False,
+                "closed": True,
+                "reason": "No longer accepting applications",
+            }
+        )
+        apply_queue = {
+            "status": "ready_for_live_closed_preflight",
+            "ready_for_supervised_autofill": True,
+            "position_count": 100,
+            "target_count": 100,
+            "live_check_job_count": 100,
+            "global_blockers": [],
+            "positions": positions,
+        }
+        closed_preflight = {
+            "candidate_count": 100,
+            "live_checked_count": 100,
+            "open_eligible_count": 99,
+            "closed_count": 1,
+            "uncertain_count": 0,
+            "error_count": 0,
+            "status_counts": {"open_live_checked": 99, "closed_live_text": 1},
+            "checks": checks,
+        }
+
+        report = build_apply_queue_handoff(apply_queue, closed_preflight)
+        markdown = render_apply_queue_handoff_markdown(report)
+
+        self.assertEqual(report["status"], "needs_live_preflight_cleanup")
+        self.assertFalse(report["ready_for_supervised_open_batch"])
+        self.assertEqual(report["open_ready_count"], 99)
+        self.assertEqual(report["closed_or_skipped_count"], 1)
+        self.assertEqual(report["live_open_after_answers_count"], 99)
+        self.assertEqual(report["top_up_required_count"], 1)
+        self.assertIn("live_open_after_answers_below_target", report["global_blockers"])
+        self.assertTrue(
+            any(command.startswith("python3 -m job_apply_agent autofill-batch") for command in report["next_commands"])
+        )
+        self.assertIn("top-up required: 1", markdown)
 
     def test_apply_queue_handoff_supplemental_preflight_overrides_timeout(self) -> None:
         url = "https://jobs.lever.co/example/retry"
