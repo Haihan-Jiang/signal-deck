@@ -4914,6 +4914,52 @@ class JobApplyAgentTests(unittest.TestCase):
                 }
             ],
         }
+        source_artifacts = [
+            {
+                "name": "Answer gaps",
+                "path": "/tmp/answer_gaps_latest.json",
+                "exists": True,
+                "size_bytes": 123,
+                "updated_at": "2026-05-22T00:00:00+00:00",
+            }
+        ]
+        synthetic_browser_execution = {
+            "execution": "local_synthetic_browser_action_executor",
+            "run_count": 200,
+            "actual_submit_count": 150,
+            "eligible_submit_count": 150,
+            "eligible_submit_target_count": 150,
+            "eligible_submit_achieved": True,
+            "real_platform_submission": False,
+            "selector_miss_count": 0,
+            "policy_stop_counts": {"local_synthetic_submit_allowed": 150},
+            "platform_role_counts": {"Greenhouse | Software Backend": 100},
+        }
+        answer_memory = {
+            "answers": [
+                {
+                    "normalized_question": "what expected compensation",
+                    "sample_question": "What is your expected compensation?",
+                    "answer": "$100,000+",
+                    "approved_count": 1,
+                    "source": "user_confirmed_standard_preferences",
+                }
+            ]
+        }
+        closed_jobs = {
+            "jobs": [
+                {
+                    "key": "linkedin:4415508499",
+                    "status": "CLOSED",
+                    "reason": "No longer accepting applications",
+                    "source": "live_page_check",
+                    "platform": "LinkedIn",
+                    "company": "Tesla",
+                    "title": "SRE",
+                    "short_apply_url": "https://www.linkedin.com/jobs/view/4415508499/",
+                }
+            ]
+        }
 
         export = build_question_export(
             gaps,
@@ -4921,11 +4967,20 @@ class JobApplyAgentTests(unittest.TestCase):
             coverage_gate,
             collection_plan,
             learning_tasks,
+            source_artifacts=source_artifacts,
+            synthetic_browser_execution=synthetic_browser_execution,
+            answer_memory=answer_memory,
+            closed_jobs=closed_jobs,
         )
         html = render_question_export_html(export)
 
         self.assertIn("Job Application Question Export", html)
         self.assertIn("Have you worked at DoorDash?", html)
+        self.assertIn("Source Artifacts", html)
+        self.assertIn("Synthetic Browser Execution", html)
+        self.assertIn("Closed Posting Registry", html)
+        self.assertIn("Answer Memory Index", html)
+        self.assertIn("No longer accepting applications", html)
         self.assertIn("Problem Buckets", html)
         self.assertIn("Real Platform Shortfalls", html)
         self.assertIn("Collection Tasks", html)
@@ -4944,10 +4999,16 @@ class JobApplyAgentTests(unittest.TestCase):
                 learning_tasks,
                 xlsx_output,
                 html_output,
+                source_artifacts=source_artifacts,
+                synthetic_browser_execution=synthetic_browser_execution,
+                answer_memory=answer_memory,
+                closed_jobs=closed_jobs,
             )
 
             self.assertEqual(len(result["question_rows"]), 2)
             self.assertEqual(result["problem_buckets"][0]["coverage_status"], "needs_user_confirmation")
+            self.assertEqual(result["summary"]["answer_memory_count"], 1)
+            self.assertEqual(result["summary"]["closed_posting_count"], 1)
             self.assertTrue(xlsx_output.exists())
             self.assertTrue(html_output.exists())
             with zipfile.ZipFile(xlsx_output) as workbook:
@@ -4956,13 +5017,19 @@ class JobApplyAgentTests(unittest.TestCase):
                 self.assertIn("xl/worksheets/sheet1.xml", names)
                 self.assertIn("xl/worksheets/sheet2.xml", names)
                 self.assertIn("xl/worksheets/sheet6.xml", names)
-                self.assertIn("xl/worksheets/sheet11.xml", names)
-                problem_buckets = workbook.read("xl/worksheets/sheet2.xml").decode("utf-8")
+                self.assertIn("xl/worksheets/sheet17.xml", names)
+                source_sheet = workbook.read("xl/worksheets/sheet2.xml").decode("utf-8")
+                self.assertIn("Answer gaps", source_sheet)
+                synthetic_sheet = workbook.read("xl/worksheets/sheet3.xml").decode("utf-8")
+                self.assertIn("local_synthetic_browser_action_executor", synthetic_sheet)
+                problem_buckets = workbook.read("xl/worksheets/sheet6.xml").decode("utf-8")
                 self.assertIn("needs_user_confirmation", problem_buckets)
-                user_questions = workbook.read("xl/worksheets/sheet3.xml").decode("utf-8")
+                user_questions = workbook.read("xl/worksheets/sheet7.xml").decode("utf-8")
                 self.assertIn("Have you worked at DoorDash?", user_questions)
-                platform_shortfalls = workbook.read("xl/worksheets/sheet8.xml").decode("utf-8")
+                platform_shortfalls = workbook.read("xl/worksheets/sheet12.xml").decode("utf-8")
                 self.assertIn("Greenhouse", platform_shortfalls)
+                closed_postings = workbook.read("xl/worksheets/sheet17.xml").decode("utf-8")
+                self.assertIn("No longer accepting applications", closed_postings)
 
 
 if __name__ == "__main__":

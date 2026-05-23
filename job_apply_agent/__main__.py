@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .core import (
@@ -503,6 +504,12 @@ def main() -> int:
     export_questions_parser.add_argument("--coverage-gate-json", default=str(DEFAULT_COVERAGE_GATE_JSON))
     export_questions_parser.add_argument("--collection-plan-json", default=str(DEFAULT_COLLECTION_PLAN_JSON))
     export_questions_parser.add_argument("--learning-tasks-json", default=str(DEFAULT_LEARNING_TASKS_JSON))
+    export_questions_parser.add_argument(
+        "--synthetic-browser-exec-json",
+        default=str(DEFAULT_SYNTHETIC_BROWSER_EXEC_JSON),
+    )
+    export_questions_parser.add_argument("--answer-memory-json", default=str(DEFAULT_MEMORY))
+    export_questions_parser.add_argument("--closed-jobs-json", default=str(DEFAULT_CLOSED_JOBS))
     export_questions_parser.add_argument("--xlsx-output", default=str(DEFAULT_QUESTION_EXPORT_XLSX))
     export_questions_parser.add_argument("--html-output", default=str(DEFAULT_QUESTION_EXPORT_HTML))
 
@@ -628,6 +635,21 @@ def main() -> int:
             learning_tasks,
             args.xlsx_output,
             args.html_output,
+            source_artifacts=_question_export_source_artifacts(
+                {
+                    "Answer gaps": args.gaps_json,
+                    "Automation readiness": args.readiness_json,
+                    "Research coverage gate": args.coverage_gate_json,
+                    "Collection plan": args.collection_plan_json,
+                    "Learning tasks": args.learning_tasks_json,
+                    "Synthetic browser execution": args.synthetic_browser_exec_json,
+                    "Answer memory": args.answer_memory_json,
+                    "Closed postings": args.closed_jobs_json,
+                }
+            ),
+            synthetic_browser_execution=_load_optional_json(args.synthetic_browser_exec_json),
+            answer_memory=_load_optional_json(args.answer_memory_json),
+            closed_jobs=_load_optional_json(args.closed_jobs_json),
         )
         print(f"Wrote question Excel to {args.xlsx_output}")
         print(f"Wrote question HTML to {args.html_output}")
@@ -1188,6 +1210,26 @@ def _load_optional_json(path_value: str | None) -> dict | None:
         return None
     payload = json.loads(path.read_text(encoding="utf-8"))
     return payload if isinstance(payload, dict) else None
+
+
+def _question_export_source_artifacts(paths: dict[str, str]) -> list[dict[str, object]]:
+    artifacts: list[dict[str, object]] = []
+    for name, path_value in paths.items():
+        path = Path(path_value)
+        exists = path.exists()
+        stat = path.stat() if exists else None
+        artifacts.append(
+            {
+                "name": name,
+                "path": str(path.resolve()),
+                "exists": exists,
+                "size_bytes": stat.st_size if stat else 0,
+                "updated_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat()
+                if stat
+                else "",
+            }
+        )
+    return artifacts
 
 
 def _discover_browser_action_manifests(outbox_dir: str | Path) -> list[Path]:

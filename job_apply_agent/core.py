@@ -4969,6 +4969,10 @@ def write_question_export(
     learning_tasks: dict[str, Any],
     xlsx_output: str | Path,
     html_output: str | Path,
+    source_artifacts: list[dict[str, Any]] | None = None,
+    synthetic_browser_execution: dict[str, Any] | None = None,
+    answer_memory: dict[str, Any] | None = None,
+    closed_jobs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     export = build_question_export(
         gaps,
@@ -4976,6 +4980,10 @@ def write_question_export(
         coverage_gate,
         collection_plan,
         learning_tasks,
+        source_artifacts=source_artifacts,
+        synthetic_browser_execution=synthetic_browser_execution,
+        answer_memory=answer_memory,
+        closed_jobs=closed_jobs,
     )
     xlsx_path = Path(xlsx_output)
     html_path = Path(html_output)
@@ -4993,6 +5001,10 @@ def build_question_export(
     coverage_gate: dict[str, Any],
     collection_plan: dict[str, Any],
     learning_tasks: dict[str, Any],
+    source_artifacts: list[dict[str, Any]] | None = None,
+    synthetic_browser_execution: dict[str, Any] | None = None,
+    answer_memory: dict[str, Any] | None = None,
+    closed_jobs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     question_rows = [_question_export_row(item) for item in gaps.get("prompt_statuses", [])]
     blocker_rows = [_question_export_row(item) for item in gaps.get("blocking_prompts", [])]
@@ -5000,6 +5012,24 @@ def build_question_export(
     user_questions = [_learning_task_export_row(task) for task in learning_tasks.get("tasks", [])]
     manual_gates = [_manual_gate_export_row(item) for item in readiness.get("manual_gates", [])]
     positions = [_position_export_row(item) for item in readiness.get("positions", [])]
+    source_artifact_rows = _source_artifact_export_rows(source_artifacts or [])
+    synthetic_execution_rows = _synthetic_execution_export_rows(
+        coverage_gate,
+        synthetic_browser_execution,
+    )
+    synthetic_policy_stop_rows = _mapping_dict_rows(
+        (synthetic_browser_execution or {}).get("policy_stop_counts", {}),
+        "policy_stop",
+        "count",
+    )
+    synthetic_platform_role_rows = _mapping_dict_rows(
+        (synthetic_browser_execution or {}).get("platform_role_counts")
+        or ((coverage_gate.get("synthetic") or {}).get("platform_role_counts") or {}),
+        "platform_role",
+        "count",
+    )
+    answer_memory_rows = _answer_memory_export_rows(answer_memory)
+    closed_posting_rows = _closed_posting_export_rows(closed_jobs)
     collection_targets = [
         {
             "platform": target.get("platform"),
@@ -5049,10 +5079,18 @@ def build_question_export(
             (coverage_gate.get("synthetic") or {}).get("expected_blocker_count") or 0
         ),
         "real_submit_count": 0,
+        "answer_memory_count": len(answer_memory_rows),
+        "closed_posting_count": len(closed_posting_rows),
     }
     return {
         "generated_at": summary["generated_at"],
         "summary": summary,
+        "source_artifacts": source_artifact_rows,
+        "synthetic_execution": synthetic_execution_rows,
+        "synthetic_policy_stops": synthetic_policy_stop_rows,
+        "synthetic_platform_roles": synthetic_platform_role_rows,
+        "answer_memory": answer_memory_rows,
+        "closed_postings": closed_posting_rows,
         "coverage_counts": gaps.get("coverage_counts", {}),
         "readiness_counts": readiness.get("readiness_counts", {}),
         "real_platform_counts": coverage_gate.get("real_platform_counts", {}),
@@ -5099,8 +5137,25 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                 ("Blocking prompts", summary.get("blocking_prompt_count", 0)),
                 ("Learning tasks", summary.get("learning_task_count", 0)),
                 ("Manual gates", summary.get("manual_gate_count", 0)),
+                ("Closed postings", summary.get("closed_posting_count", 0)),
+                ("Stored answers", summary.get("answer_memory_count", 0)),
             ]
         ),
+        "<section><h2>Source Artifacts</h2>",
+        _html_table(
+            ["Name", "Path", "Exists", "Size bytes", "Updated at"],
+            [
+                [
+                    row.get("name"),
+                    row.get("path"),
+                    _yes_no(row.get("exists")),
+                    row.get("size_bytes"),
+                    row.get("updated_at"),
+                ]
+                for row in export.get("source_artifacts", [])
+            ],
+        ),
+        "</section>",
         "<section><h2>Automation Gate</h2>",
         _html_table(
             ["Check", "Status"],
@@ -5127,6 +5182,24 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                 ["Expected synthetic blocker count", summary.get("expected_synthetic_blocker_count", 0)],
                 ["Actual real submit count", summary.get("real_submit_count", 0)],
             ],
+        ),
+        "</section>",
+        "<section><h2>Synthetic Browser Execution</h2>",
+        _html_table(
+            ["Metric", "Value"],
+            [[row.get("metric"), row.get("value")] for row in export.get("synthetic_execution", [])],
+        ),
+        "</section>",
+        "<section><h2>Synthetic Policy Stops</h2>",
+        _html_table(
+            ["Policy stop", "Count"],
+            [[row.get("policy_stop"), row.get("count")] for row in export.get("synthetic_policy_stops", [])],
+        ),
+        "</section>",
+        "<section><h2>Synthetic Platform Role Counts</h2>",
+        _html_table(
+            ["Platform role", "Count"],
+            [[row.get("platform_role"), row.get("count")] for row in export.get("synthetic_platform_roles", [])],
         ),
         "</section>",
         "<section><h2>Problem Buckets</h2>",
@@ -5294,6 +5367,64 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                     row.get("next_action"),
                 ]
                 for row in export.get("manual_gates", [])
+            ],
+        ),
+        "</section>",
+        "<section><h2>Answer Memory Index</h2>",
+        _html_table(
+            [
+                "Normalized question",
+                "Sample question",
+                "Source",
+                "Approved count",
+                "First seen",
+                "Last seen",
+                "Example job",
+                "Answer stored",
+            ],
+            [
+                [
+                    row.get("normalized_question"),
+                    row.get("sample_question"),
+                    row.get("source"),
+                    row.get("approved_count"),
+                    row.get("first_seen_at"),
+                    row.get("last_seen_at"),
+                    row.get("example_job"),
+                    _yes_no(row.get("answer_stored")),
+                ]
+                for row in export.get("answer_memory", [])
+            ],
+        ),
+        "</section>",
+        "<section><h2>Closed Posting Registry</h2>",
+        _html_table(
+            [
+                "Key",
+                "Status",
+                "Reason",
+                "Source",
+                "Platform",
+                "Company",
+                "Title",
+                "URL",
+                "Last seen",
+                "Seen count",
+            ],
+            [
+                [
+                    row.get("key"),
+                    row.get("status"),
+                    row.get("reason"),
+                    row.get("source"),
+                    row.get("platform"),
+                    row.get("company"),
+                    row.get("title"),
+                    row.get("short_apply_url"),
+                    row.get("last_seen_at"),
+                    row.get("seen_count"),
+                ]
+                for row in export.get("closed_postings", [])
             ],
         ),
         "</section>",
@@ -10750,6 +10881,166 @@ def _question_problem_bucket_rows(rows: list[dict[str, Any]]) -> list[dict[str, 
     return result
 
 
+def _source_artifact_export_rows(artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for artifact in artifacts:
+        rows.append(
+            {
+                "name": artifact.get("name"),
+                "path": artifact.get("path"),
+                "exists": bool(artifact.get("exists")),
+                "size_bytes": int(artifact.get("size_bytes") or 0),
+                "updated_at": artifact.get("updated_at") or "",
+            }
+        )
+    return rows
+
+
+def _synthetic_execution_export_rows(
+    coverage_gate: dict[str, Any],
+    synthetic_browser_execution: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    synthetic = (coverage_gate.get("synthetic") or {}).copy()
+    if synthetic_browser_execution:
+        synthetic.update(
+            {
+                key: synthetic_browser_execution.get(key)
+                for key in [
+                    "generated_at",
+                    "execution",
+                    "requested_count",
+                    "run_count",
+                    "per_platform_role_target",
+                    "platform_role_target_achieved",
+                    "local_synthetic_submit_allowed",
+                    "actual_submit_count",
+                    "would_submit_count",
+                    "eligible_submit_target_count",
+                    "eligible_submit_count",
+                    "eligible_submit_achieved",
+                    "expected_blocker_count",
+                    "real_platform_submission",
+                    "selector_miss_count",
+                    "executed_action_count",
+                    "stop_action_count",
+                    "synthetic_gate_answer_count",
+                ]
+                if synthetic_browser_execution.get(key) is not None
+            }
+        )
+    keys = [
+        "generated_at",
+        "execution",
+        "requested_count",
+        "run_count",
+        "per_platform_role_target",
+        "platform_role_target_achieved",
+        "local_synthetic_submit_allowed",
+        "actual_submit_count",
+        "would_submit_count",
+        "eligible_submit_target_count",
+        "eligible_submit_count",
+        "eligible_submit_achieved",
+        "expected_blocker_count",
+        "real_platform_submission",
+        "selector_miss_count",
+        "executed_action_count",
+        "stop_action_count",
+        "synthetic_gate_answer_count",
+    ]
+    return [{"metric": key, "value": synthetic.get(key, "")} for key in keys if key in synthetic]
+
+
+def _mapping_dict_rows(values: dict[str, Any], key_name: str, value_name: str) -> list[dict[str, Any]]:
+    return [
+        {key_name: key, value_name: value}
+        for key, value in sorted((values or {}).items(), key=lambda item: str(item[0]))
+    ]
+
+
+def _answer_memory_export_rows(answer_memory: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not answer_memory:
+        return []
+    entries = answer_memory.get("answers") or []
+    if isinstance(entries, dict):
+        iterable = entries.values()
+    elif isinstance(entries, list):
+        iterable = entries
+    else:
+        iterable = []
+    rows: list[dict[str, Any]] = []
+    for entry in iterable:
+        if not isinstance(entry, dict):
+            continue
+        example = entry.get("example_job") or {}
+        if isinstance(example, dict):
+            example_job = " | ".join(
+                part
+                for part in [
+                    str(example.get("platform") or "").strip(),
+                    str(example.get("company") or "").strip(),
+                    str(example.get("title") or "").strip(),
+                    str(example.get("job_id") or "").strip(),
+                ]
+                if part
+            )
+        else:
+            example_job = ""
+        rows.append(
+            {
+                "normalized_question": entry.get("normalized_question"),
+                "sample_question": entry.get("sample_question"),
+                "source": entry.get("source"),
+                "approved_count": entry.get("approved_count", 0),
+                "first_seen_at": entry.get("first_seen_at"),
+                "last_seen_at": entry.get("last_seen_at"),
+                "example_job": example_job,
+                "answer_stored": bool(entry.get("answer")),
+            }
+        )
+    return rows
+
+
+def _closed_posting_export_rows(closed_jobs: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not closed_jobs:
+        return []
+    entries = closed_jobs.get("jobs") or []
+    if isinstance(entries, dict):
+        iterable = entries.values()
+    elif isinstance(entries, list):
+        iterable = entries
+    else:
+        iterable = []
+    rows: list[dict[str, Any]] = []
+    for entry in iterable:
+        if not isinstance(entry, dict):
+            continue
+        rows.append(
+            {
+                "key": entry.get("key"),
+                "status": entry.get("status"),
+                "reason": entry.get("reason"),
+                "source": entry.get("source"),
+                "first_seen_at": entry.get("first_seen_at"),
+                "last_seen_at": entry.get("last_seen_at"),
+                "seen_count": entry.get("seen_count", 0),
+                "platform": entry.get("platform"),
+                "job_id": entry.get("job_id"),
+                "company": entry.get("company"),
+                "title": entry.get("title"),
+                "short_apply_url": entry.get("short_apply_url"),
+            }
+        )
+    rows.sort(
+        key=lambda row: (
+            str(row.get("platform") or ""),
+            str(row.get("company") or ""),
+            str(row.get("title") or ""),
+        )
+    )
+    return rows
+
+
 def _question_export_row(item: dict[str, Any]) -> dict[str, Any]:
     return {
         "coverage_status": item.get("coverage_status"),
@@ -10829,6 +11120,10 @@ def _position_export_row(item: dict[str, Any]) -> dict[str, Any]:
 def _write_question_export_xlsx(export: dict[str, Any], path: Path) -> None:
     sheets = [
         ("Summary", _question_export_summary_rows(export)),
+        ("Source Artifacts", _table_rows(export.get("source_artifacts", []))),
+        ("Synthetic Execution", _table_rows(export.get("synthetic_execution", []))),
+        ("Synthetic Stops", _table_rows(export.get("synthetic_policy_stops", []))),
+        ("Synthetic Roles", _table_rows(export.get("synthetic_platform_roles", []))),
         ("Problem Buckets", _table_rows(export.get("problem_buckets", []))),
         ("User Questions", _table_rows(export.get("user_questions", []))),
         ("Blocking Prompts", _table_rows(export.get("blocker_rows", []))),
@@ -10839,6 +11134,8 @@ def _write_question_export_xlsx(export: dict[str, Any], path: Path) -> None:
         ("Collection Targets", _table_rows(export.get("collection_targets", []))),
         ("Collection Tasks", _table_rows(export.get("collection_tasks", []))),
         ("Manual Gates", _table_rows(export.get("manual_gates", []))),
+        ("Answer Memory", _table_rows(export.get("answer_memory", []))),
+        ("Closed Postings", _table_rows(export.get("closed_postings", []))),
     ]
     sheet_names = [_safe_sheet_name(name) for name, _rows in sheets]
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
