@@ -39,6 +39,7 @@ from .core import (
     notify_telegram_for_submissions,
     open_apply_urls_in_browser,
     record_closed_job,
+    render_final_answer_blocker_report_html,
     render_final_answer_blocker_report_markdown,
     render_critical_input_answer_workflow_markdown,
     render_final_answer_intake_template_html,
@@ -225,6 +226,12 @@ DEFAULT_FINAL_ANSWER_BLOCKERS_JSON = (
 )
 DEFAULT_FINAL_ANSWER_BLOCKERS_MARKDOWN = (
     Path(__file__).with_name("outbox") / "final_answer_blockers_latest.md"
+)
+DEFAULT_FINAL_ANSWER_BLOCKERS_HTML = (
+    Path(__file__).with_name("outbox") / "final_answer_blockers_latest.html"
+)
+DEFAULT_FINAL_ANSWER_BLOCKERS_XLSX = (
+    Path(__file__).with_name("outbox") / "final_answer_blockers_latest.xlsx"
 )
 DEFAULT_FINAL_ANSWER_REPLY_TEMPLATE_TEXT = (
     Path(__file__).with_name("outbox") / "final_answer_reply_template_latest.txt"
@@ -1137,6 +1144,14 @@ def main() -> int:
         default=str(DEFAULT_FINAL_ANSWER_BLOCKERS_MARKDOWN),
     )
     final_answer_blockers_parser.add_argument(
+        "--html-output",
+        default=str(DEFAULT_FINAL_ANSWER_BLOCKERS_HTML),
+    )
+    final_answer_blockers_parser.add_argument(
+        "--xlsx-output",
+        default=str(DEFAULT_FINAL_ANSWER_BLOCKERS_XLSX),
+    )
+    final_answer_blockers_parser.add_argument(
         "--reply-template-output",
         default=str(DEFAULT_FINAL_ANSWER_REPLY_TEMPLATE_TEXT),
     )
@@ -1991,6 +2006,22 @@ def main() -> int:
         default=str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_MARKDOWN),
     )
     export_questions_parser.add_argument(
+        "--final-answer-blockers-json",
+        default=str(DEFAULT_FINAL_ANSWER_BLOCKERS_JSON),
+    )
+    export_questions_parser.add_argument(
+        "--final-answer-blockers-markdown",
+        default=str(DEFAULT_FINAL_ANSWER_BLOCKERS_MARKDOWN),
+    )
+    export_questions_parser.add_argument(
+        "--final-answer-blockers-html",
+        default=str(DEFAULT_FINAL_ANSWER_BLOCKERS_HTML),
+    )
+    export_questions_parser.add_argument(
+        "--final-answer-blockers-xlsx",
+        default=str(DEFAULT_FINAL_ANSWER_BLOCKERS_XLSX),
+    )
+    export_questions_parser.add_argument(
         "--post-answer-pipeline-json",
         default=str(DEFAULT_POST_ANSWER_PIPELINE_JSON),
     )
@@ -2330,6 +2361,10 @@ def main() -> int:
                     "Final answer intake template HTML": args.final_answer_intake_template_html,
                     "Final answer intake report": args.final_answer_intake_report_json,
                     "Final answer intake report Markdown": args.final_answer_intake_report_markdown,
+                    "Final answer blockers": args.final_answer_blockers_json,
+                    "Final answer blockers Markdown": args.final_answer_blockers_markdown,
+                    "Final answer blockers HTML": args.final_answer_blockers_html,
+                    "Final answer blockers XLSX": args.final_answer_blockers_xlsx,
                     "Post-answer pipeline": args.post_answer_pipeline_json,
                     "Post-answer pipeline Markdown": args.post_answer_pipeline_markdown,
                     "Submission safety audit": args.submission_safety_audit_json,
@@ -3198,10 +3233,14 @@ def main() -> int:
             args.json_output,
             args.markdown_output,
             args.reply_template_output,
+            args.html_output,
+            args.xlsx_output,
         )
         summary = report.get("summary") or {}
         print(f"Wrote final answer blockers JSON to {args.json_output}")
         print(f"Wrote final answer blockers Markdown to {args.markdown_output}")
+        print(f"Wrote final answer blockers HTML to {args.html_output}")
+        print(f"Wrote final answer blockers XLSX to {args.xlsx_output}")
         print(f"Wrote final answer reply template to {args.reply_template_output}")
         print(f"Blockers: {summary.get('blocker_count', 0)}")
         print(f"Missing answers: {summary.get('missing_answer_count', 0)}")
@@ -3224,6 +3263,10 @@ def main() -> int:
             )
             Path(args.markdown_output).write_text(
                 render_final_answer_blocker_report_markdown(report),
+                encoding="utf-8",
+            )
+            Path(args.html_output).write_text(
+                render_final_answer_blocker_report_html(report),
                 encoding="utf-8",
             )
             if result.get("skipped"):
@@ -6298,6 +6341,8 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             DEFAULT_FINAL_ANSWER_BLOCKERS_JSON,
             DEFAULT_FINAL_ANSWER_BLOCKERS_MARKDOWN,
             DEFAULT_FINAL_ANSWER_REPLY_TEMPLATE_TEXT,
+            DEFAULT_FINAL_ANSWER_BLOCKERS_HTML,
+            DEFAULT_FINAL_ANSWER_BLOCKERS_XLSX,
         )
     apply_queue = write_apply_queue_readiness(
         DEFAULT_AUTOFILL_BATCH_JSON,
@@ -6420,6 +6465,8 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                 "Final answer intake report Markdown": str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_MARKDOWN),
                 "Final answer blockers": str(DEFAULT_FINAL_ANSWER_BLOCKERS_JSON),
                 "Final answer blockers Markdown": str(DEFAULT_FINAL_ANSWER_BLOCKERS_MARKDOWN),
+                "Final answer blockers HTML": str(DEFAULT_FINAL_ANSWER_BLOCKERS_HTML),
+                "Final answer blockers XLSX": str(DEFAULT_FINAL_ANSWER_BLOCKERS_XLSX),
                 "Final answer reply template": str(DEFAULT_FINAL_ANSWER_REPLY_TEMPLATE_TEXT),
                 "Apply queue": str(DEFAULT_APPLY_QUEUE_JSON),
                 "Apply queue HTML": str(DEFAULT_APPLY_QUEUE_HTML),
@@ -6504,6 +6551,8 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                     "Final answer intake report Markdown": str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_MARKDOWN),
                     "Final answer blockers": str(DEFAULT_FINAL_ANSWER_BLOCKERS_JSON),
                     "Final answer blockers Markdown": str(DEFAULT_FINAL_ANSWER_BLOCKERS_MARKDOWN),
+                    "Final answer blockers HTML": str(DEFAULT_FINAL_ANSWER_BLOCKERS_HTML),
+                    "Final answer blockers XLSX": str(DEFAULT_FINAL_ANSWER_BLOCKERS_XLSX),
                     "Final answer reply template": str(DEFAULT_FINAL_ANSWER_REPLY_TEMPLATE_TEXT),
                 }
             ),

@@ -15673,7 +15673,7 @@ def _goal_next_actions(
                 "`python3 -m job_apply_agent final-answer-autopilot --reply-stdin --apply --live-check --include-values --fail-on-not-ready`."
             )
             actions.append(
-                "If you want the compact prompt again, run `python3 -m job_apply_agent final-answer-blockers --notify-telegram --telegram-dry-run` before filling the reply file."
+                "If you want the compact prompt and worksheet again, run `python3 -m job_apply_agent final-answer-blockers --print-minimal-reply` before filling the reply."
             )
         else:
             actions.append(
@@ -16751,8 +16751,8 @@ def _automation_handoff_confirmed_answer_runbook(summary: dict[str, Any]) -> lis
             "step": 1,
             "name": "Confirm final answer blanks",
             "status": "waiting_for_user" if final_blanks else "ready",
-            "action": "python3 -m job_apply_agent final-answer-blockers --print-minimal-reply, then paste truthful values through --reply-stdin.",
-            "expected_result": f"{final_blanks} final blanks are captured in stdin/reply-file format without sending answer text.",
+            "action": "python3 -m job_apply_agent final-answer-blockers --print-minimal-reply, review the generated HTML/XLSX worksheet, then paste truthful values through --reply-stdin.",
+            "expected_result": f"{final_blanks} final blanks are captured in stdin/reply-file format without sending answer text; blocker HTML/XLSX are refreshed.",
         },
         {
             "step": 2,
@@ -21842,15 +21842,28 @@ def write_final_answer_blocker_report(
     json_output: str | Path,
     markdown_output: str | Path,
     reply_template_output: str | Path | None = None,
+    html_output: str | Path | None = None,
+    xlsx_output: str | Path | None = None,
 ) -> dict[str, Any]:
     report = build_final_answer_blocker_report(template, goal_audit=goal_audit)
     json_path = Path(json_output)
     markdown_path = Path(markdown_output)
     reply_template_path = Path(reply_template_output) if reply_template_output else None
-    for output_path in [path for path in [json_path, markdown_path, reply_template_path] if path]:
+    html_path = Path(html_output) if html_output else None
+    xlsx_path = Path(xlsx_output) if xlsx_output else None
+    for output_path in [path for path in [json_path, markdown_path, reply_template_path, html_path, xlsx_path] if path]:
         output_path.parent.mkdir(parents=True, exist_ok=True)
+    report["outputs"] = {
+        "json": str(json_path),
+        "markdown": str(markdown_path),
+    }
     if reply_template_path:
+        report["outputs"]["reply_template"] = str(reply_template_path)
         report["reply_template_output"] = str(reply_template_path)
+    if html_path:
+        report["outputs"]["html"] = str(html_path)
+    if xlsx_path:
+        report["outputs"]["xlsx"] = str(xlsx_path)
     json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
     markdown_path.write_text(render_final_answer_blocker_report_markdown(report), encoding="utf-8")
     if reply_template_path:
@@ -21858,6 +21871,10 @@ def write_final_answer_blocker_report(
             render_final_answer_reply_template_text(report),
             encoding="utf-8",
         )
+    if html_path:
+        html_path.write_text(render_final_answer_blocker_report_html(report), encoding="utf-8")
+    if xlsx_path:
+        _write_final_answer_blocker_xlsx(report, xlsx_path)
     return report
 
 
@@ -22145,6 +22162,135 @@ def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
     for key, value in sorted((report.get("policy") or {}).items()):
         lines.append(f"- {key}: {str(bool(value)).lower()}")
     return "\n".join(lines) + "\n"
+
+
+def render_final_answer_blocker_report_html(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    blockers = report.get("blockers") or []
+    observed_rows: list[list[Any]] = []
+    for row in blockers:
+        examples = row.get("observed_prompt_examples") or []
+        platforms = ", ".join(str(platform) for platform in row.get("platforms") or [])
+        if not examples:
+            observed_rows.append([row.get("alias"), platforms, "", "No prompt examples captured"])
+            continue
+        for index, example in enumerate(examples[:8], start=1):
+            observed_rows.append([row.get("alias"), platforms, index, example])
+    return "\n".join(
+        [
+            "<!doctype html>",
+            '<html lang="en">',
+            "<head>",
+            '<meta charset="utf-8">',
+            '<meta name="viewport" content="width=device-width, initial-scale=1">',
+            "<title>Final Answer Blockers</title>",
+            "<style>",
+            _question_export_css(),
+            "</style>",
+            "</head>",
+            "<body>",
+            "<main>",
+            "<h1>Final Answer Blockers</h1>",
+            f"<p class=\"muted\">Generated: {_html_escape(report.get('generated_at'))}</p>",
+            _html_kpis(
+                [
+                    ("Goal status", summary.get("goal_status") or "unknown"),
+                    ("Blockers", summary.get("blocker_count", 0)),
+                    ("Missing answers", summary.get("missing_answer_count", 0)),
+                    ("High-risk answers", summary.get("high_risk_count", 0)),
+                    ("Unconfirmed high-risk", summary.get("unconfirmed_high_risk_count", 0)),
+                    ("Selected queue ready", _yes_no(summary.get("selected_queue_supervised_autofill_ready"))),
+                    ("Position answers left", summary.get("position_execution_remaining_user_answers", 0)),
+                    ("Global answers left", summary.get("position_execution_global_remaining_user_answers", 0)),
+                    ("Text reply rehearsed", _yes_no(summary.get("post_answer_text_reply_rehearsal_ready"))),
+                    ("Synthetic queue ready", _yes_no(summary.get("post_answer_synthetic_queue_rehearsal_ready"))),
+                    ("Synthetic selected", summary.get("post_answer_synthetic_autofill_selected_count", 0)),
+                    ("Final-submit stops", summary.get("post_answer_synthetic_final_submit_stop_count", 0)),
+                ]
+            ),
+            "<section><h2>Answer Capture Boundary</h2>",
+            _html_table(
+                ["Rule", "Value"],
+                [
+                    ["Stores real answer text", "no"],
+                    ["Sends real answer text to Telegram", "no"],
+                    ["Submits real applications", "no"],
+                    ["Final submit remains supervised", "yes"],
+                    ["Preferred direct command", report.get("automation_after_answers", {}).get("next_autopilot_reply_text_command", "")],
+                ],
+            ),
+            "</section>",
+            "<section><h2>Blocking Questions</h2>",
+            _html_table(
+                [
+                    "Alias",
+                    "Status",
+                    "High risk",
+                    "Required prompts",
+                    "Question",
+                    "Required response",
+                    "Specificity hint",
+                    "Example shape",
+                    "Why not inferred",
+                    "Answer placeholder",
+                    "Confirmation line",
+                ],
+                [
+                    [
+                        row.get("alias"),
+                        row.get("status"),
+                        _yes_no(row.get("high_risk")),
+                        row.get("required_count"),
+                        row.get("question"),
+                        row.get("required_user_response"),
+                        row.get("answer_specificity_hint"),
+                        row.get("answer_example_shape"),
+                        row.get("why_not_inferred"),
+                        "<fill>",
+                        f"{row.get('alias')}_confirmed: yes" if row.get("high_risk") else "",
+                    ]
+                    for row in blockers
+                ],
+            ),
+            "</section>",
+            "<section><h2>Observed Prompt Examples</h2>",
+            _html_table(["Alias", "Platforms", "Example #", "Prompt"], observed_rows),
+            "</section>",
+            "<section><h2>Minimal Reply Prompt</h2>",
+            (
+                "<pre>"
+                + _html_escape(str(report.get("minimal_reply_prompt") or ""))
+                + "</pre>"
+                if report.get("minimal_reply_prompt")
+                else "<p class=\"muted\">None</p>"
+            ),
+            "</section>",
+            "<section><h2>Reply Template</h2>",
+            (
+                "<pre>"
+                + _html_escape(str(report.get("reply_template") or ""))
+                + "</pre>"
+                if report.get("reply_template")
+                else "<p class=\"muted\">None</p>"
+            ),
+            "</section>",
+            "<section><h2>Next Commands</h2>",
+            _html_table(
+                ["#", "Command"],
+                [[index, command] for index, command in enumerate(report.get("next_commands") or [], start=1)],
+            ),
+            "</section>",
+            "<section><h2>Outputs</h2>",
+            _html_table(
+                ["Artifact", "Path"],
+                [[key, value] for key, value in sorted((report.get("outputs") or {}).items())],
+            ),
+            "</section>",
+            "</main>",
+            "</body>",
+            "</html>",
+        ]
+    )
 
 
 def build_telegram_final_answer_blocker_alert(
@@ -29245,6 +29391,120 @@ def _write_question_export_xlsx(export: dict[str, Any], path: Path) -> None:
                 f"xl/worksheets/sheet{index}.xml",
                 _xlsx_sheet(rows, freeze_header=index != 1),
             )
+
+
+def _write_final_answer_blocker_xlsx(report: dict[str, Any], path: Path) -> None:
+    blockers = report.get("blockers") or []
+    observed_rows: list[dict[str, Any]] = []
+    for row in blockers:
+        examples = row.get("observed_prompt_examples") or []
+        platforms = ", ".join(str(platform) for platform in row.get("platforms") or [])
+        if not examples:
+            observed_rows.append(
+                {
+                    "alias": row.get("alias"),
+                    "platforms": platforms,
+                    "example_index": "",
+                    "prompt": "No prompt examples captured",
+                }
+            )
+            continue
+        for index, example in enumerate(examples[:8], start=1):
+            observed_rows.append(
+                {
+                    "alias": row.get("alias"),
+                    "platforms": platforms,
+                    "example_index": index,
+                    "prompt": example,
+                }
+            )
+    answer_rows = [
+        {
+            "alias": row.get("alias"),
+            "status": row.get("status"),
+            "high_risk": bool(row.get("high_risk")),
+            "required_prompts": row.get("required_count"),
+            "question": row.get("question"),
+            "required_user_response": row.get("required_user_response"),
+            "answer_format_hint": row.get("answer_format_hint"),
+            "specificity_hint": row.get("answer_specificity_hint"),
+            "example_shape": row.get("answer_example_shape"),
+            "why_not_inferred": row.get("why_not_inferred"),
+            "user_answer_placeholder": "<fill>",
+            "confirmation_line": f"{row.get('alias')}_confirmed: yes" if row.get("high_risk") else "",
+        }
+        for row in blockers
+    ]
+    reply_rows = [
+        {"line_number": index, "line": line, "purpose": "fill and confirm" if line.endswith("\u786e\u8ba4") else "fill"}
+        for index, line in enumerate(report.get("reply_template_lines") or [], start=1)
+    ]
+    minimal_rows = [
+        {"line_number": index, "line": line}
+        for index, line in enumerate(report.get("minimal_reply_prompt_lines") or [], start=1)
+    ]
+    command_rows = [
+        {"step": index, "command": command}
+        for index, command in enumerate(report.get("next_commands") or [], start=1)
+    ]
+    sheets = [
+        ("Summary", _final_answer_blocker_summary_rows(report)),
+        ("Answer Entry", _table_rows(answer_rows)),
+        ("Observed Prompts", _table_rows(observed_rows)),
+        ("Minimal Reply", _table_rows(minimal_rows)),
+        ("Reply Template", _table_rows(reply_rows)),
+        ("Next Commands", _table_rows(command_rows)),
+        ("Policy", _mapping_rows(report.get("policy") or {}, "Policy", "Value")),
+        ("Outputs", _mapping_rows(report.get("outputs") or {}, "Artifact", "Path")),
+    ]
+    sheet_names = [_safe_sheet_name(name) for name, _rows in sheets]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", _xlsx_content_types(len(sheets)))
+        archive.writestr("_rels/.rels", _xlsx_root_rels())
+        archive.writestr("docProps/core.xml", _xlsx_core_props(report.get("generated_at")))
+        archive.writestr("docProps/app.xml", _xlsx_app_props(sheet_names))
+        archive.writestr("xl/workbook.xml", _xlsx_workbook(sheet_names))
+        archive.writestr("xl/_rels/workbook.xml.rels", _xlsx_workbook_rels(len(sheets)))
+        archive.writestr("xl/styles.xml", _xlsx_styles())
+        for index, (_name, rows) in enumerate(sheets, start=1):
+            archive.writestr(
+                f"xl/worksheets/sheet{index}.xml",
+                _xlsx_sheet(rows, freeze_header=index != 1),
+            )
+
+
+def _final_answer_blocker_summary_rows(report: dict[str, Any]) -> list[list[Any]]:
+    summary = report.get("summary") or {}
+    automation = report.get("automation_after_answers") or {}
+    rows: list[list[Any]] = [
+        ["Metric", "Value"],
+        ["generated_at", report.get("generated_at")],
+        ["source", report.get("source")],
+        ["ready_for_post_answer_pipeline", bool(report.get("ready_for_post_answer_pipeline"))],
+        ["ready_after_truthful_answer_reply", bool(report.get("ready_after_truthful_answer_reply"))],
+    ]
+    for key, value in summary.items():
+        rows.append([key, value])
+    rows.extend(
+        [
+            [],
+            ["Automation after answers", "Value"],
+            ["status", automation.get("status")],
+            ["selected_queue_supervised_autofill_ready", automation.get("selected_queue_supervised_autofill_ready")],
+            ["selected_queue_remaining_user_answers", automation.get("selected_queue_remaining_user_answers")],
+            ["global_remaining_user_answers", automation.get("global_remaining_user_answers")],
+            ["text_reply_rehearsal_ready", automation.get("text_reply_rehearsal_ready")],
+            ["synthetic_queue_rehearsal_ready", automation.get("synthetic_queue_rehearsal_ready")],
+            ["synthetic_selected_count", automation.get("synthetic_selected_count")],
+            ["synthetic_selector_miss_count", automation.get("synthetic_selector_miss_count")],
+            ["synthetic_final_submit_stop_count", automation.get("synthetic_final_submit_stop_count")],
+            ["next_validate_command", automation.get("next_validate_command")],
+            ["next_run_command", automation.get("next_run_command")],
+            ["next_autopilot_reply_text_command", automation.get("next_autopilot_reply_text_command")],
+        ]
+    )
+    return rows
 
 
 def _question_export_summary_rows(export: dict[str, Any]) -> list[list[Any]]:

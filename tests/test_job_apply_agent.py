@@ -143,6 +143,7 @@ from job_apply_agent.core import (
     render_final_answer_intake_template_html,
     render_final_answer_intake_template_markdown,
     render_final_answer_intake_update_markdown,
+    render_final_answer_blocker_report_html,
     render_final_answer_blocker_report_markdown,
     render_final_answer_reply_intake_markdown,
     render_final_answer_reply_template_text,
@@ -7453,6 +7454,7 @@ class JobApplyAgentTests(unittest.TestCase):
         }
         report = build_final_answer_blocker_report(template, goal_audit=goal_audit)
         markdown = render_final_answer_blocker_report_markdown(report)
+        html = render_final_answer_blocker_report_html(report)
         alert = build_telegram_final_answer_blocker_alert(report)
 
         self.assertFalse(report["ready_for_post_answer_pipeline"])
@@ -7523,6 +7525,12 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("\u6211\u7684\u516c\u6c11\u8eab\u4efd\u662f<fill>", markdown)
         self.assertIn("## Reply Template", markdown)
         self.assertIn("citizenship_status\uff1a<fill>", markdown)
+        self.assertIn("Final Answer Blockers", html)
+        self.assertIn("Answer Capture Boundary", html)
+        self.assertIn("Blocking Questions", html)
+        self.assertIn("Observed Prompt Examples", html)
+        self.assertIn("citizenship_status", html)
+        self.assertIn("&lt;fill&gt;", html)
         self.assertIn("\u786e\u8ba4", markdown)
         self.assertIn("citizenship_status_confirmed\uff1a\u786e\u8ba4", reply_template_text)
         self.assertIn("citizenship_status shape:", reply_template_text)
@@ -7545,10 +7553,12 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("\u786e\u8ba4", alert)
         self.assertNotIn("98004", json.dumps(report))
         self.assertNotIn("98004", markdown)
+        self.assertNotIn("98004", html)
         self.assertNotIn("98004", alert)
         self.assertNotIn("98004", reply_template_text)
         self.assertNotIn("Sensitive citizenship answer phrase 12345", json.dumps(report))
         self.assertNotIn("Sensitive citizenship answer phrase 12345", markdown)
+        self.assertNotIn("Sensitive citizenship answer phrase 12345", html)
         self.assertNotIn("Sensitive citizenship answer phrase 12345", alert)
         self.assertNotIn("Sensitive citizenship answer phrase 12345", reply_template_text)
 
@@ -7557,6 +7567,8 @@ class JobApplyAgentTests(unittest.TestCase):
             json_output = root / "blockers.json"
             markdown_output = root / "blockers.md"
             reply_template_output = root / "reply_template.txt"
+            html_output = root / "blockers.html"
+            xlsx_output = root / "blockers.xlsx"
             env_path = root / "telegram.env"
             env_path.write_text(
                 'export SIGNAL_DECK_TELEGRAM_BOT_TOKEN="token-123"\n'
@@ -7569,6 +7581,8 @@ class JobApplyAgentTests(unittest.TestCase):
                 json_output,
                 markdown_output,
                 reply_template_output,
+                html_output,
+                xlsx_output,
             )
             notify_result = notify_telegram_for_final_answer_blockers(
                 written,
@@ -7580,10 +7594,27 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(json_output.exists())
             self.assertTrue(markdown_output.exists())
             self.assertTrue(reply_template_output.exists())
+            self.assertTrue(html_output.exists())
+            self.assertTrue(xlsx_output.exists())
+            self.assertEqual(written["outputs"]["html"], str(html_output))
+            self.assertEqual(written["outputs"]["xlsx"], str(xlsx_output))
+            self.assertIn("Blocking Questions", html_output.read_text(encoding="utf-8"))
             self.assertIn(
                 "citizenship_status_confirmed\uff1a\u786e\u8ba4",
                 reply_template_output.read_text(encoding="utf-8"),
             )
+            with zipfile.ZipFile(xlsx_output) as archive:
+                workbook_xml = archive.read("xl/workbook.xml").decode("utf-8")
+                sheet_text = "\n".join(
+                    archive.read(name).decode("utf-8")
+                    for name in archive.namelist()
+                    if name.startswith("xl/worksheets/")
+                )
+            self.assertIn("Answer Entry", workbook_xml)
+            self.assertIn("citizenship_status", sheet_text)
+            self.assertIn("&lt;fill&gt;", sheet_text)
+            self.assertNotIn("98004", sheet_text)
+            self.assertNotIn("Sensitive citizenship answer phrase 12345", sheet_text)
             self.assertTrue(notify_result["ok"])
             self.assertTrue(notify_result["skipped"])
             self.assertNotIn("Sensitive citizenship answer phrase 12345", notify_result["message"])
@@ -7603,6 +7634,8 @@ class JobApplyAgentTests(unittest.TestCase):
             cli_json_output = root / "cli_blockers.json"
             cli_markdown_output = root / "cli_blockers.md"
             cli_reply_template_output = root / "cli_reply.txt"
+            cli_html_output = root / "cli_blockers.html"
+            cli_xlsx_output = root / "cli_blockers.xlsx"
             template_path.write_text(json.dumps(template, ensure_ascii=True, indent=2), encoding="utf-8")
             goal_path.write_text(json.dumps(goal_audit, ensure_ascii=True, indent=2), encoding="utf-8")
             cli_result = subprocess.run(
@@ -7621,6 +7654,10 @@ class JobApplyAgentTests(unittest.TestCase):
                     str(cli_markdown_output),
                     "--reply-template-output",
                     str(cli_reply_template_output),
+                    "--html-output",
+                    str(cli_html_output),
+                    "--xlsx-output",
+                    str(cli_xlsx_output),
                     "--print-minimal-reply",
                 ],
                 cwd=ROOT,
@@ -7629,6 +7666,10 @@ class JobApplyAgentTests(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(cli_result.returncode, 0, cli_result.stderr)
+            self.assertTrue(cli_html_output.exists())
+            self.assertTrue(cli_xlsx_output.exists())
+            self.assertIn("Wrote final answer blockers HTML", cli_result.stdout)
+            self.assertIn("Wrote final answer blockers XLSX", cli_result.stdout)
             self.assertIn("Minimal final-answer reply:", cli_result.stdout)
             self.assertIn("\u6211\u7684\u516c\u6c11\u8eab\u4efd\u662f<fill>", cli_result.stdout)
             self.assertIn("\u4ee5\u4e0a\u786e\u8ba4", cli_result.stdout)
