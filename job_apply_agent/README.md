@@ -769,6 +769,23 @@ one-shot updates file, reruns live closed-posting checks before opening pages,
 rebuilds the 100-position autofill packet with values only after the answers
 are approved, and keeps final submit as a supervised stop.
 
+After the six answers are filled, run the safe gate first:
+
+```bash
+python3 -m job_apply_agent post-answer-pipeline --fail-on-not-ready
+```
+
+When that reports ready, the same pipeline can apply the approved answers,
+refresh the 100-position queue, run live closed-posting checks, and build the
+value-bearing supervised autofill packet:
+
+```bash
+python3 -m job_apply_agent post-answer-pipeline --apply --live-check --include-values
+```
+
+Add `--open-browser` only when you want it to open the verified pages; real
+final submit remains a supervised stop.
+
 For a captured Ashby or Greenhouse form snapshot, generate an offline fill plan:
 
 ```bash

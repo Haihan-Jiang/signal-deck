@@ -109,6 +109,8 @@ DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_HTML = (
 DEFAULT_AUTOMATION_HANDOFF_JSON = Path(__file__).with_name("outbox") / "automation_handoff_latest.json"
 DEFAULT_AUTOMATION_HANDOFF_MARKDOWN = Path(__file__).with_name("outbox") / "automation_handoff_latest.md"
 DEFAULT_AUTOMATION_HANDOFF_HTML = Path(__file__).with_name("outbox") / "automation_handoff_latest.html"
+DEFAULT_POST_ANSWER_PIPELINE_JSON = Path(__file__).with_name("outbox") / "post_answer_pipeline_latest.json"
+DEFAULT_POST_ANSWER_PIPELINE_MARKDOWN = Path(__file__).with_name("outbox") / "post_answer_pipeline_latest.md"
 DEFAULT_FILL_PLAN_JSON = Path(__file__).with_name("outbox") / "form_fill_plan_latest.json"
 DEFAULT_FILL_PLAN_MARKDOWN = Path(__file__).with_name("outbox") / "form_fill_plan_latest.md"
 DEFAULT_APPLY_AUDIT_JSON = Path(__file__).with_name("outbox") / "apply_run_audit_latest.json"
@@ -690,6 +692,57 @@ def main() -> int:
         "--fail-on-not-ready",
         action="store_true",
         help="exit non-zero when any final answer is blank, unconfirmed, or unknown",
+    )
+
+    post_answer_pipeline_parser = subparsers.add_parser(
+        "post-answer-pipeline",
+        help="validate final answers, optionally apply them, refresh the 100-job queue, and prepare supervised autofill",
+    )
+    post_answer_pipeline_parser.add_argument(
+        "--compact-updates",
+        default=str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_UPDATES_JSON),
+    )
+    post_answer_pipeline_parser.add_argument(
+        "--full-template",
+        default=str(DEFAULT_CRITICAL_INPUT_FULL_UPDATES_JSON),
+    )
+    post_answer_pipeline_parser.add_argument(
+        "--unblockers",
+        default=str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_JSON),
+    )
+    post_answer_pipeline_parser.add_argument(
+        "--confirmed-updates-output",
+        default=str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_JSON),
+    )
+    post_answer_pipeline_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="write approved answers to the local profile and answer memory, then refresh reports",
+    )
+    post_answer_pipeline_parser.add_argument(
+        "--live-check",
+        action="store_true",
+        help="after apply/refresh, recheck current apply pages before rebuilding open-ready handoff",
+    )
+    post_answer_pipeline_parser.add_argument("--live-check-limit", type=int, default=100)
+    post_answer_pipeline_parser.add_argument("--live-check-timeout", type=float, default=25.0)
+    post_answer_pipeline_parser.add_argument(
+        "--include-values",
+        action="store_true",
+        help="include actual values in the supervised autofill packet after --apply",
+    )
+    post_answer_pipeline_parser.add_argument("--open-browser", action="store_true")
+    post_answer_pipeline_parser.add_argument("--open-limit", type=int, default=100)
+    post_answer_pipeline_parser.add_argument("--review-log", default=str(DEFAULT_REVIEW_LOG))
+    post_answer_pipeline_parser.add_argument("--json-output", default=str(DEFAULT_POST_ANSWER_PIPELINE_JSON))
+    post_answer_pipeline_parser.add_argument(
+        "--markdown-output",
+        default=str(DEFAULT_POST_ANSWER_PIPELINE_MARKDOWN),
+    )
+    post_answer_pipeline_parser.add_argument(
+        "--fail-on-not-ready",
+        action="store_true",
+        help="exit non-zero when final answers are not ready for workflow",
     )
 
     critical_inputs_update_parser = subparsers.add_parser(
@@ -2045,6 +2098,9 @@ def main() -> int:
             return 2
         return 0
 
+    if args.command == "post-answer-pipeline":
+        return _run_post_answer_pipeline(args)
+
     if args.command == "critical-inputs-update":
         answers_path = Path(args.answers)
         updates_path = Path(args.updates)
@@ -2688,6 +2744,303 @@ def main() -> int:
             f"score={submission['score']} id={submission['submission_id']}"
         )
     return 0
+
+
+def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
+    for label, path_value in [
+        ("compact updates", args.compact_updates),
+        ("full updates template", args.full_template),
+        ("critical input unblockers", args.unblockers),
+    ]:
+        if not Path(path_value).exists():
+            raise FileNotFoundError(f"{label} not found: {path_value}")
+    steps: list[dict[str, object]] = []
+    final_report = write_critical_input_unblocker_final_update(
+        args.compact_updates,
+        args.full_template,
+        args.unblockers,
+        args.confirmed_updates_output,
+        DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_JSON,
+        DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_MARKDOWN,
+    )
+    final_summary = final_report.get("summary") or {}
+    steps.append(
+        {
+            "name": "finalize_confirmed_updates",
+            "status": "ready" if final_report.get("ready_for_workflow") else "waiting_for_answers",
+            "details": {
+                "merged_updates": final_summary.get("merged_update_count", 0),
+                "missing_unblockers": final_summary.get("missing_unblocker_count", 0),
+                "unconfirmed_high_risk": final_summary.get("unconfirmed_high_risk_count", 0),
+                "unknown_compact_updates": final_summary.get("unknown_compact_update_count", 0),
+            },
+        }
+    )
+
+    workflow = None
+    refresh = None
+    live_check = None
+    handoff = None
+    packet = None
+    opened_count = 0
+    status = "waiting_for_confirmed_answers"
+    if final_report.get("ready_for_workflow"):
+        status = "ready_for_apply" if not args.apply else "applying_confirmed_answers"
+        if args.apply:
+            workflow = write_critical_input_answer_workflow(
+                DEFAULT_LEARNING_APPROVAL_PACK_JSON,
+                DEFAULT_CRITICAL_INPUT_ANSWERS_JSON,
+                json.loads(Path(args.confirmed_updates_output).read_text(encoding="utf-8")),
+                DEFAULT_PERSONAL_PROFILE if DEFAULT_PERSONAL_PROFILE.exists() else DEFAULT_PROFILE,
+                DEFAULT_MEMORY,
+                DEFAULT_CRITICAL_INPUT_WORKFLOW_JSON,
+                DEFAULT_CRITICAL_INPUT_WORKFLOW_MARKDOWN,
+                DEFAULT_CRITICAL_INPUT_UPDATE_JSON,
+                DEFAULT_CRITICAL_INPUT_UPDATE_MARKDOWN,
+                DEFAULT_CRITICAL_INPUT_STATUS_JSON,
+                DEFAULT_CRITICAL_INPUT_STATUS_MARKDOWN,
+                answers_markdown_output=DEFAULT_CRITICAL_INPUT_ANSWERS_MARKDOWN,
+                approve=True,
+                approve_high_risk=True,
+                apply_confirmed=True,
+                allow_partial_apply=False,
+                source="post_answer_pipeline",
+            )
+            workflow_summary = workflow.get("summary") or {}
+            steps.append(
+                {
+                    "name": "apply_confirmed_answers",
+                    "status": "applied",
+                    "details": {
+                        "matched_updates": workflow_summary.get("matched_updates", 0),
+                        "applied_profile_updates": workflow_summary.get("applied_profile_updates", 0),
+                        "applied_resume_fact_updates": workflow_summary.get("applied_resume_fact_updates", 0),
+                        "applied_answer_memory_updates": workflow_summary.get("applied_answer_memory_updates", 0),
+                    },
+                }
+            )
+            refresh = _refresh_application_automation_reports()
+            steps.append(
+                {
+                    "name": "refresh_reports",
+                    "status": "refreshed",
+                    "details": refresh,
+                }
+            )
+            if args.live_check:
+                jobs_payload = json.loads(DEFAULT_APPLY_QUEUE_LIVE_CHECK_JOBS.read_text(encoding="utf-8"))
+                jobs = jobs_payload.get("jobs") if isinstance(jobs_payload, dict) else jobs_payload
+                if not isinstance(jobs, list):
+                    jobs = []
+                live_check = write_closed_posting_preflight(
+                    jobs,
+                    DEFAULT_CLOSED_JOBS,
+                    DEFAULT_CLOSED_PREFLIGHT_JSON,
+                    DEFAULT_CLOSED_PREFLIGHT_MARKDOWN,
+                    max_checks=args.live_check_limit,
+                    timeout=args.live_check_timeout,
+                    source="post_answer_pipeline",
+                )
+                steps.append(
+                    {
+                        "name": "live_closed_preflight",
+                        "status": "checked",
+                        "details": {
+                            "live_checked": live_check.get("live_checked_count", 0),
+                            "open_eligible": live_check.get("open_eligible_count", 0),
+                            "closed": live_check.get("closed_count", 0),
+                            "uncertain": live_check.get("uncertain_count", 0),
+                        },
+                    }
+                )
+            supplemental_preflights = (
+                [DEFAULT_APPLY_QUEUE_MANUAL_LIVE_CHECK_JSON]
+                if DEFAULT_APPLY_QUEUE_MANUAL_LIVE_CHECK_JSON.exists()
+                else []
+            )
+            if DEFAULT_CLOSED_PREFLIGHT_JSON.exists():
+                handoff = write_apply_queue_handoff(
+                    DEFAULT_APPLY_QUEUE_JSON,
+                    DEFAULT_CLOSED_PREFLIGHT_JSON,
+                    DEFAULT_APPLY_QUEUE_HANDOFF_JSON,
+                    DEFAULT_APPLY_QUEUE_HANDOFF_MARKDOWN,
+                    DEFAULT_APPLY_QUEUE_HANDOFF_HTML,
+                    DEFAULT_APPLY_QUEUE_OPEN_READY_JOBS,
+                    supplemental_preflight_paths=supplemental_preflights,
+                )
+                steps.append(
+                    {
+                        "name": "apply_queue_handoff",
+                        "status": handoff.get("status"),
+                        "details": {
+                            "open_ready": handoff.get("open_ready_count", 0),
+                            "open_after_answers": handoff.get("open_after_answers_count", 0),
+                            "manual_live_checks": handoff.get("manual_live_check_count", 0),
+                        },
+                    }
+                )
+                packet = write_apply_queue_autofill_packet(
+                    DEFAULT_RESEARCH_JSON,
+                    DEFAULT_APPLY_QUEUE_HANDOFF_JSON,
+                    DEFAULT_PERSONAL_PROFILE if DEFAULT_PERSONAL_PROFILE.exists() else DEFAULT_PROFILE,
+                    DEFAULT_MEMORY,
+                    DEFAULT_CLOSED_JOBS,
+                    DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_JSON,
+                    DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_MARKDOWN,
+                    DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_HTML,
+                    limit=100,
+                    target_count=100,
+                    include_values=args.include_values,
+                )
+                packet_summary = packet.get("summary") or {}
+                steps.append(
+                    {
+                        "name": "supervised_autofill_packet",
+                        "status": packet.get("status"),
+                        "details": {
+                            "selected": packet.get("selected_count", 0),
+                            "browser_actions": packet_summary.get("browser_action_count", 0),
+                            "selector_misses": packet_summary.get("selector_miss_count", 0),
+                            "final_submit_stops": packet_summary.get("final_submit_stop_count", 0),
+                            "include_values": bool(args.include_values),
+                        },
+                    }
+                )
+                if args.open_browser:
+                    if not handoff.get("ready_for_supervised_open_batch"):
+                        steps.append(
+                            {
+                                "name": "open_browser",
+                                "status": "skipped_not_open_ready",
+                                "details": {"reason": "handoff is not ready for supervised open batch"},
+                            }
+                        )
+                    else:
+                        opened_urls = open_apply_urls_in_browser(
+                            handoff.get("open_ready_jobs") or [],
+                            max_items=args.open_limit,
+                            record_path=args.review_log,
+                            source="post_answer_pipeline",
+                            closed_jobs={"version": 1, "jobs": []},
+                        )
+                        opened_count = len(opened_urls)
+                        steps.append(
+                            {
+                                "name": "open_browser",
+                                "status": "opened",
+                                "details": {
+                                    "opened_count": opened_count,
+                                    "review_log": args.review_log,
+                                },
+                            }
+                        )
+            status = "ready_for_supervised_autofill" if (packet or {}).get("ready_for_supervised_browser_autofill") else "applied_refresh_complete"
+
+    report = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "post_answer_pipeline",
+        "status": status,
+        "ready_for_workflow": bool(final_report.get("ready_for_workflow")),
+        "apply_requested": bool(args.apply),
+        "live_check_requested": bool(args.live_check),
+        "open_browser_requested": bool(args.open_browser),
+        "include_values": bool(args.include_values),
+        "final_update_report": {
+            key: value for key, value in final_report.items() if key != "merged_updates"
+        },
+        "workflow_summary": (workflow or {}).get("summary") or {},
+        "refresh": refresh or {},
+        "live_check_summary": {
+            "live_checked": (live_check or {}).get("live_checked_count", 0),
+            "open_eligible": (live_check or {}).get("open_eligible_count", 0),
+            "closed": (live_check or {}).get("closed_count", 0),
+            "uncertain": (live_check or {}).get("uncertain_count", 0),
+        },
+        "handoff_status": (handoff or {}).get("status"),
+        "handoff_open_ready": (handoff or {}).get("open_ready_count", 0),
+        "autofill_packet_status": (packet or {}).get("status"),
+        "autofill_packet_selected": (packet or {}).get("selected_count", 0),
+        "opened_count": opened_count,
+        "steps": steps,
+        "policy": {
+            "submits_real_applications": False,
+            "writes_profile_or_memory_requires_apply": True,
+            "live_page_check_requires_live_check": True,
+            "open_browser_requires_open_browser": True,
+            "final_submit_remains_supervised": True,
+        },
+    }
+    _write_post_answer_pipeline_report(report, args.json_output, args.markdown_output)
+    print(f"Wrote post-answer pipeline JSON to {args.json_output}")
+    print(f"Wrote post-answer pipeline Markdown to {args.markdown_output}")
+    print(f"Status: {report.get('status')}")
+    print(f"Ready for workflow: {str(bool(report.get('ready_for_workflow'))).lower()}")
+    print(f"Apply requested: {str(bool(args.apply)).lower()}")
+    print(f"Live check requested: {str(bool(args.live_check)).lower()}")
+    print(f"Open browser requested: {str(bool(args.open_browser)).lower()}")
+    print(f"Autofill packet: {report.get('autofill_packet_status') or 'not_built'}")
+    if args.fail_on_not_ready and not report.get("ready_for_workflow"):
+        return 2
+    return 0
+
+
+def _write_post_answer_pipeline_report(
+    report: dict[str, object],
+    json_output: str | Path,
+    markdown_output: str | Path,
+) -> None:
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(_render_post_answer_pipeline_markdown(report), encoding="utf-8")
+
+
+def _render_post_answer_pipeline_markdown(report: dict[str, object]) -> str:
+    final_report = report.get("final_update_report") if isinstance(report.get("final_update_report"), dict) else {}
+    final_summary = final_report.get("summary") if isinstance(final_report, dict) else {}
+    final_summary = final_summary if isinstance(final_summary, dict) else {}
+    lines = [
+        "# Post-Answer Pipeline",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        f"Status: {report.get('status')}",
+        f"Ready for workflow: {str(bool(report.get('ready_for_workflow'))).lower()}",
+        f"Apply requested: {str(bool(report.get('apply_requested'))).lower()}",
+        f"Live check requested: {str(bool(report.get('live_check_requested'))).lower()}",
+        f"Open browser requested: {str(bool(report.get('open_browser_requested'))).lower()}",
+        "",
+        "## Final Answer Gate",
+        "",
+        f"- merged updates: {final_summary.get('merged_update_count', 0)}",
+        f"- missing unblockers: {final_summary.get('missing_unblocker_count', 0)}",
+        f"- unconfirmed high-risk answers: {final_summary.get('unconfirmed_high_risk_count', 0)}",
+        f"- unknown compact updates: {final_summary.get('unknown_compact_update_count', 0)}",
+        "",
+        "## Steps",
+        "",
+        "| Step | Status | Details |",
+        "| --- | --- | --- |",
+    ]
+    for step in report.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        details = step.get("details") if isinstance(step.get("details"), dict) else {}
+        detail_text = "; ".join(f"{key}={value}" for key, value in details.items())
+        lines.append(f"| {step.get('name')} | {step.get('status')} | {detail_text} |")
+    lines.extend(
+        [
+            "",
+            "## Policy",
+            "",
+            "- This pipeline never submits real employer applications.",
+            "- Profile and answer-memory writes require `--apply`.",
+            "- Live page checks require `--live-check`.",
+            "- Browser opening requires `--open-browser` and still stops before final submit.",
+        ]
+    )
+    return "\n".join(lines) + "\n"
 
 
 def _load_optional_json(path_value: str | None) -> dict | None:
