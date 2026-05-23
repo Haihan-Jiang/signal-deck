@@ -773,6 +773,23 @@ be run with `--confirm-high-risk` after explicit user confirmation. The command
 only writes outbox update artifacts; it does not write profile/memory or submit
 applications.
 
+After filling the same intake file, the one-command post-answer path can convert
+the intake answers, validate the final answer gate, apply approved local
+profile/memory updates, live-check pages, and rebuild the supervised autofill
+packet:
+
+```bash
+python3 -m job_apply_agent post-answer-pipeline \
+  --final-answer-intake-json job_apply_agent/outbox/final_answer_intake_template_latest.json \
+  --apply \
+  --live-check \
+  --include-values \
+  --fail-on-not-ready
+```
+
+It still does not click real employer final submit; browser opening remains
+separate behind `--open-browser`.
+
 The audit separates achieved evidence, remaining user-answer blockers, and
 supervised-only gates such as CAPTCHA/security, protected-class answers, and
 real employer final submit.

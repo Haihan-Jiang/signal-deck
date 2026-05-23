@@ -885,6 +885,31 @@ def main() -> int:
         default=str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_JSON),
     )
     post_answer_pipeline_parser.add_argument(
+        "--confirmed-report-json-output",
+        default=str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_JSON),
+    )
+    post_answer_pipeline_parser.add_argument(
+        "--confirmed-report-markdown-output",
+        default=str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_MARKDOWN),
+    )
+    post_answer_pipeline_parser.add_argument(
+        "--final-answer-intake-json",
+        help="optional filled final-answer intake JSON to convert before running the post-answer pipeline",
+    )
+    post_answer_pipeline_parser.add_argument(
+        "--final-answer-intake-report-json",
+        default=str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_JSON),
+    )
+    post_answer_pipeline_parser.add_argument(
+        "--final-answer-intake-report-markdown",
+        default=str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_MARKDOWN),
+    )
+    post_answer_pipeline_parser.add_argument(
+        "--confirm-high-risk",
+        action="store_true",
+        help="with --final-answer-intake-json, treat supplied high-risk text as explicitly confirmed",
+    )
+    post_answer_pipeline_parser.add_argument(
         "--synthetic-final-answers",
         action="store_true",
         help=(
@@ -3048,8 +3073,11 @@ def main() -> int:
 
 def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
     synthetic_final_answers = bool(args.synthetic_final_answers)
+    intake_path = Path(args.final_answer_intake_json) if args.final_answer_intake_json else None
     if synthetic_final_answers and (args.apply or args.live_check or args.open_browser):
         raise ValueError("synthetic final answers cannot be combined with --apply, --live-check, or --open-browser")
+    if synthetic_final_answers and intake_path:
+        raise ValueError("synthetic final answers cannot be combined with --final-answer-intake-json")
     if args.synthetic_rehearse_queue and not synthetic_final_answers:
         raise ValueError("synthetic queue rehearsal requires --synthetic-final-answers")
 
@@ -3057,7 +3085,9 @@ def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
         ("full updates template", args.full_template),
         ("critical input unblockers", args.unblockers),
     ]
-    if not synthetic_final_answers:
+    if intake_path:
+        required_paths.insert(0, ("final answer intake", intake_path))
+    elif not synthetic_final_answers:
         required_paths.insert(0, ("compact updates", args.compact_updates))
     for label, path_value in required_paths:
         if not Path(path_value).exists():
@@ -3065,9 +3095,20 @@ def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
 
     compact_updates_path = Path(args.compact_updates)
     confirmed_updates_output = Path(args.confirmed_updates_output)
-    final_report_json = DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_JSON
-    final_report_markdown = DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_MARKDOWN
+    final_report_json = Path(args.confirmed_report_json_output)
+    final_report_markdown = Path(args.confirmed_report_markdown_output)
     synthetic_compact_updates_output = None
+    intake_report = None
+    if intake_path:
+        unblockers_payload = json.loads(Path(args.unblockers).read_text(encoding="utf-8"))
+        intake_report = write_final_answer_intake_update(
+            unblockers_payload,
+            json.loads(intake_path.read_text(encoding="utf-8")),
+            compact_updates_path,
+            args.final_answer_intake_report_json,
+            args.final_answer_intake_report_markdown,
+            confirm_high_risk=args.confirm_high_risk,
+        )
     if synthetic_final_answers:
         unblockers_payload = json.loads(Path(args.unblockers).read_text(encoding="utf-8"))
         synthetic_compact_updates = build_synthetic_unblocker_compact_updates(unblockers_payload)
@@ -3084,6 +3125,21 @@ def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
         final_report_markdown = DEFAULT_POST_ANSWER_SYNTHETIC_CONFIRMED_UPDATES_REPORT_MARKDOWN
 
     steps: list[dict[str, object]] = []
+    if intake_report:
+        intake_summary = intake_report.get("summary") or {}
+        steps.append(
+            {
+                "name": "final_answer_intake",
+                "status": "ready" if intake_report.get("ready_for_finalize") else "waiting_for_answers",
+                "details": {
+                    "answers": intake_summary.get("answer_input_count", 0),
+                    "compact_updates": intake_summary.get("compact_update_count", 0),
+                    "missing_unblockers": intake_summary.get("missing_unblocker_count", 0),
+                    "unconfirmed_high_risk": intake_summary.get("unconfirmed_high_risk_count", 0),
+                    "unknown_answers": intake_summary.get("unknown_answer_count", 0),
+                },
+            }
+        )
     final_report = write_critical_input_unblocker_final_update(
         compact_updates_path,
         args.full_template,
@@ -3287,6 +3343,16 @@ def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
         "include_values": bool(args.include_values),
         "synthetic_final_answers": synthetic_final_answers,
         "synthetic_queue_rehearsal_requested": bool(args.synthetic_rehearse_queue),
+        "final_answer_intake_json": str(intake_path) if intake_path else "",
+        "final_answer_intake_report_outputs": {
+            "json": str(args.final_answer_intake_report_json) if intake_path else "",
+            "markdown": str(args.final_answer_intake_report_markdown) if intake_path else "",
+        },
+        "final_answer_intake_report": (
+            {key: value for key, value in intake_report.items() if key != "compact_updates"}
+            if isinstance(intake_report, dict)
+            else {}
+        ),
         "synthetic_compact_updates_output": synthetic_compact_updates_output,
         "confirmed_updates_output": str(confirmed_updates_output),
         "final_update_report_outputs": {
@@ -3317,6 +3383,8 @@ def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
             "live_page_check_requires_live_check": True,
             "open_browser_requires_open_browser": True,
             "final_submit_remains_supervised": True,
+            "final_answer_intake_writes_profile_or_memory": False,
+            "final_answer_intake_submits_real_applications": False,
             "synthetic_answers_never_written_to_real_profile_or_memory": True,
             "synthetic_answers_forbid_apply_live_check_and_open_browser": True,
             "synthetic_queue_rehearsal_uses_fake_local_profile_and_memory": True,
@@ -3327,6 +3395,7 @@ def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
     print(f"Wrote post-answer pipeline Markdown to {args.markdown_output}")
     print(f"Status: {report.get('status')}")
     print(f"Ready for workflow: {str(bool(report.get('ready_for_workflow'))).lower()}")
+    print(f"Final answer intake: {str(bool(intake_path)).lower()}")
     print(f"Synthetic final answers: {str(synthetic_final_answers).lower()}")
     print(f"Synthetic queue rehearsal: {(synthetic_queue_rehearsal or {}).get('status') or 'not_built'}")
     print(f"Apply requested: {str(bool(args.apply)).lower()}")
@@ -3576,6 +3645,13 @@ def _render_post_answer_pipeline_markdown(report: dict[str, object]) -> str:
     final_report = report.get("final_update_report") if isinstance(report.get("final_update_report"), dict) else {}
     final_summary = final_report.get("summary") if isinstance(final_report, dict) else {}
     final_summary = final_summary if isinstance(final_summary, dict) else {}
+    intake_report = (
+        report.get("final_answer_intake_report")
+        if isinstance(report.get("final_answer_intake_report"), dict)
+        else {}
+    )
+    intake_summary = intake_report.get("summary") if isinstance(intake_report, dict) else {}
+    intake_summary = intake_summary if isinstance(intake_summary, dict) else {}
     lines = [
         "# Post-Answer Pipeline",
         "",
@@ -3587,7 +3663,17 @@ def _render_post_answer_pipeline_markdown(report: dict[str, object]) -> str:
         f"Apply requested: {str(bool(report.get('apply_requested'))).lower()}",
         f"Live check requested: {str(bool(report.get('live_check_requested'))).lower()}",
         f"Open browser requested: {str(bool(report.get('open_browser_requested'))).lower()}",
+        f"Final answer intake JSON: {report.get('final_answer_intake_json') or ''}",
         f"Confirmed updates output: {report.get('confirmed_updates_output')}",
+        "",
+        "## Final Answer Intake",
+        "",
+        f"- ready for finalize: {str(bool(intake_report.get('ready_for_finalize'))).lower()}",
+        f"- answer inputs: {intake_summary.get('answer_input_count', 0)}",
+        f"- compact updates: {intake_summary.get('compact_update_count', 0)}",
+        f"- missing unblockers: {intake_summary.get('missing_unblocker_count', 0)}",
+        f"- unconfirmed high-risk answers: {intake_summary.get('unconfirmed_high_risk_count', 0)}",
+        f"- unknown answers: {intake_summary.get('unknown_answer_count', 0)}",
         "",
         "## Final Answer Gate",
         "",

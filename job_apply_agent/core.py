@@ -12962,12 +12962,25 @@ def build_automation_handoff_report(
     autofill_packet = apply_queue_autofill_packet or {}
     packet_summary = autofill_packet.get("summary") or {}
     final_intake_update = final_answer_intake_update or {}
+    final_intake_summary = final_intake_update.get("summary") or {}
     blocker_summary = goal.get("blocker_summary") or {}
     impact_summary = impact.get("summary") or {}
     final_answer_intake_rows = _final_answer_intake_export_rows(
         final_answer_intake_template,
         final_answer_intake_update,
     )
+    final_intake_count = int(
+        (final_answer_intake_template or {}).get("answer_count") or len(final_answer_intake_rows)
+    )
+    final_intake_has_update = bool(final_answer_intake_update)
+    if final_intake_has_update:
+        final_intake_missing_count = int(final_intake_summary.get("missing_unblocker_count") or 0)
+        final_intake_unconfirmed_high_risk_count = int(
+            final_intake_summary.get("unconfirmed_high_risk_count") or 0
+        )
+    else:
+        final_intake_missing_count = final_intake_count
+        final_intake_unconfirmed_high_risk_count = 0
     answer_queue = _automation_handoff_answer_queue_rows(questionnaire, impact)
     selected_stop_summary = _automation_handoff_stop_summary_rows(
         batch.get("selected_stop_action_counts") or {},
@@ -13042,19 +13055,13 @@ def build_automation_handoff_report(
         "updates_data_blocking_prompts_after": int(
             updates_readiness_summary.get("data_blocking_prompts_after") or 0
         ),
-        "final_answer_intake_count": int(
-            (final_answer_intake_template or {}).get("answer_count") or len(final_answer_intake_rows)
-        ),
+        "final_answer_intake_count": final_intake_count,
         "final_answer_intake_high_risk_count": int(
             (final_answer_intake_template or {}).get("high_risk_count") or 0
         ),
         "final_answer_intake_ready_for_finalize": bool(final_intake_update.get("ready_for_finalize")),
-        "final_answer_intake_missing_count": int(
-            (final_intake_update.get("summary") or {}).get("missing_unblocker_count") or 0
-        ),
-        "final_answer_intake_unconfirmed_high_risk_count": int(
-            (final_intake_update.get("summary") or {}).get("unconfirmed_high_risk_count") or 0
-        ),
+        "final_answer_intake_missing_count": final_intake_missing_count,
+        "final_answer_intake_unconfirmed_high_risk_count": final_intake_unconfirmed_high_risk_count,
         "apply_queue_handoff_status": queue_handoff.get("status", ""),
         "apply_queue_open_ready_count": int(queue_handoff.get("open_ready_count") or 0),
         "apply_queue_open_after_answers_count": int(queue_handoff.get("open_after_answers_count") or 0),
@@ -13591,6 +13598,7 @@ def _automation_handoff_next_commands(summary: dict[str, Any]) -> list[str]:
     commands = [
         "python3 -m job_apply_agent final-answer-intake",
         "python3 -m job_apply_agent final-answer-intake --answers job_apply_agent/outbox/final_answer_intake_template_latest.json --finalize --fail-on-not-ready",
+        "python3 -m job_apply_agent post-answer-pipeline --final-answer-intake-json job_apply_agent/outbox/final_answer_intake_template_latest.json --apply --live-check --include-values --fail-on-not-ready",
         "python3 -m job_apply_agent post-answer-pipeline --synthetic-final-answers --synthetic-rehearse-queue --fail-on-not-ready",
         "python3 -m job_apply_agent post-answer-pipeline --fail-on-not-ready",
         "python3 -m job_apply_agent post-answer-pipeline --apply --live-check --include-values",
@@ -23114,6 +23122,7 @@ def _post_answer_pipeline_export_rows(
         "live_check_requested",
         "open_browser_requested",
         "include_values",
+        "final_answer_intake_json",
         "confirmed_updates_output",
         "synthetic_compact_updates_output",
         "handoff_status",
@@ -23125,6 +23134,17 @@ def _post_answer_pipeline_export_rows(
         if key in post_answer_pipeline:
             rows.append({"section": "summary", "metric": key, "value": post_answer_pipeline.get(key)})
     final_report = post_answer_pipeline.get("final_update_report") or {}
+    intake_report = post_answer_pipeline.get("final_answer_intake_report") or {}
+    for key, value in sorted((intake_report.get("summary") or {}).items()):
+        rows.append({"section": "final_answer_intake", "metric": key, "value": value})
+    if "ready_for_finalize" in intake_report:
+        rows.append(
+            {
+                "section": "final_answer_intake",
+                "metric": "ready_for_finalize",
+                "value": bool(intake_report.get("ready_for_finalize")),
+            }
+        )
     for key, value in sorted((final_report.get("summary") or {}).items()):
         rows.append({"section": "final_answer_gate", "metric": key, "value": value})
     for key, value in sorted((post_answer_pipeline.get("policy") or {}).items()):
