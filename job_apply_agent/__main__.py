@@ -4408,7 +4408,10 @@ def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
     print(f"Apply requested: {str(bool(args.apply)).lower()}")
     print(f"Live check requested: {str(bool(args.live_check)).lower()}")
     print(f"Open browser requested: {str(bool(args.open_browser)).lower()}")
-    print(f"Autofill packet: {report.get('autofill_packet_status') or 'not_built'}")
+    autofill_packet_status = report.get("autofill_packet_status") or (
+        synthetic_queue_rehearsal or {}
+    ).get("autofill_packet_status")
+    print(f"Autofill packet: {autofill_packet_status or 'not_built'}")
     if args.fail_on_not_ready and not report.get("ready_for_workflow"):
         return 2
     return 0
