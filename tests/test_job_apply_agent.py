@@ -7951,6 +7951,90 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(synthetic_allowed.returncode, 0, synthetic_allowed.stderr)
             self.assertIn("Fake/test markers: 1", synthetic_allowed.stdout)
 
+    def test_post_answer_pipeline_blocks_fake_markers_in_direct_compact_updates(self) -> None:
+        unblockers = {
+            "unblockers": [
+                {
+                    "input_id": "profile_zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "high_risk": False,
+                    "required_count": 56,
+                },
+                {
+                    "input_id": "answer_memory_health_requirement_default_policy",
+                    "question": "What health requirement answer should automation use?",
+                    "high_risk": True,
+                    "required_count": 2,
+                },
+            ]
+        }
+        compact_updates = {
+            "profile_zip_or_postal_code": "98004",
+            "answer_memory_health_requirement_default_policy": {
+                "user_answer": "FAKE LOCAL TEST ONLY - can comply with standard health requirements.",
+                "approval_decision": "approved",
+                "high_risk_user_confirmed": True,
+            },
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            unblockers_path = root / "unblockers.json"
+            compact_path = root / "compact.json"
+            full_template_path = root / "full_template.json"
+            confirmed_updates_path = root / "confirmed_updates.json"
+            confirmed_report_path = root / "confirmed_report.json"
+            confirmed_report_md = root / "confirmed_report.md"
+            post_json = root / "post_answer.json"
+            post_md = root / "post_answer.md"
+            unblockers_path.write_text(json.dumps(unblockers, ensure_ascii=True, indent=2), encoding="utf-8")
+            compact_path.write_text(json.dumps(compact_updates, ensure_ascii=True, indent=2), encoding="utf-8")
+            full_template_path.write_text(
+                json.dumps({row["input_id"]: "" for row in unblockers["unblockers"]}, ensure_ascii=True, indent=2),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "job_apply_agent",
+                    "post-answer-pipeline",
+                    "--compact-updates",
+                    str(compact_path),
+                    "--full-template",
+                    str(full_template_path),
+                    "--unblockers",
+                    str(unblockers_path),
+                    "--confirmed-updates-output",
+                    str(confirmed_updates_path),
+                    "--confirmed-report-json-output",
+                    str(confirmed_report_path),
+                    "--confirmed-report-markdown-output",
+                    str(confirmed_report_md),
+                    "--json-output",
+                    str(post_json),
+                    "--markdown-output",
+                    str(post_md),
+                    "--fail-on-not-ready",
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertFalse(confirmed_updates_path.exists())
+            post_report = json.loads(post_json.read_text(encoding="utf-8"))
+            self.assertEqual(post_report["status"], "blocked_fake_or_test_final_answer_values")
+            self.assertFalse(post_report["ready_for_workflow"])
+            self.assertEqual(post_report["compact_update_fake_marker_count"], 1)
+            self.assertEqual(
+                post_report["compact_update_fake_marker_keys"],
+                ["answer_memory_health_requirement_default_policy"],
+            )
+            self.assertIn("fake/test markers in compact updates: 1", post_md.read_text(encoding="utf-8"))
+
     def test_final_answer_reply_accepts_chinese_labels_and_common_short_labels(self) -> None:
         unblockers = {
             "unblockers": [

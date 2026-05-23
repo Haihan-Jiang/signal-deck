@@ -21,6 +21,7 @@ from .core import (
     build_final_answer_reply_intake,
     build_position_readiness_report,
     build_synthetic_learning_state,
+    final_answer_fake_marker_rows_from_updates,
     import_candidate_observations,
     load_candidate_rows,
     learn_answers,
@@ -4216,24 +4217,69 @@ def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
                 },
             }
         )
-    final_report = write_critical_input_unblocker_final_update(
-        compact_updates_path,
-        args.full_template,
-        args.unblockers,
-        confirmed_updates_output,
-        final_report_json,
-        final_report_markdown,
-    )
+    compact_update_fake_marker_rows: list[dict[str, str]] = []
+    if not synthetic_final_answers:
+        compact_updates_payload = json.loads(compact_updates_path.read_text(encoding="utf-8"))
+        compact_update_fake_marker_rows = final_answer_fake_marker_rows_from_updates(
+            compact_updates_payload if isinstance(compact_updates_payload, dict) else {}
+        )
+    if compact_update_fake_marker_rows:
+        final_report = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "source": "post_answer_pipeline_fake_marker_guard",
+            "ready_for_workflow": False,
+            "writes_profile_or_memory": False,
+            "submits_real_applications": False,
+            "summary": {
+                "compact_update_fake_marker_count": len(compact_update_fake_marker_rows),
+                "missing_unblocker_count": 0,
+                "unconfirmed_high_risk_count": 0,
+                "unknown_compact_update_count": 0,
+            },
+            "fake_marker_rows": compact_update_fake_marker_rows,
+            "policy": {
+                "blocks_fake_or_synthetic_values_for_real_apply": True,
+                "does_not_write_confirmed_updates": True,
+            },
+        }
+        final_report_json.parent.mkdir(parents=True, exist_ok=True)
+        final_report_markdown.parent.mkdir(parents=True, exist_ok=True)
+        final_report_json.write_text(
+            json.dumps(final_report, ensure_ascii=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        final_report_markdown.write_text(
+            "# Critical Input Confirmed Updates\n\n"
+            "Ready for workflow: false\n"
+            "Blocked: fake/test/synthetic value markers were found in compact updates.\n",
+            encoding="utf-8",
+        )
+    else:
+        final_report = write_critical_input_unblocker_final_update(
+            compact_updates_path,
+            args.full_template,
+            args.unblockers,
+            confirmed_updates_output,
+            final_report_json,
+            final_report_markdown,
+        )
     final_summary = final_report.get("summary") or {}
     steps.append(
         {
             "name": "finalize_confirmed_updates",
-            "status": "ready" if final_report.get("ready_for_workflow") else "waiting_for_answers",
+            "status": (
+                "blocked_fake_or_test_values"
+                if compact_update_fake_marker_rows
+                else "ready"
+                if final_report.get("ready_for_workflow")
+                else "waiting_for_answers"
+            ),
             "details": {
                 "merged_updates": final_summary.get("merged_update_count", 0),
                 "missing_unblockers": final_summary.get("missing_unblocker_count", 0),
                 "unconfirmed_high_risk": final_summary.get("unconfirmed_high_risk_count", 0),
                 "unknown_compact_updates": final_summary.get("unknown_compact_update_count", 0),
+                "fake_marker_count": len(compact_update_fake_marker_rows),
             },
         }
     )
@@ -4248,7 +4294,9 @@ def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
     synthetic_queue_rehearsal = None
     opened_count = 0
     status = "waiting_for_confirmed_answers"
-    if final_report.get("ready_for_workflow"):
+    if compact_update_fake_marker_rows:
+        status = "blocked_fake_or_test_final_answer_values"
+    elif final_report.get("ready_for_workflow"):
         status = "ready_for_apply" if not args.apply else "applying_confirmed_answers"
         if args.apply:
             workflow = write_critical_input_answer_workflow(
@@ -4475,6 +4523,8 @@ def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
         "final_update_report": {
             key: value for key, value in final_report.items() if key != "merged_updates"
         },
+        "compact_update_fake_marker_count": len(compact_update_fake_marker_rows),
+        "compact_update_fake_marker_keys": [row.get("key") for row in compact_update_fake_marker_rows],
         "workflow_summary": (workflow or {}).get("summary") or {},
         "refresh": refresh or {},
         "live_check_summary": {
@@ -4535,6 +4585,8 @@ def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
     ).get("autofill_packet_status")
     print(f"Autofill packet: {autofill_packet_status or 'not_built'}")
     if args.fail_on_not_ready and not report.get("ready_for_workflow"):
+        return 2
+    if args.fail_on_not_ready and compact_update_fake_marker_rows:
         return 2
     if args.fail_on_not_ready and submission_safety_blocked:
         return 2
@@ -4872,6 +4924,7 @@ def _render_post_answer_pipeline_markdown(report: dict[str, object]) -> str:
         f"- missing unblockers: {final_summary.get('missing_unblocker_count', 0)}",
         f"- unconfirmed high-risk answers: {final_summary.get('unconfirmed_high_risk_count', 0)}",
         f"- unknown compact updates: {final_summary.get('unknown_compact_update_count', 0)}",
+        f"- fake/test markers in compact updates: {report.get('compact_update_fake_marker_count', 0)}",
         "",
         "## Submission Safety Audit",
         "",

@@ -5630,6 +5630,18 @@ def _final_answer_fake_value_marker(value: Any) -> str:
     return ""
 
 
+def final_answer_fake_marker_rows_from_updates(updates: dict[str, Any] | None) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    if not isinstance(updates, dict):
+        return rows
+    for key, value in sorted(updates.items()):
+        answer_text, _confirmed = _final_answer_intake_answer_text(value)
+        marker = _final_answer_fake_value_marker(answer_text)
+        if marker:
+            rows.append({"key": str(key), "marker": marker})
+    return rows
+
+
 def _split_final_answer_reply_line(
     line: str,
     known_prefix_keys: Iterable[str] | None = None,
