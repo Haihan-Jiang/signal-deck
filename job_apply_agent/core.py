@@ -24589,6 +24589,48 @@ def build_submission_safety_audit(
         },
         "synthetic post-answer path is allowed to touch real profile/browser/submission side effects",
     )
+    synthetic_queue_required = bool(post_answer.get("synthetic_final_answers")) or str(
+        post_answer.get("source") or ""
+    ) == "final_answer_reply_synthetic_rehearsal" or bool(post_answer.get("synthetic_queue_rehearsal_requested"))
+    synthetic_queue_selected = _submission_safety_int(synthetic_queue.get("autofill_packet_selected"))
+    synthetic_queue_final_stops = _submission_safety_int(
+        synthetic_queue.get("autofill_packet_final_submit_stops")
+    )
+    synthetic_queue_selector_misses = _submission_safety_int(
+        synthetic_queue.get("autofill_packet_selector_misses")
+    )
+    synthetic_queue_ready = bool(synthetic_queue.get("ready_for_supervised_browser_autofill")) or str(
+        synthetic_queue.get("status") or ""
+    ) == "ready_for_supervised_browser_autofill"
+    if synthetic_queue_required:
+        synthetic_queue_100_ready = bool(
+            synthetic_queue_ready
+            and synthetic_queue_selected >= 100
+            and synthetic_queue_selector_misses == 0
+            and synthetic_queue_final_stops >= synthetic_queue_selected
+            and synthetic_queue_final_stops >= 100
+            and not synthetic_queue_bad
+        )
+        add_check(
+            "post_answer_synthetic_rehearsal_100_ready",
+            "synthetic final-answer rehearsal proves 100 ready autofill rows with final-submit stops",
+            synthetic_queue_100_ready,
+            {
+                "required": True,
+                "status": synthetic_queue.get("status"),
+                "ready_for_supervised_browser_autofill": synthetic_queue_ready,
+                "autofill_packet_selected": synthetic_queue_selected,
+                "autofill_packet_selector_misses": synthetic_queue_selector_misses,
+                "autofill_packet_final_submit_stops": synthetic_queue_final_stops,
+                "writes_real_profile_or_memory": bool(
+                    synthetic_queue.get("writes_real_profile_or_memory")
+                ),
+                "submits_real_applications": bool(synthetic_queue.get("submits_real_applications")),
+                "opens_browser": bool(synthetic_queue.get("opens_browser")),
+                "runs_live_check": bool(synthetic_queue.get("runs_live_check")),
+            },
+            "synthetic final-answer rehearsal does not prove 100 supervised-ready rows",
+        )
 
     final_reply = final_answer_reply_intake if isinstance(final_answer_reply_intake, dict) else {}
     final_reply_policy = final_reply.get("policy") if isinstance(final_reply.get("policy"), dict) else {}
@@ -24774,11 +24816,15 @@ def build_submission_safety_audit(
             "fake_position_selector_miss_count": _submission_safety_int(fake.get("selector_miss_count")),
             "post_answer_status": post_answer.get("status"),
             "post_answer_synthetic_final_answers": bool(post_answer.get("synthetic_final_answers")),
+            "post_answer_synthetic_queue_ready": synthetic_queue_ready,
             "post_answer_synthetic_autofill_selected_count": _submission_safety_int(
-                synthetic_queue.get("autofill_packet_selected")
+                synthetic_queue_selected
+            ),
+            "post_answer_synthetic_selector_miss_count": _submission_safety_int(
+                synthetic_queue_selector_misses
             ),
             "post_answer_synthetic_final_submit_stop_count": _submission_safety_int(
-                synthetic_queue.get("autofill_packet_final_submit_stops")
+                synthetic_queue_final_stops
             ),
             "apply_packet_status": packet.get("status"),
             "apply_packet_selected_count": selected_count,
@@ -24856,7 +24902,9 @@ def render_submission_safety_audit_markdown(audit: dict[str, Any]) -> str:
         f"- fake rehearsal local synthetic submits: {summary.get('fake_position_local_synthetic_submit_count', 0)}",
         f"- fake rehearsal selector misses: {summary.get('fake_position_selector_miss_count', 0)}",
         f"- post-answer status: {summary.get('post_answer_status') or 'missing'}",
+        f"- post-answer synthetic queue ready: {str(bool(summary.get('post_answer_synthetic_queue_ready'))).lower()}",
         f"- post-answer synthetic selected: {summary.get('post_answer_synthetic_autofill_selected_count', 0)}",
+        f"- post-answer synthetic selector misses: {summary.get('post_answer_synthetic_selector_miss_count', 0)}",
         f"- post-answer final-submit stops: {summary.get('post_answer_synthetic_final_submit_stop_count', 0)}",
         f"- apply packet status: {summary.get('apply_packet_status') or 'missing'}",
         f"- apply packet selected: {summary.get('apply_packet_selected_count', 0)} / {summary.get('apply_packet_target_count', 0)}",

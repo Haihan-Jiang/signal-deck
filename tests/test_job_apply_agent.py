@@ -952,6 +952,8 @@ class JobApplyAgentTests(unittest.TestCase):
                 "synthetic_answers_never_written_to_real_profile_or_memory": True,
             },
             "synthetic_queue_rehearsal": {
+                "status": "ready_for_supervised_browser_autofill",
+                "ready_for_supervised_browser_autofill": True,
                 "writes_real_profile_or_memory": False,
                 "submits_real_applications": False,
                 "opens_browser": False,
@@ -1042,7 +1044,12 @@ class JobApplyAgentTests(unittest.TestCase):
             "final_answer_synthetic_reply_local_only",
             [row["id"] for row in audit["checks"]],
         )
+        self.assertIn(
+            "post_answer_synthetic_rehearsal_100_ready",
+            [row["id"] for row in audit["checks"]],
+        )
         self.assertEqual(audit["summary"]["fake_position_local_synthetic_submit_count"], 1589)
+        self.assertTrue(audit["summary"]["post_answer_synthetic_queue_ready"])
         self.assertEqual(audit["summary"]["apply_packet_final_submit_stop_count"], 100)
         self.assertEqual(audit["summary"]["final_answer_reply_fake_marker_count"], 1)
         self.assertEqual(audit["summary"]["synthetic_final_answer_reply_fake_marker_count"], 5)
@@ -1051,6 +1058,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("fake data local only", markdown)
         self.assertIn("real employer final submit", markdown)
         self.assertIn("real final-answer fake/test markers", markdown)
+        self.assertIn("post-answer synthetic queue ready: true", markdown)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             json_output = Path(temp_dir) / "submission_safety.json"
@@ -1070,6 +1078,64 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(written["safe"])
             self.assertTrue(json_output.exists())
             self.assertTrue(markdown_output.exists())
+
+    def test_submission_safety_audit_requires_100_ready_synthetic_rehearsal(self) -> None:
+        audit = build_submission_safety_audit(
+            fake_position_rehearsal={
+                "real_platform_submission": False,
+                "policy": {"real_platform_submission": False, "fake_data_real_submission_allowed": False},
+            },
+            post_answer_pipeline={
+                "source": "final_answer_reply_synthetic_rehearsal",
+                "status": "synthetic_queue_rehearsal_ready",
+                "synthetic_final_answers": True,
+                "apply_requested": False,
+                "live_check_requested": False,
+                "open_browser_requested": False,
+                "policy": {
+                    "submits_real_applications": False,
+                    "synthetic_answers_never_written_to_real_profile_or_memory": True,
+                },
+                "synthetic_queue_rehearsal": {
+                    "status": "ready_for_supervised_browser_autofill",
+                    "ready_for_supervised_browser_autofill": True,
+                    "writes_real_profile_or_memory": False,
+                    "submits_real_applications": False,
+                    "opens_browser": False,
+                    "runs_live_check": False,
+                    "autofill_packet_selected": 99,
+                    "autofill_packet_final_submit_stops": 99,
+                    "autofill_packet_selector_misses": 0,
+                },
+            },
+            apply_queue_autofill_packet={
+                "selected_count": 100,
+                "target_count": 100,
+                "real_platform_submission": False,
+                "ready_for_unattended_real_submit": False,
+                "summary": {"final_submit_stop_count": 100},
+                "positions": [
+                    {
+                        "real_platform_submission": False,
+                        "final_submit_allowed": False,
+                        "would_submit": False,
+                        "stop_actions": [{"status": "final_submit_confirmation"}],
+                    }
+                ],
+            },
+            browser_review_queue_audit={
+                "safe": True,
+                "row_count": 1,
+                "real_platform_submission_true_count": 0,
+                "parse_error_count": 0,
+            },
+        )
+
+        self.assertFalse(audit["safe"])
+        self.assertIn(
+            "post_answer_synthetic_rehearsal_100_ready",
+            [row["id"] for row in audit["issues"]],
+        )
 
     def test_submission_safety_audit_blocks_unattended_real_submit_path(self) -> None:
         audit = build_submission_safety_audit(
