@@ -22,6 +22,7 @@ from job_apply_agent.core import (
     build_collection_plan_from_coverage_gate,
     build_critical_input_answer_template,
     build_critical_input_answer_update,
+    build_critical_input_impact_report,
     build_critical_input_preflight,
     build_critical_input_questionnaire,
     build_critical_input_suggestion_packet,
@@ -86,6 +87,8 @@ from job_apply_agent.core import (
     render_critical_input_answer_template_markdown,
     render_critical_input_answer_workflow_markdown,
     render_critical_input_answer_update_markdown,
+    render_critical_input_impact_html,
+    render_critical_input_impact_markdown,
     render_critical_input_preflight_html,
     render_critical_input_preflight_markdown,
     render_critical_input_questionnaire_html,
@@ -127,6 +130,7 @@ from job_apply_agent.core import (
     write_critical_input_answer_template,
     write_critical_input_answer_workflow,
     write_critical_input_answer_update,
+    write_critical_input_impact_report,
     write_critical_input_preflight,
     write_critical_input_questionnaire,
     write_critical_input_suggestion_packet,
@@ -4923,6 +4927,133 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(summary["critical_waiting_after"], 1)
         self.assertEqual(summary["temp_approved_inputs"], 0)
         self.assertEqual(summary["data_blocking_prompts_after"], 1)
+
+    def test_critical_input_impact_report_ranks_simulated_blocker_reduction(self) -> None:
+        learning_tasks = {
+            "tasks": [
+                {
+                    "group_key": "profile:zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "recommended_storage": "profile",
+                    "labels": ["Zip Code"],
+                    "platforms": ["Ashby"],
+                    "required_count": 4,
+                    "persist_allowed": True,
+                },
+                {
+                    "group_key": "answer_memory:favorite_junk_food",
+                    "question": "What's your favorite junk food?",
+                    "recommended_storage": "answer_memory",
+                    "labels": ["What's your favorite junk food?"],
+                    "platforms": ["Greenhouse"],
+                    "required_count": 2,
+                    "persist_allowed": True,
+                },
+                {
+                    "group_key": "supervised_confirmation:policy_acknowledgement",
+                    "question": "May automation mark applicant privacy acknowledgement?",
+                    "recommended_storage": "supervised_confirmation",
+                    "answer_scope": "supervised_only",
+                    "labels": ["Privacy policy"],
+                    "platforms": ["Lever"],
+                    "required_count": 1,
+                    "persist_allowed": False,
+                },
+            ],
+        }
+        pack = build_learning_approval_pack(learning_tasks, {})
+        template = build_critical_input_answer_template(pack)
+        research = {
+            "positions_observed_total": 1,
+            "positions": [
+                {
+                    "position_key": "ashby:example:sre",
+                    "platform": "Ashby",
+                    "company": "Example",
+                    "title": "Site Reliability Engineer",
+                    "role_family": "SRE",
+                }
+            ],
+            "items": [
+                {
+                    "position_key": "ashby:example:sre",
+                    "normalized_label": "zip code",
+                    "label": "Zip Code",
+                    "category": "profile_identity",
+                    "automation_action": "auto_fill_from_profile",
+                    "required": True,
+                    "platform": "Ashby",
+                    "source_file": "test",
+                },
+                {
+                    "position_key": "ashby:example:sre",
+                    "normalized_label": "what s your favorite junk food",
+                    "label": "What's your favorite junk food?",
+                    "category": "standard_preference",
+                    "automation_action": "auto_answer_from_memory",
+                    "required": True,
+                    "platform": "Ashby",
+                    "source_file": "test",
+                },
+            ],
+        }
+        profile_payload = {
+            "candidate": {
+                "name": "Test User",
+                "email": "test@example.com",
+                "phone": "555-0100",
+                "location": "Bellevue, WA",
+            },
+            "preferences": {},
+            "resume_facts": {},
+            "question_answers": {},
+        }
+
+        report = build_critical_input_impact_report(
+            pack,
+            template,
+            research,
+            profile_payload,
+            answer_memory={"version": 1, "answers": []},
+        )
+
+        self.assertEqual(report["input_count"], 3)
+        self.assertEqual(report["combined_answerable_input_count"], 2)
+        self.assertEqual(report["summary"]["baseline_data_blocking_prompts"], 2)
+        self.assertEqual(report["summary"]["combined_data_blocking_prompts_after"], 0)
+        self.assertTrue(report["policy"]["uses_fake_answers_for_impact_only"])
+        impacts = {row["input_id"]: row for row in report["input_impacts"]}
+        self.assertEqual(impacts["profile_zip_or_postal_code"]["data_blocking_prompts_delta"], -1)
+        self.assertEqual(
+            impacts["answer_memory_favorite_junk_food"]["data_blocking_prompts_delta"],
+            -1,
+        )
+        self.assertEqual(
+            impacts["supervised_confirmation_policy_acknowledgement"]["temp_approved_inputs"],
+            0,
+        )
+        self.assertIn("Critical Input Impact Report", render_critical_input_impact_markdown(report))
+        self.assertIn("Input Priority", render_critical_input_impact_html(report))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            json_output = root / "impact.json"
+            markdown_output = root / "impact.md"
+            html_output = root / "impact.html"
+            written = write_critical_input_impact_report(
+                pack,
+                template,
+                research,
+                profile_payload,
+                json_output,
+                markdown_output,
+                html_output,
+                answer_memory={"version": 1, "answers": []},
+            )
+            self.assertEqual(written["summary"]["combined_data_blocking_prompts_after"], 0)
+            self.assertTrue(json_output.exists())
+            self.assertTrue(markdown_output.exists())
+            self.assertTrue(html_output.exists())
 
     def test_critical_input_status_report_groups_waiting_ready_and_supervised(self) -> None:
         learning_tasks = {

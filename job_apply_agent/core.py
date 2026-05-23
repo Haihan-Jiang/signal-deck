@@ -5522,6 +5522,281 @@ _CRITICAL_INPUT_PREFLIGHT_DATA_BLOCKER_STATUSES = {
 }
 
 
+def build_critical_input_impact_report(
+    approval_pack: dict[str, Any],
+    answers_payload: dict[str, Any],
+    research: dict[str, Any],
+    profile_payload: dict[str, Any],
+    answer_memory: dict[str, Any] | None = None,
+    closed_jobs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    rows = _critical_input_answer_rows(answers_payload)
+    input_impacts: list[dict[str, Any]] = []
+    combined_updates: dict[str, Any] = {}
+    for index, item in enumerate(rows, start=1):
+        input_id = str(item.get("input_id") or _critical_input_answer_id(item, index))
+        update_entry = _critical_input_fake_update_for_impact(item, input_id)
+        if update_entry is not None:
+            combined_updates[input_id] = update_entry
+        preflight = build_critical_input_preflight(
+            approval_pack,
+            answers_payload,
+            {input_id: update_entry} if update_entry is not None else {},
+            research,
+            profile_payload,
+            answer_memory=answer_memory,
+            closed_jobs=closed_jobs,
+            approve=True,
+            approve_high_risk=True,
+            source="critical_input_impact_single",
+        )
+        summary = preflight.get("summary") or {}
+        input_impacts.append(
+            {
+                "input_id": input_id,
+                "group_key": item.get("group_key"),
+                "question": item.get("question"),
+                "input_type": item.get("input_type"),
+                "approval_risk": item.get("approval_risk"),
+                "high_risk": _critical_input_is_high_risk(item),
+                "supervised_only": item.get("input_type") == "supervised_browser_review_only",
+                "simulated_answer": _critical_input_impact_answer_summary(update_entry),
+                "matched_updates": summary.get("matched_updates", 0),
+                "temp_approved_inputs": summary.get("temp_approved_inputs", 0),
+                "data_blocking_prompts_before": summary.get("data_blocking_prompts_before", 0),
+                "data_blocking_prompts_after": summary.get("data_blocking_prompts_after", 0),
+                "data_blocking_prompts_delta": summary.get("data_blocking_prompts_delta", 0),
+                "blocking_prompts_delta": summary.get("blocking_prompts_delta", 0),
+                "ready_prompts_delta": summary.get("ready_prompts_delta", 0),
+                "positions_ready_for_autofill_delta": summary.get("positions_ready_for_autofill_delta", 0),
+                "temp_profile_updates": summary.get("temp_profile_updates", 0),
+                "temp_resume_fact_updates": summary.get("temp_resume_fact_updates", 0),
+                "temp_answer_memory_updates": summary.get("temp_answer_memory_updates", 0),
+                "temp_category_policy_updates": summary.get("temp_category_policy_updates", 0),
+            }
+        )
+    input_impacts.sort(
+        key=lambda row: (
+            int(row.get("data_blocking_prompts_delta") or 0),
+            -int(row.get("positions_ready_for_autofill_delta") or 0),
+            str(row.get("input_id") or ""),
+        )
+    )
+    combined = build_critical_input_preflight(
+        approval_pack,
+        answers_payload,
+        combined_updates,
+        research,
+        profile_payload,
+        answer_memory=answer_memory,
+        closed_jobs=closed_jobs,
+        approve=True,
+        approve_high_risk=True,
+        source="critical_input_impact_combined",
+    )
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "critical_input_impact_report",
+        "input_count": len(input_impacts),
+        "combined_answerable_input_count": len(combined_updates),
+        "summary": {
+            "baseline_data_blocking_prompts": (combined.get("summary") or {}).get(
+                "data_blocking_prompts_before", 0
+            ),
+            "combined_data_blocking_prompts_after": (combined.get("summary") or {}).get(
+                "data_blocking_prompts_after", 0
+            ),
+            "combined_data_blocking_prompts_delta": (combined.get("summary") or {}).get(
+                "data_blocking_prompts_delta", 0
+            ),
+            "combined_ready_prompts_delta": (combined.get("summary") or {}).get("ready_prompts_delta", 0),
+            "combined_positions_ready_for_autofill_delta": (combined.get("summary") or {}).get(
+                "positions_ready_for_autofill_delta", 0
+            ),
+            "top_input_id": input_impacts[0].get("input_id") if input_impacts else "",
+            "top_input_data_blocking_delta": input_impacts[0].get("data_blocking_prompts_delta", 0)
+            if input_impacts
+            else 0,
+        },
+        "input_impacts": input_impacts,
+        "combined_preflight_summary": combined.get("summary", {}),
+        "policy": {
+            "uses_fake_answers_for_impact_only": True,
+            "writes_real_profile_or_memory": False,
+            "submits_real_applications": False,
+            "high_risk_answers_are_simulated_only": True,
+            "supervised_only_inputs_are_not_auto_resolved": True,
+        },
+        "next_commands": [
+            "python3 -m job_apply_agent critical-inputs-questionnaire",
+            "python3 -m job_apply_agent critical-inputs-preflight --updates <confirmed_answers.json> --approve",
+            "python3 -m job_apply_agent critical-inputs-workflow --updates <confirmed_answers.json> --approve --apply",
+        ],
+    }
+
+
+def write_critical_input_impact_report(
+    approval_pack: dict[str, Any],
+    answers_payload: dict[str, Any],
+    research: dict[str, Any],
+    profile_payload: dict[str, Any],
+    json_output: str | Path,
+    markdown_output: str | Path,
+    html_output: str | Path,
+    answer_memory: dict[str, Any] | None = None,
+    closed_jobs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    report = build_critical_input_impact_report(
+        approval_pack,
+        answers_payload,
+        research,
+        profile_payload,
+        answer_memory=answer_memory,
+        closed_jobs=closed_jobs,
+    )
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    html_path = Path(html_output)
+    for path in [json_path, markdown_path, html_path]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(render_critical_input_impact_markdown(report), encoding="utf-8")
+    html_path.write_text(render_critical_input_impact_html(report), encoding="utf-8")
+    return report
+
+
+def render_critical_input_impact_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    lines = [
+        "# Critical Input Impact Report",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        f"Inputs: {report.get('input_count', 0)}",
+        f"Answerable simulated inputs: {report.get('combined_answerable_input_count', 0)}",
+        f"Baseline data blockers: {summary.get('baseline_data_blocking_prompts', 0)}",
+        f"After all simulated answers: {summary.get('combined_data_blocking_prompts_after', 0)}",
+        f"Combined data blocker delta: {summary.get('combined_data_blocking_prompts_delta', 0)}",
+        f"Combined ready prompt delta: {summary.get('combined_ready_prompts_delta', 0)}",
+        f"Combined position-ready delta: {summary.get('combined_positions_ready_for_autofill_delta', 0)}",
+        "",
+        "## Input Priority",
+        "",
+    ]
+    rows = report.get("input_impacts") or []
+    if not rows:
+        lines.append("- None")
+    for row in rows:
+        flags = []
+        if row.get("high_risk"):
+            flags.append("high-risk")
+        if row.get("supervised_only"):
+            flags.append("supervised-only")
+        flag_text = f" ({', '.join(flags)})" if flags else ""
+        lines.append(
+            "- {input_id}{flags}: data blockers {delta}; ready prompts {ready}; positions {positions}".format(
+                input_id=row.get("input_id"),
+                flags=flag_text,
+                delta=row.get("data_blocking_prompts_delta", 0),
+                ready=row.get("ready_prompts_delta", 0),
+                positions=row.get("positions_ready_for_autofill_delta", 0),
+            )
+        )
+        lines.append(f"  question: {row.get('question')}")
+    lines.extend(["", "## Policy", ""])
+    for key, value in sorted((report.get("policy") or {}).items()):
+        lines.append(f"- {key}: {str(value).lower() if isinstance(value, bool) else value}")
+    return "\n".join(lines) + "\n"
+
+
+def render_critical_input_impact_html(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    rows = [
+        [
+            row.get("input_id"),
+            row.get("input_type"),
+            row.get("approval_risk"),
+            row.get("data_blocking_prompts_delta", 0),
+            row.get("ready_prompts_delta", 0),
+            row.get("positions_ready_for_autofill_delta", 0),
+            row.get("question"),
+        ]
+        for row in report.get("input_impacts") or []
+    ]
+    return "\n".join(
+        [
+            "<!doctype html>",
+            '<html lang="en">',
+            "<head>",
+            '<meta charset="utf-8">',
+            '<meta name="viewport" content="width=device-width, initial-scale=1">',
+            "<title>Critical Input Impact Report</title>",
+            "<style>",
+            _question_export_css(),
+            "</style>",
+            "</head>",
+            "<body>",
+            "<main>",
+            "<h1>Critical Input Impact Report</h1>",
+            f"<p class=\"muted\">Generated: {_html_escape(report.get('generated_at'))}</p>",
+            _html_kpis(
+                [
+                    ("Inputs", report.get("input_count", 0)),
+                    ("Baseline blockers", summary.get("baseline_data_blocking_prompts", 0)),
+                    ("After all simulated", summary.get("combined_data_blocking_prompts_after", 0)),
+                    ("Blocker delta", summary.get("combined_data_blocking_prompts_delta", 0)),
+                    ("Ready prompt delta", summary.get("combined_ready_prompts_delta", 0)),
+                    ("Position delta", summary.get("combined_positions_ready_for_autofill_delta", 0)),
+                ]
+            ),
+            "<section><h2>Input Priority</h2>",
+            _html_table(
+                [
+                    "Input ID",
+                    "Type",
+                    "Risk",
+                    "Data blocker delta",
+                    "Ready prompt delta",
+                    "Position delta",
+                    "Question",
+                ],
+                rows,
+            ),
+            "</section>",
+            "<section><h2>Policy</h2>",
+            _html_key_value_table(report.get("policy") or {}),
+            "</section>",
+            "</main>",
+            "</body>",
+            "</html>",
+        ]
+    )
+
+
+def _critical_input_fake_update_for_impact(item: dict[str, Any], input_id: str) -> Any | None:
+    if item.get("input_type") == "supervised_browser_review_only":
+        return None
+    answer = _fake_critical_input_answer(item)
+    if _critical_input_is_high_risk(item):
+        return {
+            "user_answer": answer,
+            "approval_decision": "approved",
+            "high_risk_user_confirmed": True,
+        }
+    return answer
+
+
+def _critical_input_impact_answer_summary(update_entry: Any | None) -> str:
+    if update_entry is None:
+        return "supervised-only; not simulated"
+    if isinstance(update_entry, dict):
+        answer = str(update_entry.get("user_answer") or "").strip()
+    else:
+        answer = str(update_entry or "").strip()
+    if not answer:
+        return ""
+    return answer[:120]
+
+
 def render_critical_input_answer_update_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") or {}
     lines = [

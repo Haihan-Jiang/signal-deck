@@ -507,6 +507,25 @@ inside a temporary workspace, then reports how many data blockers, ready
 prompts, and autofill-ready positions would change. It does not write the real
 profile, answer memory, or any employer application.
 
+To prioritize what to answer first, generate a fake-answer impact ranking:
+
+```bash
+python3 -m job_apply_agent critical-inputs-impact
+```
+
+This writes:
+
+```text
+job_apply_agent/outbox/critical_input_impact_latest.json
+job_apply_agent/outbox/critical_input_impact_latest.md
+job_apply_agent/outbox/critical_input_impact_latest.html
+```
+
+The impact report uses fake answers only inside temporary simulations. It ranks
+each remaining critical input by how many data-blocking prompts and
+autofill-ready positions it would unlock, so the next manual answer pass can
+start with the highest-leverage items.
+
 To run the whole confirmed-answer intake loop in one command, use:
 
 ```bash

@@ -40,6 +40,7 @@ from .core import (
     write_collection_plan,
     write_critical_input_answer_workflow,
     write_critical_input_answer_update,
+    write_critical_input_impact_report,
     write_critical_input_preflight,
     write_critical_input_questionnaire,
     write_form_fill_plan,
@@ -108,6 +109,9 @@ DEFAULT_CRITICAL_INPUT_WORKFLOW_MARKDOWN = Path(__file__).with_name("outbox") / 
 DEFAULT_CRITICAL_INPUT_PREFLIGHT_JSON = Path(__file__).with_name("outbox") / "critical_input_preflight_latest.json"
 DEFAULT_CRITICAL_INPUT_PREFLIGHT_MARKDOWN = Path(__file__).with_name("outbox") / "critical_input_preflight_latest.md"
 DEFAULT_CRITICAL_INPUT_PREFLIGHT_HTML = Path(__file__).with_name("outbox") / "critical_input_preflight_latest.html"
+DEFAULT_CRITICAL_INPUT_IMPACT_JSON = Path(__file__).with_name("outbox") / "critical_input_impact_latest.json"
+DEFAULT_CRITICAL_INPUT_IMPACT_MARKDOWN = Path(__file__).with_name("outbox") / "critical_input_impact_latest.md"
+DEFAULT_CRITICAL_INPUT_IMPACT_HTML = Path(__file__).with_name("outbox") / "critical_input_impact_latest.html"
 DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_JSON = Path(__file__).with_name("outbox") / "critical_input_questionnaire_latest.json"
 DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_MARKDOWN = Path(__file__).with_name("outbox") / "critical_input_questionnaire_latest.md"
 DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_HTML = Path(__file__).with_name("outbox") / "critical_input_questionnaire_latest.html"
@@ -522,6 +526,26 @@ def main() -> int:
         help="also approve high-risk rows supplied in this preflight",
     )
 
+    critical_inputs_impact_parser = subparsers.add_parser(
+        "critical-inputs-impact",
+        help="rank remaining critical inputs by simulated blocker reduction",
+    )
+    critical_inputs_impact_parser.add_argument("--approval-pack", default=str(DEFAULT_LEARNING_APPROVAL_PACK_JSON))
+    critical_inputs_impact_parser.add_argument("--answers", default=str(DEFAULT_CRITICAL_INPUT_ANSWERS_JSON))
+    critical_inputs_impact_parser.add_argument("--research-json", default=str(DEFAULT_RESEARCH_JSON))
+    critical_inputs_impact_parser.add_argument(
+        "--profile",
+        default=str(DEFAULT_PERSONAL_PROFILE if DEFAULT_PERSONAL_PROFILE.exists() else DEFAULT_PROFILE),
+    )
+    critical_inputs_impact_parser.add_argument("--memory", default=str(DEFAULT_MEMORY))
+    critical_inputs_impact_parser.add_argument("--closed-jobs", default=str(DEFAULT_CLOSED_JOBS))
+    critical_inputs_impact_parser.add_argument("--json-output", default=str(DEFAULT_CRITICAL_INPUT_IMPACT_JSON))
+    critical_inputs_impact_parser.add_argument(
+        "--markdown-output",
+        default=str(DEFAULT_CRITICAL_INPUT_IMPACT_MARKDOWN),
+    )
+    critical_inputs_impact_parser.add_argument("--html-output", default=str(DEFAULT_CRITICAL_INPUT_IMPACT_HTML))
+
     critical_inputs_workflow_parser = subparsers.add_parser(
         "critical-inputs-workflow",
         help="merge confirmed critical answers, dry-run apply, optionally apply, then refresh reports",
@@ -846,6 +870,14 @@ def main() -> int:
         "--critical-input-preflight-html",
         default=str(DEFAULT_CRITICAL_INPUT_PREFLIGHT_HTML),
     )
+    export_questions_parser.add_argument(
+        "--critical-input-impact-json",
+        default=str(DEFAULT_CRITICAL_INPUT_IMPACT_JSON),
+    )
+    export_questions_parser.add_argument(
+        "--critical-input-impact-html",
+        default=str(DEFAULT_CRITICAL_INPUT_IMPACT_HTML),
+    )
     export_questions_parser.add_argument("--xlsx-output", default=str(DEFAULT_QUESTION_EXPORT_XLSX))
     export_questions_parser.add_argument("--html-output", default=str(DEFAULT_QUESTION_EXPORT_HTML))
 
@@ -1015,6 +1047,8 @@ def main() -> int:
                     "Critical input questionnaire HTML": args.critical_input_questionnaire_html,
                     "Critical input preflight": args.critical_input_preflight_json,
                     "Critical input preflight HTML": args.critical_input_preflight_html,
+                    "Critical input impact": args.critical_input_impact_json,
+                    "Critical input impact HTML": args.critical_input_impact_html,
                 }
             ),
             synthetic_browser_execution=_load_optional_json(args.synthetic_browser_exec_json),
@@ -1484,6 +1518,37 @@ def main() -> int:
             f"{summary.get('positions_ready_for_autofill_before', 0)} -> "
             f"{summary.get('positions_ready_for_autofill_after', 0)}"
         )
+        return 0
+
+    if args.command == "critical-inputs-impact":
+        for label, path_value in [
+            ("approval pack", args.approval_pack),
+            ("critical input answers", args.answers),
+            ("research report", args.research_json),
+            ("profile", args.profile),
+        ]:
+            if not Path(path_value).exists():
+                raise FileNotFoundError(f"{label} not found: {path_value}")
+        report = write_critical_input_impact_report(
+            json.loads(Path(args.approval_pack).read_text(encoding="utf-8")),
+            json.loads(Path(args.answers).read_text(encoding="utf-8")),
+            json.loads(Path(args.research_json).read_text(encoding="utf-8")),
+            json.loads(Path(args.profile).read_text(encoding="utf-8")),
+            args.json_output,
+            args.markdown_output,
+            args.html_output,
+            answer_memory=load_answer_memory(args.memory),
+            closed_jobs=load_closed_jobs(args.closed_jobs),
+        )
+        summary = report.get("summary") or {}
+        print(f"Wrote critical input impact JSON to {args.json_output}")
+        print(f"Wrote critical input impact Markdown to {args.markdown_output}")
+        print(f"Wrote critical input impact HTML to {args.html_output}")
+        print(f"Inputs: {report.get('input_count', 0)}")
+        print(f"Baseline data blockers: {summary.get('baseline_data_blocking_prompts', 0)}")
+        print(f"After all simulated answers: {summary.get('combined_data_blocking_prompts_after', 0)}")
+        print(f"Combined blocker delta: {summary.get('combined_data_blocking_prompts_delta', 0)}")
+        print(f"Top input: {summary.get('top_input_id', '')}")
         return 0
 
     if args.command == "critical-inputs-workflow":
@@ -2022,6 +2087,17 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_HTML,
             suggestions_payload=_load_optional_json(str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON)),
         )
+        write_critical_input_impact_report(
+            approval_pack,
+            answers_payload,
+            research,
+            json.loads(profile_path.read_text(encoding="utf-8")) if profile_path.exists() else {},
+            DEFAULT_CRITICAL_INPUT_IMPACT_JSON,
+            DEFAULT_CRITICAL_INPUT_IMPACT_MARKDOWN,
+            DEFAULT_CRITICAL_INPUT_IMPACT_HTML,
+            answer_memory=answer_memory,
+            closed_jobs=load_closed_jobs(DEFAULT_CLOSED_JOBS),
+        )
     write_autofill_batch_plan(
         research,
         readiness,
@@ -2077,6 +2153,8 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                     "Critical input questionnaire HTML": str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_HTML),
                     "Critical input preflight": str(DEFAULT_CRITICAL_INPUT_PREFLIGHT_JSON),
                     "Critical input preflight HTML": str(DEFAULT_CRITICAL_INPUT_PREFLIGHT_HTML),
+                    "Critical input impact": str(DEFAULT_CRITICAL_INPUT_IMPACT_JSON),
+                    "Critical input impact HTML": str(DEFAULT_CRITICAL_INPUT_IMPACT_HTML),
                 }
             ),
             synthetic_browser_execution=_load_optional_json(str(DEFAULT_SYNTHETIC_BROWSER_EXEC_JSON)),
@@ -2097,6 +2175,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             "critical-inputs-status",
             "critical-input-suggestions",
             "critical-inputs-questionnaire",
+            "critical-inputs-impact",
             "autofill-batch",
             "goal-audit",
             "export-questions",
