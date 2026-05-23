@@ -12131,6 +12131,9 @@ def build_position_execution_audit(
         for row in (synthetic_autofill_packet or {}).get("positions", [])
         if isinstance(row, dict)
     }
+    global_answer_gate_aliases = _position_execution_global_answer_aliases(
+        goal_readiness_audit or {}
+    )
     rows: list[dict[str, Any]] = []
     for index, row in enumerate(positions[: max(target_count, 0)], start=1):
         key = _position_execution_key(row)
@@ -12187,6 +12190,11 @@ def build_position_execution_audit(
                 "would_submit": bool(row.get("would_submit")),
                 "final_submit_allowed": bool(row.get("final_submit_allowed")),
                 "blockers_or_gates": blockers,
+                "global_answer_gate_aliases": (
+                    global_answer_gate_aliases
+                    if str(row.get("packet_status") or "") == "ready_after_confirmed_answers"
+                    else []
+                ),
                 "next_action": row.get("next_action"),
             }
         )
@@ -12311,6 +12319,8 @@ def render_position_execution_audit_markdown(report: dict[str, Any]) -> str:
         f"- final-submit stops: {summary.get('final_submit_stop_position_count', 0)} positions, {summary.get('final_submit_stop_count', 0)} stops",
         f"- remaining user answers: {summary.get('remaining_user_answer_count', 0)}",
         f"- global remaining user answers: {summary.get('global_remaining_user_answer_count', 0)}",
+        "- global remaining answer aliases: "
+        + (", ".join(summary.get("global_remaining_user_answer_aliases") or []) or "none"),
         f"- ready for supervised autofill now: {str(bool(summary.get('ready_for_supervised_autofill_now'))).lower()}",
         f"- ready for supervised autofill after answers: {str(bool(summary.get('ready_for_supervised_autofill_after_answers'))).lower()}",
         f"- target platforms covered: {summary.get('selected_target_platform_count', 0)} / {summary.get('target_platform_count', 0)}",
@@ -12457,6 +12467,10 @@ def render_position_execution_audit_html(report: dict[str, Any]) -> str:
                     ("User answers", summary.get("remaining_user_answer_count", 0)),
                     ("Global answers", summary.get("global_remaining_user_answer_count", 0)),
                     (
+                        "Answer aliases",
+                        ", ".join(summary.get("global_remaining_user_answer_aliases") or []) or "none",
+                    ),
+                    (
                         "Target platforms",
                         f"{summary.get('selected_target_platform_count', 0)} / {summary.get('target_platform_count', 0)}",
                     ),
@@ -12553,8 +12567,23 @@ def build_selected_final_answer_dependency_report(
         for row in (position_execution_audit.get("positions") or [])[: max(int(target_count), 0)]
         if isinstance(row, dict)
     ]
+    position_summary = position_execution_audit.get("summary") or {}
+    selected_queue_remaining_answers = int(
+        position_summary.get("selected_queue_remaining_user_answer_count")
+        or position_summary.get("remaining_user_answer_count")
+        or 0
+    )
+    global_dependency_aliases = _string_list(
+        position_summary.get("selected_queue_remaining_user_answer_aliases")
+    ) or _string_list(position_summary.get("global_remaining_user_answer_aliases"))
+    direct_or_global_dependency_aliases = sorted(set(global_dependency_aliases))
+    selected_queue_has_global_gate = bool(
+        selected_queue_remaining_answers > 0 and global_dependency_aliases
+    )
     rows: list[dict[str, Any]] = []
-    unknown_dependency_aliases: set[str] = set()
+    unknown_dependency_aliases: set[str] = {
+        alias for alias in global_dependency_aliases if alias not in known_alias_set
+    }
     for index, position in enumerate(selected_positions, start=1):
         position_key = _position_execution_key(position)
         items = items_by_position.get(position_key, [])
@@ -12578,6 +12607,11 @@ def build_selected_final_answer_dependency_report(
                 for match in unresolved_matches
                 if str(match.get("alias") or "").strip()
             }
+        )
+        row_global_aliases = global_dependency_aliases if selected_queue_has_global_gate else []
+        all_aliases = sorted(set(aliases) | set(row_global_aliases))
+        direct_or_global_dependency_aliases = sorted(
+            set(direct_or_global_dependency_aliases) | set(aliases)
         )
         for alias in aliases:
             if alias not in known_alias_set:
@@ -12607,6 +12641,8 @@ def build_selected_final_answer_dependency_report(
                 "packet_status": position.get("packet_status"),
                 "live_status": position.get("live_status"),
                 "unresolved_final_answer_aliases": aliases,
+                "global_unresolved_final_answer_aliases": row_global_aliases,
+                "all_unresolved_final_answer_aliases": all_aliases,
                 "unresolved_final_answer_prompt_count": len(unresolved_matches),
                 "unresolved_final_answer_prompts": unresolved_matches[:10],
                 "resolved_or_nonblocking_final_answer_aliases": resolved_or_nonblocking_aliases,
@@ -12624,6 +12660,13 @@ def build_selected_final_answer_dependency_report(
             if alias:
                 alias_prompt_counts[alias] = alias_prompt_counts.get(alias, 0) + 1
     selected_dependency_aliases = sorted(alias_position_counts)
+    global_dependency_known_aliases = [
+        alias for alias in global_dependency_aliases if alias in known_alias_set
+    ]
+    selected_count = len(rows)
+    positions_waiting_on_global_gate = selected_count if selected_queue_has_global_gate else 0
+    mapped_aliases = set(selected_dependency_aliases) | set(global_dependency_known_aliases)
+    global_gate_mapped = not known_alias_set or known_alias_set.issubset(mapped_aliases)
     blocker_rows = [
         row
         for row in (blockers.get("blockers") or blockers.get("fields") or [])
@@ -12634,7 +12677,6 @@ def build_selected_final_answer_dependency_report(
         for row in blocker_rows
         if str(row.get("alias") or "").strip()
     }
-    selected_count = len(rows)
     ready_after_count = sum(1 for row in rows if bool(row.get("ready_after_truthful_answers")))
     status = _selected_final_answer_dependency_status(
         selected_count=selected_count,
@@ -12655,6 +12697,14 @@ def build_selected_final_answer_dependency_report(
         "direct_dependency_prompt_count": sum(
             int(row.get("unresolved_final_answer_prompt_count") or 0) for row in rows
         ),
+        "selected_queue_remaining_user_answer_count": selected_queue_remaining_answers,
+        "selected_queue_global_dependency_alias_count": len(global_dependency_aliases),
+        "selected_queue_global_dependency_aliases": global_dependency_aliases,
+        "selected_queue_global_dependency_known_aliases": global_dependency_known_aliases,
+        "positions_waiting_on_global_answer_gate": positions_waiting_on_global_gate,
+        "direct_or_global_dependency_alias_count": len(direct_or_global_dependency_aliases),
+        "direct_or_global_dependency_aliases": direct_or_global_dependency_aliases,
+        "global_answer_gate_mapped": global_gate_mapped,
         "ready_after_truthful_answers_count": ready_after_count,
         "alias_position_counts": alias_position_counts,
         "alias_prompt_counts": dict(sorted(alias_prompt_counts.items())),
@@ -12723,6 +12773,10 @@ def _selected_final_answer_dependency_requirements(summary: dict[str, Any]) -> l
     selected = int(summary.get("selected_position_count") or 0)
     unknown_aliases = _string_list(summary.get("unknown_dependency_aliases"))
     known_aliases = _string_list(summary.get("known_unresolved_aliases"))
+    selected_dependency_aliases = _string_list(summary.get("selected_dependency_aliases"))
+    global_dependency_aliases = _string_list(summary.get("selected_queue_global_dependency_aliases"))
+    global_gate_positions = int(summary.get("positions_waiting_on_global_answer_gate") or 0)
+    global_gate_mapped = bool(summary.get("global_answer_gate_mapped"))
     ready_after = int(summary.get("ready_after_truthful_answers_count") or 0)
     selector_misses = int(summary.get("position_execution_selector_miss_count") or 0)
     return [
@@ -12737,6 +12791,18 @@ def _selected_final_answer_dependency_requirements(summary: dict[str, Any]) -> l
             "status": "achieved" if not unknown_aliases else "needs_classification",
             "evidence": "unknown_aliases=" + (", ".join(unknown_aliases) or "none"),
             "blocking": bool(unknown_aliases),
+        },
+        {
+            "id": "global_truthful_answer_gate_mapped",
+            "status": "achieved" if global_gate_mapped else "needs_global_gate_mapping",
+            "evidence": (
+                "global_aliases="
+                + (", ".join(global_dependency_aliases) or "none")
+                + f"; positions_waiting_on_global_gate={global_gate_positions}/{target}; "
+                + "direct_aliases="
+                + (", ".join(selected_dependency_aliases) or "none")
+            ),
+            "blocking": not global_gate_mapped,
         },
         {
             "id": "truthful_answers_remaining",
@@ -12834,10 +12900,15 @@ def render_selected_final_answer_dependency_markdown(report: dict[str, Any]) -> 
         f"- known unresolved aliases: {summary.get('known_unresolved_alias_count', 0)}",
         f"- positions with direct final-answer dependencies: {summary.get('positions_with_final_answer_dependencies', 0)}",
         f"- direct dependency prompts: {summary.get('direct_dependency_prompt_count', 0)}",
+        f"- positions waiting on global answer gate: {summary.get('positions_waiting_on_global_answer_gate', 0)}",
         f"- ready after truthful answers: {summary.get('ready_after_truthful_answers_count', 0)}",
         f"- all selected dependencies accounted for: {str(bool(summary.get('all_selected_dependencies_accounted_for'))).lower()}",
         "- selected dependency aliases: "
         + (", ".join(summary.get("selected_dependency_aliases") or []) or "none"),
+        "- selected queue global dependency aliases: "
+        + (", ".join(summary.get("selected_queue_global_dependency_aliases") or []) or "none"),
+        "- direct or global dependency aliases: "
+        + (", ".join(summary.get("direct_or_global_dependency_aliases") or []) or "none"),
         "- global blockers not seen in selected rows: "
         + (", ".join(summary.get("global_blockers_not_seen_in_selected_positions") or []) or "none"),
         "",
@@ -12878,7 +12949,9 @@ def render_selected_final_answer_dependency_markdown(report: dict[str, Any]) -> 
                 "Platform",
                 "Company",
                 "Title",
-                "Aliases",
+                "Direct aliases",
+                "Global aliases",
+                "All aliases",
                 "Prompt count",
                 "Ready after answers",
                 "Final submit gate",
@@ -12891,6 +12964,8 @@ def render_selected_final_answer_dependency_markdown(report: dict[str, Any]) -> 
                     row.get("company"),
                     row.get("title"),
                     ", ".join(_string_list(row.get("unresolved_final_answer_aliases"))),
+                    ", ".join(_string_list(row.get("global_unresolved_final_answer_aliases"))),
+                    ", ".join(_string_list(row.get("all_unresolved_final_answer_aliases"))),
                     row.get("unresolved_final_answer_prompt_count"),
                     str(bool(row.get("ready_after_truthful_answers"))).lower(),
                     str(bool(row.get("final_submit_supervised_gate"))).lower(),
@@ -12932,6 +13007,11 @@ def render_selected_final_answer_dependency_html(report: dict[str, Any]) -> str:
                     ),
                     ("Known aliases", summary.get("known_unresolved_alias_count", 0)),
                     ("Direct rows", summary.get("positions_with_final_answer_dependencies", 0)),
+                    ("Global gate rows", summary.get("positions_waiting_on_global_answer_gate", 0)),
+                    (
+                        "Global aliases",
+                        ", ".join(summary.get("selected_queue_global_dependency_aliases") or []) or "none",
+                    ),
                     ("Direct prompts", summary.get("direct_dependency_prompt_count", 0)),
                     ("Ready after answers", summary.get("ready_after_truthful_answers_count", 0)),
                     (
@@ -12973,7 +13053,9 @@ def render_selected_final_answer_dependency_html(report: dict[str, Any]) -> str:
                     "Platform",
                     "Company",
                     "Title",
-                    "Aliases",
+                    "Direct aliases",
+                    "Global aliases",
+                    "All aliases",
                     "Prompt count",
                     "Ready after answers",
                     "Final submit gate",
@@ -12987,6 +13069,8 @@ def render_selected_final_answer_dependency_html(report: dict[str, Any]) -> str:
                         row.get("company"),
                         row.get("title"),
                         ", ".join(_string_list(row.get("unresolved_final_answer_aliases"))),
+                        ", ".join(_string_list(row.get("global_unresolved_final_answer_aliases"))),
+                        ", ".join(_string_list(row.get("all_unresolved_final_answer_aliases"))),
                         row.get("unresolved_final_answer_prompt_count"),
                         _yes_no(row.get("ready_after_truthful_answers")),
                         _yes_no(row.get("final_submit_supervised_gate")),
@@ -13008,6 +13092,27 @@ def render_selected_final_answer_dependency_html(report: dict[str, Any]) -> str:
 
 def _position_execution_key(row: dict[str, Any]) -> str:
     return str(row.get("position_key") or row.get("apply_url") or row.get("url") or row.get("index") or "")
+
+
+def _position_execution_global_answer_aliases(goal_readiness_audit: dict[str, Any]) -> list[str]:
+    if not isinstance(goal_readiness_audit, dict):
+        return []
+    verdict = goal_readiness_audit.get("completion_verdict")
+    aliases = _string_list(
+        (verdict or {}).get("blocking_final_answer_aliases")
+        if isinstance(verdict, dict)
+        else None
+    )
+    if aliases:
+        return aliases
+    rows = goal_readiness_audit.get("final_answer_waiting_rows") or []
+    row_aliases = [
+        str(row.get("alias") or row.get("input_id") or "").strip()
+        for row in rows
+        if isinstance(row, dict)
+        and str(row.get("alias") or row.get("input_id") or "").strip()
+    ]
+    return sorted(dict.fromkeys(row_aliases))
 
 
 def _position_execution_blockers(
@@ -13085,8 +13190,10 @@ def _position_execution_summary(
         or ((platform_playbook.get("summary") or {}).get("final_answer_missing_count"))
         or 0
     )
+    global_remaining_answer_aliases = _position_execution_global_answer_aliases(goal_readiness_audit)
     ready_now = bool(autofill_packet.get("ready_for_supervised_browser_autofill"))
     selected_queue_remaining_answers = 0 if ready_now else global_remaining_answers
+    selected_queue_remaining_answer_aliases = [] if ready_now else global_remaining_answer_aliases
     position_count = len(rows)
     selector_miss_positions = sum(1 for row in rows if int(row.get("selector_miss_count") or 0) > 0)
     synthetic_selector_miss_positions = sum(
@@ -13133,7 +13240,9 @@ def _position_execution_summary(
         "unsafe_real_submit_position_count": unsafe_real_submit_positions,
         "remaining_user_answer_count": selected_queue_remaining_answers,
         "global_remaining_user_answer_count": global_remaining_answers,
+        "global_remaining_user_answer_aliases": global_remaining_answer_aliases,
         "selected_queue_remaining_user_answer_count": selected_queue_remaining_answers,
+        "selected_queue_remaining_user_answer_aliases": selected_queue_remaining_answer_aliases,
         "ready_for_supervised_autofill_now": ready_now,
         "ready_for_supervised_autofill_after_answers": ready_after_answers,
         "synthetic_packet_ready_for_supervised_autofill": bool(
@@ -13245,6 +13354,10 @@ def _position_execution_requirements(summary: dict[str, Any]) -> list[dict[str, 
             "evidence": evidence(
                 ("selected_queue_remaining_user_answers", summary.get("remaining_user_answer_count", 0)),
                 ("global_remaining_user_answers", summary.get("global_remaining_user_answer_count", 0)),
+                (
+                    "selected_queue_remaining_user_answer_aliases",
+                    ",".join(summary.get("selected_queue_remaining_user_answer_aliases") or []),
+                ),
             ),
         },
         {
@@ -13252,6 +13365,10 @@ def _position_execution_requirements(summary: dict[str, Any]) -> list[dict[str, 
             "status": "needs_user_answers" if summary.get("global_remaining_user_answer_count") else "achieved",
             "evidence": evidence(
                 ("global_remaining_user_answers", summary.get("global_remaining_user_answer_count", 0)),
+                (
+                    "global_remaining_user_answer_aliases",
+                    ",".join(summary.get("global_remaining_user_answer_aliases") or []),
+                ),
                 ("selected_queue_remaining_user_answers", summary.get("remaining_user_answer_count", 0)),
                 ("goal_complete", summary.get("goal_complete", False)),
             ),
@@ -17051,6 +17168,15 @@ def build_automation_handoff_report(
         "position_execution_remaining_user_answer_count": int(
             execution_summary.get("remaining_user_answer_count") or 0
         ),
+        "position_execution_global_remaining_user_answer_count": int(
+            execution_summary.get("global_remaining_user_answer_count") or 0
+        ),
+        "position_execution_global_remaining_user_answer_aliases": _string_list(
+            execution_summary.get("global_remaining_user_answer_aliases")
+        ),
+        "position_execution_selected_queue_remaining_user_answer_aliases": _string_list(
+            execution_summary.get("selected_queue_remaining_user_answer_aliases")
+        ),
         "position_execution_target_platform_count": int(
             execution_summary.get("target_platform_count") or 0
         ),
@@ -17079,6 +17205,18 @@ def build_automation_handoff_report(
         ),
         "selected_answer_dependency_direct_prompt_count": int(
             dependency_summary.get("direct_dependency_prompt_count") or 0
+        ),
+        "selected_answer_dependency_positions_waiting_on_global_gate": int(
+            dependency_summary.get("positions_waiting_on_global_answer_gate") or 0
+        ),
+        "selected_answer_dependency_global_aliases": _string_list(
+            dependency_summary.get("selected_queue_global_dependency_aliases")
+        ),
+        "selected_answer_dependency_direct_or_global_aliases": _string_list(
+            dependency_summary.get("direct_or_global_dependency_aliases")
+        ),
+        "selected_answer_dependency_global_gate_mapped": bool(
+            dependency_summary.get("global_answer_gate_mapped")
         ),
         "selected_answer_dependency_ready_after_truthful_answers_count": int(
             dependency_summary.get("ready_after_truthful_answers_count") or 0

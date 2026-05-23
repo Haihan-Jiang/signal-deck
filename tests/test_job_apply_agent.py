@@ -5043,6 +5043,12 @@ class JobApplyAgentTests(unittest.TestCase):
             {"citizenship_status": 1, "zip_or_postal_code": 1},
         )
         self.assertEqual(report["summary"]["ready_after_truthful_answers_count"], 3)
+        self.assertTrue(report["summary"]["global_answer_gate_mapped"])
+        self.assertEqual(report["summary"]["positions_waiting_on_global_answer_gate"], 0)
+        self.assertEqual(
+            report["summary"]["direct_or_global_dependency_aliases"],
+            ["citizenship_status", "zip_or_postal_code"],
+        )
         self.assertEqual(
             report["positions"][0]["unresolved_final_answer_aliases"],
             ["citizenship_status"],
@@ -5054,6 +5060,61 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["positions"][2]["unresolved_final_answer_aliases"], [])
         self.assertIn("Selected Final-Answer Dependencies", render_selected_final_answer_dependency_markdown(report))
         self.assertIn("citizenship_status", render_selected_final_answer_dependency_html(report))
+        global_gate_research = {
+            "positions": positions,
+            "items": [
+                {
+                    "position_key": position["position_key"],
+                    "label": "Email",
+                    "category": "profile_identity",
+                    "automation_action": "auto_fill_from_profile",
+                    "required": True,
+                    "platform": position["platform"],
+                }
+                for position in positions
+            ],
+        }
+        global_gate_execution = json.loads(json.dumps(position_execution))
+        global_gate_execution["summary"]["selected_queue_remaining_user_answer_count"] = 2
+        global_gate_execution["summary"]["global_remaining_user_answer_count"] = 2
+        global_gate_execution["summary"]["selected_queue_remaining_user_answer_aliases"] = [
+            "citizenship_status",
+            "zip_or_postal_code",
+        ]
+        global_gate_execution["summary"]["global_remaining_user_answer_aliases"] = [
+            "citizenship_status",
+            "zip_or_postal_code",
+        ]
+        global_report = build_selected_final_answer_dependency_report(
+            global_gate_research,
+            global_gate_execution,
+            blockers,
+            target_count=3,
+        )
+        self.assertEqual(global_report["status"], "waiting_for_truthful_answers_global_gate")
+        self.assertEqual(global_report["summary"]["positions_with_final_answer_dependencies"], 0)
+        self.assertEqual(global_report["summary"]["positions_waiting_on_global_answer_gate"], 3)
+        self.assertEqual(
+            global_report["summary"]["selected_queue_global_dependency_aliases"],
+            ["citizenship_status", "zip_or_postal_code"],
+        )
+        self.assertTrue(global_report["summary"]["global_answer_gate_mapped"])
+        self.assertEqual(
+            global_report["positions"][0]["global_unresolved_final_answer_aliases"],
+            ["citizenship_status", "zip_or_postal_code"],
+        )
+        self.assertEqual(
+            global_report["positions"][0]["all_unresolved_final_answer_aliases"],
+            ["citizenship_status", "zip_or_postal_code"],
+        )
+        global_requirement = {
+            row["id"]: row for row in global_report["requirements"]
+        }["global_truthful_answer_gate_mapped"]
+        self.assertEqual(global_requirement["status"], "achieved")
+        self.assertIn(
+            "positions waiting on global answer gate: 3",
+            render_selected_final_answer_dependency_markdown(global_report),
+        )
 
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -11210,6 +11271,12 @@ class JobApplyAgentTests(unittest.TestCase):
                 "selector_miss_count": 0,
                 "final_submit_stop_count": 100,
                 "remaining_user_answer_count": 6,
+                "global_remaining_user_answer_count": 6,
+                "global_remaining_user_answer_aliases": ["zip_or_postal_code", "citizenship_status"],
+                "selected_queue_remaining_user_answer_aliases": [
+                    "zip_or_postal_code",
+                    "citizenship_status",
+                ],
                 "target_platform_count": 2,
                 "selected_target_platform_count": 2,
                 "missing_target_platform_count": 0,
@@ -11257,6 +11324,16 @@ class JobApplyAgentTests(unittest.TestCase):
                 "known_unresolved_aliases": ["zip_or_postal_code", "citizenship_status"],
                 "positions_with_final_answer_dependencies": 0,
                 "direct_dependency_prompt_count": 0,
+                "positions_waiting_on_global_answer_gate": 100,
+                "selected_queue_global_dependency_aliases": [
+                    "zip_or_postal_code",
+                    "citizenship_status",
+                ],
+                "direct_or_global_dependency_aliases": [
+                    "citizenship_status",
+                    "zip_or_postal_code",
+                ],
+                "global_answer_gate_mapped": True,
                 "ready_after_truthful_answers_count": 100,
                 "all_selected_dependencies_accounted_for": True,
                 "unknown_dependency_aliases": [],
@@ -11373,6 +11450,11 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["summary"]["position_execution_audited_count"], 100)
         self.assertEqual(report["summary"]["position_execution_ready_after_answers_count"], 100)
         self.assertEqual(report["summary"]["position_execution_selector_miss_count"], 0)
+        self.assertEqual(report["summary"]["position_execution_global_remaining_user_answer_count"], 6)
+        self.assertEqual(
+            report["summary"]["position_execution_global_remaining_user_answer_aliases"],
+            ["zip_or_postal_code", "citizenship_status"],
+        )
         self.assertEqual(report["summary"]["position_execution_target_platform_count"], 2)
         self.assertEqual(report["summary"]["position_execution_selected_target_platform_count"], 2)
         self.assertEqual(report["summary"]["position_execution_missing_target_platforms"], [])
@@ -11384,6 +11466,12 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["summary"]["selected_answer_dependency_selected_count"], 100)
         self.assertEqual(report["summary"]["selected_answer_dependency_known_alias_count"], 2)
         self.assertEqual(report["summary"]["selected_answer_dependency_positions_with_direct_dependencies"], 0)
+        self.assertEqual(report["summary"]["selected_answer_dependency_positions_waiting_on_global_gate"], 100)
+        self.assertEqual(
+            report["summary"]["selected_answer_dependency_global_aliases"],
+            ["zip_or_postal_code", "citizenship_status"],
+        )
+        self.assertTrue(report["summary"]["selected_answer_dependency_global_gate_mapped"])
         self.assertEqual(report["summary"]["selected_answer_dependency_ready_after_truthful_answers_count"], 100)
         self.assertTrue(report["summary"]["selected_answer_dependency_all_accounted_for"])
         self.assertTrue(report["summary"]["submission_safety_safe"])
@@ -12608,6 +12696,12 @@ class JobApplyAgentTests(unittest.TestCase):
             "status": "needs_user_answers",
             "goal_complete": False,
             "blocker_summary": {"final_answer_waiting_count_after_drafts": 6},
+            "completion_verdict": {
+                "blocking_final_answer_aliases": [
+                    "zip_or_postal_code",
+                    "citizenship_status",
+                ],
+            },
         }
 
         audit = build_position_execution_audit(
@@ -12625,6 +12719,18 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(audit["summary"]["final_submit_stop_position_count"], 2)
         self.assertEqual(audit["summary"]["remaining_user_answer_count"], 6)
         self.assertEqual(audit["summary"]["global_remaining_user_answer_count"], 6)
+        self.assertEqual(
+            audit["summary"]["global_remaining_user_answer_aliases"],
+            ["zip_or_postal_code", "citizenship_status"],
+        )
+        self.assertEqual(
+            audit["summary"]["selected_queue_remaining_user_answer_aliases"],
+            ["zip_or_postal_code", "citizenship_status"],
+        )
+        self.assertEqual(
+            audit["positions"][0]["global_answer_gate_aliases"],
+            ["zip_or_postal_code", "citizenship_status"],
+        )
         self.assertTrue(audit["summary"]["ready_for_supervised_autofill_after_answers"])
         self.assertEqual(audit["summary"]["target_platform_count"], 2)
         self.assertEqual(audit["summary"]["selected_target_platform_count"], 2)
@@ -12656,6 +12762,7 @@ class JobApplyAgentTests(unittest.TestCase):
         markdown = render_position_execution_audit_markdown(audit)
         html = render_position_execution_audit_html(audit)
         self.assertIn("target platforms covered: 2 / 2", markdown)
+        self.assertIn("global remaining answer aliases: zip_or_postal_code, citizenship_status", markdown)
         self.assertIn("target platform missing from execution: none", markdown)
         self.assertIn("Target 100+", markdown)
         self.assertIn("Target platforms", html)
@@ -12757,6 +12864,12 @@ class JobApplyAgentTests(unittest.TestCase):
             "status": "needs_user_answers",
             "goal_complete": False,
             "blocker_summary": {"final_answer_waiting_count_after_drafts": 6},
+            "completion_verdict": {
+                "blocking_final_answer_aliases": [
+                    "zip_or_postal_code",
+                    "citizenship_status",
+                ],
+            },
         }
 
         audit = build_position_execution_audit(
@@ -12769,6 +12882,12 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(audit["status"], "ready_for_supervised_autofill")
         self.assertEqual(audit["summary"]["remaining_user_answer_count"], 0)
         self.assertEqual(audit["summary"]["global_remaining_user_answer_count"], 6)
+        self.assertEqual(
+            audit["summary"]["global_remaining_user_answer_aliases"],
+            ["zip_or_postal_code", "citizenship_status"],
+        )
+        self.assertEqual(audit["summary"]["selected_queue_remaining_user_answer_aliases"], [])
+        self.assertEqual(audit["positions"][0]["global_answer_gate_aliases"], [])
         self.assertTrue(audit["summary"]["ready_for_supervised_autofill_now"])
         self.assertEqual(
             {
