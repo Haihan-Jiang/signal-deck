@@ -11211,6 +11211,22 @@ def write_apply_queue_readiness(
     return report
 
 
+def _closed_preflight_freshness(report: dict[str, Any]) -> dict[str, Any]:
+    generated_at = str(report.get("generated_at") or "").strip()
+    age_seconds = _timestamp_age_seconds(generated_at)
+    stale = bool(
+        generated_at
+        and age_seconds is not None
+        and age_seconds > GOAL_LIVE_PREFLIGHT_MAX_AGE_SECONDS
+    )
+    return {
+        "generated_at": generated_at,
+        "age_seconds": age_seconds,
+        "max_age_seconds": GOAL_LIVE_PREFLIGHT_MAX_AGE_SECONDS,
+        "stale": stale,
+    }
+
+
 def build_apply_queue_handoff(
     apply_queue: dict[str, Any],
     closed_preflight: dict[str, Any],
@@ -11225,6 +11241,10 @@ def build_apply_queue_handoff(
     ]
     supplemental_preflights = [
         report for report in (supplemental_preflights or []) if isinstance(report, dict)
+    ]
+    primary_freshness = _closed_preflight_freshness(closed_preflight)
+    supplemental_freshness = [
+        _closed_preflight_freshness(report) for report in supplemental_preflights
     ]
     check_index = _closed_preflight_check_index([closed_preflight, *supplemental_preflights])
     rows: list[dict[str, Any]] = []
@@ -11253,6 +11273,7 @@ def build_apply_queue_handoff(
         if row.get("handoff_status") in {"requires_manual_live_check", "requires_live_preflight"}
     )
     closed_or_skipped_count = sum(1 for row in rows if row.get("handoff_status") == "skip_closed")
+    stale_check_count = sum(1 for row in rows if row.get("live_preflight_stale"))
     live_open_after_answers_count = open_ready_count + open_after_answers_count
     top_up_required_count = max(0, target_count - live_open_after_answers_count - uncertain_count)
     full_batch_open_ready = bool(
@@ -11268,7 +11289,11 @@ def build_apply_queue_handoff(
         status = "waiting_for_confirmed_answers"
     elif uncertain_count or closed_or_skipped_count or open_ready_count < position_count:
         status = "needs_live_preflight_cleanup"
+    if stale_check_count:
+        status = "needs_fresh_live_preflight" if apply_queue_ready else "waiting_for_confirmed_answers"
     blockers = list(apply_queue.get("global_blockers") or [])
+    if stale_check_count:
+        blockers.append("live_preflight_stale")
     if uncertain_count:
         blockers.append("live_preflight_uncertain_or_missing")
     if closed_or_skipped_count:
@@ -11281,6 +11306,14 @@ def build_apply_queue_handoff(
         blockers.append("open_ready_count_below_100")
     preflight_summary = {
         "source_report_count": 1 + len(supplemental_preflights),
+        "generated_at": primary_freshness.get("generated_at", ""),
+        "age_seconds": primary_freshness.get("age_seconds"),
+        "max_age_seconds": primary_freshness.get("max_age_seconds"),
+        "stale": bool(stale_check_count),
+        "primary_stale": bool(primary_freshness.get("stale")),
+        "supplemental_stale_count": sum(1 for freshness in supplemental_freshness if freshness.get("stale")),
+        "stale_selected_check_count": stale_check_count,
+        "supplemental_reports": supplemental_freshness,
         "candidate_count": closed_preflight.get("candidate_count", 0),
         "supplemental_candidate_count": sum(
             int(report.get("candidate_count") or 0) for report in supplemental_preflights
@@ -11422,6 +11455,8 @@ def render_apply_queue_handoff_markdown(report: dict[str, Any]) -> str:
         f"- live open eligible: {preflight.get('open_eligible_count', 0)}",
         f"- live closed: {preflight.get('closed_count', 0)}",
         f"- live uncertain: {preflight.get('uncertain_count', 0)}",
+        f"- live preflight stale: {str(bool(preflight.get('stale'))).lower()}",
+        f"- live preflight age seconds: {preflight.get('age_seconds')}",
         f"- open ready now: {summary.get('open_ready_count', 0)}",
         f"- open after answers: {summary.get('open_after_answers_count', 0)}",
         f"- live open after answers: {summary.get('live_open_after_answers_count', 0)}",
@@ -11509,6 +11544,8 @@ def render_apply_queue_handoff_html(report: dict[str, Any]) -> str:
                     ("Live checked", preflight.get("live_checked_count", 0)),
                     ("Live open", preflight.get("open_eligible_count", 0)),
                     ("Live uncertain", preflight.get("uncertain_count", 0)),
+                    ("Preflight stale", str(bool(preflight.get("stale"))).lower()),
+                    ("Preflight age sec", preflight.get("age_seconds")),
                 ]
             ),
             "<section><h2>Summary</h2>",
@@ -12786,35 +12823,41 @@ def _closed_preflight_check_index(
     for report in reports:
         if not isinstance(report, dict):
             continue
+        freshness = _closed_preflight_freshness(report)
         for check in report.get("checks") or []:
             if not isinstance(check, dict):
                 continue
+            indexed_check = dict(check)
+            indexed_check["_source_preflight_generated_at"] = freshness.get("generated_at", "")
+            indexed_check["_source_preflight_age_seconds"] = freshness.get("age_seconds")
+            indexed_check["_source_preflight_stale"] = bool(freshness.get("stale"))
             keys = {
-                str(check.get("key") or ""),
-                str(check.get("job_id") or ""),
-                str(check.get("url") or ""),
+                str(indexed_check.get("key") or ""),
+                str(indexed_check.get("job_id") or ""),
+                str(indexed_check.get("url") or ""),
             }
-            url = str(check.get("url") or "")
+            url = str(indexed_check.get("url") or "")
             if url:
-                keys.add(f"url:{shorten_apply_url(url, check)}")
-                keys.add(shorten_apply_url(url, check))
+                keys.add(f"url:{shorten_apply_url(url, indexed_check)}")
+                keys.add(shorten_apply_url(url, indexed_check))
             for key in keys:
                 if not key:
                     continue
                 existing = index.get(key)
-                if existing is None or _closed_preflight_check_rank(check) >= _closed_preflight_check_rank(existing):
-                    index[key] = check
+                if existing is None or _closed_preflight_check_rank(indexed_check) >= _closed_preflight_check_rank(existing):
+                    index[key] = indexed_check
     return index
 
 
 def _closed_preflight_check_rank(check: dict[str, Any]) -> int:
+    stale_penalty = -10 if check.get("_source_preflight_stale") else 0
     if check.get("closed"):
-        return 4
+        return 4 + stale_penalty
     if check.get("open_eligible"):
-        return 3
+        return 3 + stale_penalty
     if check.get("status") == "check_error":
-        return 1
-    return 2
+        return 1 + stale_penalty
+    return 2 + stale_penalty
 
 
 def _apply_queue_handoff_row(
@@ -12834,18 +12877,23 @@ def _apply_queue_handoff_row(
     live_status = str((check or {}).get("status") or "not_live_checked")
     live_open = bool((check or {}).get("open_eligible"))
     live_closed = bool((check or {}).get("closed"))
+    live_stale = bool((check or {}).get("_source_preflight_stale"))
     queue_status = str(position.get("queue_status") or "")
     blockers = list(position.get("blockers") or [])
     if not check:
         blockers.append("live_preflight_missing")
     elif live_closed:
         blockers.append("live_preflight_closed")
+    elif live_stale:
+        blockers.append("live_preflight_stale")
     elif not live_open:
         blockers.append("live_preflight_uncertain")
     handoff_status = "ready_to_open_for_supervised_autofill"
     if live_closed or queue_status == "closed_registry":
         handoff_status = "skip_closed"
     elif not check:
+        handoff_status = "requires_live_preflight"
+    elif live_stale:
         handoff_status = "requires_live_preflight"
     elif not live_open:
         handoff_status = "requires_manual_live_check"
@@ -12860,6 +12908,9 @@ def _apply_queue_handoff_row(
         "live_status": live_status,
         "live_open_eligible": live_open,
         "live_closed": live_closed,
+        "live_preflight_stale": live_stale,
+        "live_preflight_generated_at": (check or {}).get("_source_preflight_generated_at", ""),
+        "live_preflight_age_seconds": (check or {}).get("_source_preflight_age_seconds"),
         "live_error": (check or {}).get("error"),
         "position_key": position_key,
         "platform": position.get("platform"),
@@ -12922,6 +12973,14 @@ def _apply_queue_handoff_next_commands(
         )
     if manual_live_check_jobs:
         commands.append("rerun closed-preflight for manual_live_check_jobs before opening those URLs")
+    if status == "needs_fresh_live_preflight":
+        commands.extend(
+            [
+                "python3 -m job_apply_agent refresh-apply-queue --max-rounds 2 --live-check-limit 100 --force-rebuild",
+                "python3 -m job_apply_agent closed-preflight --jobs job_apply_agent/outbox/apply_queue_live_check_jobs_latest.json --live-check-limit 100",
+                "python3 -m job_apply_agent apply-queue-handoff",
+            ]
+        )
     if top_up_required_count > 0:
         commands.extend(
             [
@@ -12934,7 +12993,7 @@ def _apply_queue_handoff_next_commands(
         )
     if status == "ready_to_open_for_supervised_autofill":
         commands.append("python3 -m job_apply_agent apply-queue-handoff --open-browser --open-limit 100")
-    return commands
+    return _unique_strings(commands)
 
 
 def _apply_queue_autofill_candidate_rows(apply_queue_handoff: dict[str, Any]) -> list[dict[str, Any]]:

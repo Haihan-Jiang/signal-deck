@@ -11231,6 +11231,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertTrue(report["ready_for_supervised_open_batch"])
         self.assertEqual(report["open_ready_count"], 100)
         self.assertEqual(report["handoff_status_counts"], {"ready_to_open_for_supervised_autofill": 100})
+        self.assertFalse(report["preflight"]["stale"])
         self.assertFalse(report["real_platform_submission"])
         self.assertEqual(report["open_ready_jobs"][0]["automation"]["mode"], "supervised_autofill")
 
@@ -11260,6 +11261,144 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(jobs_output.exists())
             jobs_payload = json.loads(jobs_output.read_text(encoding="utf-8"))
             self.assertEqual(len(jobs_payload["jobs"]), 100)
+
+    def test_apply_queue_handoff_blocks_stale_live_preflight_before_open(self) -> None:
+        positions = []
+        checks = []
+        for index in range(1, 101):
+            url = f"https://jobs.lever.co/example/{index}"
+            positions.append(
+                {
+                    "index": index,
+                    "queue_status": "ready_for_live_closed_preflight",
+                    "position_key": f"url:{url}",
+                    "platform": "Lever",
+                    "company": "Example",
+                    "title": f"SRE {index}",
+                    "role_family": "SRE",
+                    "apply_url": url,
+                    "final_submit_supervised": True,
+                    "blockers": [],
+                }
+            )
+            checks.append(
+                {
+                    "key": f"url:{url}",
+                    "url": url,
+                    "status": "open_live_checked",
+                    "open_eligible": True,
+                    "closed": False,
+                }
+            )
+        apply_queue = {
+            "status": "ready_for_live_closed_preflight",
+            "ready_for_supervised_autofill": True,
+            "position_count": 100,
+            "target_count": 100,
+            "live_check_job_count": 100,
+            "global_blockers": [],
+            "positions": positions,
+        }
+        closed_preflight = {
+            "generated_at": "2000-01-01T00:00:00+00:00",
+            "candidate_count": 100,
+            "live_checked_count": 100,
+            "open_eligible_count": 100,
+            "closed_count": 0,
+            "uncertain_count": 0,
+            "error_count": 0,
+            "status_counts": {"open_live_checked": 100},
+            "checks": checks,
+        }
+
+        report = build_apply_queue_handoff(apply_queue, closed_preflight)
+        markdown = render_apply_queue_handoff_markdown(report)
+
+        self.assertEqual(report["status"], "needs_fresh_live_preflight")
+        self.assertFalse(report["ready_for_supervised_open_batch"])
+        self.assertEqual(report["open_ready_count"], 0)
+        self.assertEqual(report["manual_live_check_count"], 100)
+        self.assertEqual(report["handoff_status_counts"], {"requires_live_preflight": 100})
+        self.assertTrue(report["preflight"]["stale"])
+        self.assertTrue(report["preflight"]["primary_stale"])
+        self.assertIn("live_preflight_stale", report["global_blockers"])
+        self.assertIn("live_preflight_stale", report["positions"][0]["blockers"])
+        self.assertEqual(report["positions"][0]["handoff_status"], "requires_live_preflight")
+        self.assertEqual(report["open_ready_jobs_payload"], {"jobs": []})
+        self.assertTrue(
+            any(command.startswith("python3 -m job_apply_agent refresh-apply-queue") for command in report["next_commands"])
+        )
+        self.assertIn("live preflight stale: true", markdown)
+
+    def test_apply_queue_handoff_prefers_fresh_primary_over_stale_supplemental(self) -> None:
+        url = "https://jobs.lever.co/example/fresh"
+        apply_queue = {
+            "status": "ready_for_live_closed_preflight",
+            "ready_for_supervised_autofill": True,
+            "position_count": 1,
+            "target_count": 1,
+            "live_check_job_count": 1,
+            "positions": [
+                {
+                    "index": 1,
+                    "queue_status": "ready_for_live_closed_preflight",
+                    "position_key": f"url:{url}",
+                    "platform": "Lever",
+                    "company": "FreshCo",
+                    "title": "SRE",
+                    "role_family": "SRE",
+                    "apply_url": url,
+                    "final_submit_supervised": True,
+                    "blockers": [],
+                }
+            ],
+        }
+        primary_preflight = {
+            "generated_at": "2999-01-01T00:00:00+00:00",
+            "candidate_count": 1,
+            "live_checked_count": 1,
+            "open_eligible_count": 1,
+            "status_counts": {"open_live_checked": 1},
+            "checks": [
+                {
+                    "key": f"url:{url}",
+                    "url": url,
+                    "status": "open_live_checked",
+                    "open_eligible": True,
+                    "closed": False,
+                }
+            ],
+        }
+        stale_supplemental = {
+            "generated_at": "2000-01-01T00:00:00+00:00",
+            "candidate_count": 1,
+            "live_checked_count": 1,
+            "open_eligible_count": 1,
+            "status_counts": {"open_live_checked": 1},
+            "checks": [
+                {
+                    "key": f"url:{url}",
+                    "url": url,
+                    "status": "open_live_checked",
+                    "open_eligible": True,
+                    "closed": False,
+                }
+            ],
+        }
+
+        report = build_apply_queue_handoff(
+            apply_queue,
+            primary_preflight,
+            supplemental_preflights=[stale_supplemental],
+        )
+
+        self.assertEqual(report["status"], "ready_to_open_for_supervised_autofill")
+        self.assertEqual(report["open_ready_count"], 1)
+        self.assertFalse(report["preflight"]["stale"])
+        self.assertEqual(report["preflight"]["supplemental_stale_count"], 1)
+        self.assertEqual(report["preflight"]["stale_selected_check_count"], 0)
+        self.assertNotIn("live_preflight_stale", report["positions"][0]["blockers"])
+        self.assertEqual(report["positions"][0]["live_preflight_generated_at"], primary_preflight["generated_at"])
 
     def test_apply_queue_handoff_closed_live_check_requires_topup_before_open_batch(self) -> None:
         positions = []
