@@ -1276,7 +1276,15 @@ def classify_application_prompt(
             "standard_preference",
             "minimum_work_age_answer",
         )
-    if "did ai complete this application" in text or "ai complete this application" in text:
+    if any(
+        term in text
+        for term in [
+            "did ai complete this application",
+            "did ai complete or submit this application",
+            "ai complete this application",
+            "ai complete or submit this application",
+        ]
+    ):
         return ApplicationPromptClassification(
             "ai_application_disclosure",
             "auto_answer_from_memory",
@@ -1289,6 +1297,10 @@ def classify_application_prompt(
             "start date",
             "available to start",
             "can you start",
+            "could you start",
+            "weeks after accepting",
+            "after accepting an offer",
+            "after offer acceptance",
             "how soon are you able to commence",
             "able to commence",
             "commence in this role",
@@ -2316,14 +2328,22 @@ def build_answer_gap_report(
         key = str(item.get("normalized_label") or "").strip()
         if not key:
             continue
+        classification = classify_application_prompt(str(item.get("label") or ""))
+        category = str(item.get("category") or "")
+        action = str(item.get("automation_action") or "")
+        sensitivity = str(item.get("sensitivity") or "")
+        if classification.category != "unknown" or category in {"", "unknown"}:
+            category = classification.category
+            action = classification.automation_action
+            sensitivity = classification.sensitivity
         prompt = prompts.setdefault(
             key,
             {
                 "normalized_label": key,
                 "label": item.get("label"),
-                "category": item.get("category"),
-                "automation_action": item.get("automation_action"),
-                "sensitivity": item.get("sensitivity"),
+                "category": category,
+                "automation_action": action,
+                "sensitivity": sensitivity,
                 "required_count": 0,
                 "observed_count": 0,
                 "platforms": set(),
@@ -17949,6 +17969,10 @@ def _direct_answer(profile: CandidateProfile, normalized_question: str) -> str |
         if key_text and key_text in normalized_question:
             return answer
 
+    start_weeks = _start_date_weeks_answer(profile, normalized_question)
+    if start_weeks:
+        return start_weeks
+
     if (
         ("year" in normalized_question or "years" in normalized_question)
         and ("experience" in normalized_question or "expertise" in normalized_question)
@@ -17988,6 +18012,9 @@ def _direct_answer(profile: CandidateProfile, normalized_question: str) -> str |
         "english_level": [
             "english level",
             "english language skills",
+            "speak english",
+            "english fluently",
+            "fluent english",
             "verbal and written english",
             "professional working proficiency in english",
             "communicate with a professional working proficiency in english",
@@ -18041,6 +18068,54 @@ def _direct_answer(profile: CandidateProfile, normalized_question: str) -> str |
         if answer and any(hint in normalized_question for hint in hints):
             return answer
     return None
+
+
+def _start_date_weeks_answer(profile: CandidateProfile, normalized_question: str) -> str:
+    if "week" not in normalized_question:
+        return ""
+    if not any(term in normalized_question for term in ["start", "commence", "notice", "offer"]):
+        return ""
+    start_date = str(profile.question_answers.get("start_date") or "").strip()
+    if not start_date:
+        return ""
+    weeks = _weeks_from_availability_answer(start_date)
+    if not weeks:
+        return start_date
+    suffix = " after offer acceptance" if any(
+        term in normalized_question for term in ["offer", "accepting", "acceptance"]
+    ) else ""
+    return f"About {weeks} weeks{suffix}."
+
+
+def _weeks_from_availability_answer(value: str) -> int:
+    text = _normalize(value)
+    word_numbers = {
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "six": 6,
+        "seven": 7,
+        "eight": 8,
+        "nine": 9,
+        "ten": 10,
+        "eleven": 11,
+        "twelve": 12,
+    }
+    month_match = re.search(r"\b(\d+)\s+months?\b", text)
+    if month_match:
+        return int(month_match.group(1)) * 4
+    for word, number in word_numbers.items():
+        if re.search(rf"\b{word}\s+months?\b", text):
+            return number * 4
+    week_match = re.search(r"\b(\d+)\s+weeks?\b", text)
+    if week_match:
+        return int(week_match.group(1))
+    for word, number in word_numbers.items():
+        if re.search(rf"\b{word}\s+weeks?\b", text):
+            return number
+    return 0
 
 
 def _employment_date_value(label: str, profile: CandidateProfile) -> dict[str, str]:

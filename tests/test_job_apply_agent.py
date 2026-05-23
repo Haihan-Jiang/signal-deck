@@ -264,6 +264,40 @@ class JobApplyAgentTests(unittest.TestCase):
             "PLACEHOLDER: I am authorized to work in the United States.",
         )
 
+        profile = CandidateProfile(
+            name="Alan Jiang",
+            email="alan@example.com",
+            phone="555-0100",
+            location="Bellevue, WA",
+            target_titles=["Site Reliability Engineer"],
+            target_locations=["United States"],
+            remote_ok=True,
+            keywords=["sre"],
+            blocklist=[],
+            min_score=1,
+            resume_facts={"professional_summary": "SRE"},
+            question_answers={
+                "start_date": "I can start in about two months.",
+                "ai_application_disclosure": "Yes",
+            },
+        )
+        job = {
+            **self.jobs[0],
+            "questions": [
+                "How many weeks after accepting an offer could you start?",
+                "Did AI complete or submit this application?",
+            ],
+        }
+        draft = build_application_draft(profile, job)
+        self.assertEqual(
+            draft.answers["How many weeks after accepting an offer could you start?"],
+            "About 8 weeks after offer acceptance.",
+        )
+        self.assertEqual(
+            draft.answers["Did AI complete or submit this application?"],
+            "Yes",
+        )
+
     def test_pipeline_writes_dry_run_submission(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             outbox = Path(temp_dir) / "submissions.jsonl"
@@ -1095,6 +1129,20 @@ class JobApplyAgentTests(unittest.TestCase):
             "ai_application_disclosure",
         )
         self.assertEqual(
+            classify_application_prompt("Did AI complete or submit this application?").category,
+            "ai_application_disclosure",
+        )
+        self.assertNotEqual(
+            classify_application_prompt(
+                "Do you have experience working in an AI Assisted Development Environment?"
+            ).category,
+            "ai_application_disclosure",
+        )
+        self.assertEqual(
+            classify_application_prompt("How many weeks after accepting an offer could you start?").category,
+            "availability",
+        )
+        self.assertEqual(
             classify_application_prompt("How did you hear about this job?").category,
             "referral_source",
         )
@@ -1718,13 +1766,30 @@ class JobApplyAgentTests(unittest.TestCase):
                     "platform": "Ashby",
                     "source_file": "form.json",
                 },
+                {
+                    "label": "How many weeks after accepting an offer could you start?",
+                    "normalized_label": "how many weeks after accepting offer could start",
+                    "category": "unknown",
+                    "automation_action": "human_review_required",
+                    "sensitivity": "general",
+                    "required": True,
+                    "platform": "Greenhouse",
+                    "source_file": "old_snapshot.json",
+                },
             ],
         }
 
         report = build_answer_gap_report(research, profile=profile, answer_memory=None)
 
         self.assertEqual(report["blocking_prompt_count"], 0)
-        self.assertEqual(report["coverage_counts"]["covered_auto_answer"], 5)
+        self.assertEqual(report["coverage_counts"]["covered_auto_answer"], 6)
+        start_prompt = next(
+            item
+            for item in report["prompt_statuses"]
+            if item["label"] == "How many weeks after accepting an offer could you start?"
+        )
+        self.assertEqual(start_prompt["category"], "availability")
+        self.assertEqual(start_prompt["coverage_status"], "covered_auto_answer")
 
     def test_answer_gap_report_uses_standard_source_disclosure_and_age_answers(self) -> None:
         profile = CandidateProfile(
@@ -1746,6 +1811,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 "ai_application_disclosure": "Yes",
                 "compensation_currency": "USD",
                 "communication_consent": "Yes",
+                "english_level": "Professional working proficiency in English.",
             },
         )
         research = {
@@ -1793,14 +1859,14 @@ class JobApplyAgentTests(unittest.TestCase):
                     "source_file": "form.json",
                 },
                 {
-                    "label": "Did AI complete this application?",
-                    "normalized_label": "did ai complete this application",
-                    "category": "ai_application_disclosure",
-                    "automation_action": "auto_answer_from_memory",
-                    "sensitivity": "disclosure",
+                    "label": "Did AI complete or submit this application?",
+                    "normalized_label": "did ai complete or submit this application",
+                    "category": "unknown",
+                    "automation_action": "human_review_required",
+                    "sensitivity": "general",
                     "required": True,
                     "platform": "Greenhouse",
-                    "source_file": "form.json",
+                    "source_file": "old_snapshot.json",
                 },
                 {
                     "label": "Currency",
@@ -1822,13 +1888,30 @@ class JobApplyAgentTests(unittest.TestCase):
                     "platform": "Ashby",
                     "source_file": "form.json",
                 },
+                {
+                    "label": "Do you speak English fluently?",
+                    "normalized_label": "do speak english fluently",
+                    "category": "language_ability",
+                    "automation_action": "auto_answer_from_memory",
+                    "sensitivity": "candidate_preference",
+                    "required": True,
+                    "platform": "Lever",
+                    "source_file": "form.json",
+                },
             ],
         }
 
         report = build_answer_gap_report(research, profile=profile, answer_memory=None)
 
         self.assertEqual(report["blocking_prompt_count"], 0)
-        self.assertEqual(report["coverage_counts"]["covered_auto_answer"], 7)
+        self.assertEqual(report["coverage_counts"]["covered_auto_answer"], 8)
+        ai_prompt = next(
+            item
+            for item in report["prompt_statuses"]
+            if item["label"] == "Did AI complete or submit this application?"
+        )
+        self.assertEqual(ai_prompt["category"], "ai_application_disclosure")
+        self.assertEqual(ai_prompt["coverage_status"], "covered_auto_answer")
 
     def test_answer_gap_report_uses_policy_and_english_profile_answers(self) -> None:
         profile = CandidateProfile(
