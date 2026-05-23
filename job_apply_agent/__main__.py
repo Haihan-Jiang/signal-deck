@@ -1166,6 +1166,16 @@ def main() -> int:
     resume_after_answers_parser.add_argument("--open-limit", type=int, default=100)
     resume_after_answers_parser.add_argument("--review-log", default=str(DEFAULT_REVIEW_LOG))
 
+    rehearse_after_answers_parser = subparsers.add_parser(
+        "rehearse-after-answers",
+        help="run the fake-answer 100-job queue rehearsal without writing real profile/memory, live-checking, opening pages, or submitting",
+    )
+    rehearse_after_answers_parser.add_argument("--json-output", default=str(DEFAULT_POST_ANSWER_PIPELINE_JSON))
+    rehearse_after_answers_parser.add_argument(
+        "--markdown-output",
+        default=str(DEFAULT_POST_ANSWER_PIPELINE_MARKDOWN),
+    )
+
     post_answer_pipeline_parser = subparsers.add_parser(
         "post-answer-pipeline",
         help="validate final answers, optionally apply them, refresh the 100-job queue, and prepare supervised autofill",
@@ -2937,6 +2947,30 @@ def main() -> int:
         args.post_answer_markdown_output = str(DEFAULT_POST_ANSWER_PIPELINE_MARKDOWN)
         args.fail_on_not_ready = True
 
+    if args.command == "rehearse-after-answers":
+        args.command = "post-answer-pipeline"
+        args.compact_updates = str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_UPDATES_JSON)
+        args.full_template = str(DEFAULT_CRITICAL_INPUT_FULL_UPDATES_JSON)
+        args.unblockers = str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_JSON)
+        args.confirmed_updates_output = str(DEFAULT_POST_ANSWER_SYNTHETIC_CONFIRMED_UPDATES_JSON)
+        args.confirmed_report_json_output = str(DEFAULT_POST_ANSWER_SYNTHETIC_CONFIRMED_UPDATES_REPORT_JSON)
+        args.confirmed_report_markdown_output = str(DEFAULT_POST_ANSWER_SYNTHETIC_CONFIRMED_UPDATES_REPORT_MARKDOWN)
+        args.final_answer_intake_json = None
+        args.final_answer_intake_report_json = str(DEFAULT_FINAL_ANSWER_REPLY_SYNTHETIC_INTAKE_REPORT_JSON)
+        args.final_answer_intake_report_markdown = str(DEFAULT_FINAL_ANSWER_REPLY_SYNTHETIC_INTAKE_REPORT_MARKDOWN)
+        args.confirm_high_risk = False
+        args.synthetic_final_answers = True
+        args.synthetic_rehearse_queue = True
+        args.apply = False
+        args.live_check = False
+        args.live_check_limit = 100
+        args.live_check_timeout = 25.0
+        args.include_values = False
+        args.open_browser = False
+        args.open_limit = 100
+        args.review_log = str(DEFAULT_REVIEW_LOG)
+        args.fail_on_not_ready = True
+
     if args.command == "final-answer-reply":
         if bool(args.reply_text) == bool(args.reply_file):
             raise ValueError("provide exactly one of --reply-text or --reply-file")
@@ -4179,6 +4213,10 @@ def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
     print(f"Final answer intake: {str(bool(intake_path)).lower()}")
     print(f"Synthetic final answers: {str(synthetic_final_answers).lower()}")
     print(f"Synthetic queue rehearsal: {(synthetic_queue_rehearsal or {}).get('status') or 'not_built'}")
+    if synthetic_queue_rehearsal:
+        print(f"Synthetic selected: {synthetic_queue_rehearsal.get('autofill_packet_selected', 0)}")
+        print(f"Synthetic selector misses: {synthetic_queue_rehearsal.get('autofill_packet_selector_misses', 0)}")
+        print(f"Synthetic final-submit stops: {synthetic_queue_rehearsal.get('autofill_packet_final_submit_stops', 0)}")
     print(f"Apply requested: {str(bool(args.apply)).lower()}")
     print(f"Live check requested: {str(bool(args.live_check)).lower()}")
     print(f"Open browser requested: {str(bool(args.open_browser)).lower()}")
