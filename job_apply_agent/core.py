@@ -4957,6 +4957,31 @@ FINAL_ANSWER_INTAKE_SPECIFICITY_HINTS = {
 }
 
 
+FINAL_ANSWER_INTAKE_EXAMPLE_SHAPES = {
+    "zip_or_postal_code": "Example shape: exact ZIP/postal code, such as [ZIP_CODE].",
+    "citizenship_status": (
+        "Example shape: I am [citizenship]; I [am/am not] a U.S. person or permanent "
+        "resident; I [do/do not] have citizenship or permanent residency in restricted countries."
+    ),
+    "background_or_export_control": (
+        "Example shape: [No/describe] disqualifying background, export-control, indictment, "
+        "debarment, substance, firearm, felony, or legal-eligibility issues; exceptions: [list/none]."
+    ),
+    "country_work_permit": (
+        "Example shape: Authorized to work in [countries/regions]; no other country permits "
+        "or sponsorship assumptions; exceptions: [list]."
+    ),
+    "interview_recording_consent": (
+        "Example shape: Yes/no for recording, transcription, AI notetakers, and interview analysis; "
+        "exceptions: [list]."
+    ),
+    "health_requirement": (
+        "Example shape: I can/cannot comply with standard health, vaccination, or client-site "
+        "requirements; exceptions: [list]."
+    ),
+}
+
+
 FINAL_ANSWER_REPLY_TEMPLATE_PATH = "job_apply_agent/outbox/final_answer_reply_template_latest.txt"
 
 
@@ -5025,6 +5050,7 @@ def build_final_answer_intake_template(
                 "why_not_inferred": row.get("why_not_inferred"),
                 "answer_format_hint": _final_answer_intake_answer_format_hint(alias, high_risk),
                 "answer_specificity_hint": _final_answer_intake_specificity_hint(alias, high_risk),
+                "answer_example_shape": _final_answer_intake_example_shape(alias),
             }
         )
     return {
@@ -5615,6 +5641,14 @@ def render_final_answer_intake_template_markdown(template: dict[str, Any]) -> st
             rows,
         )
     )
+    examples = [
+        [row.get("alias"), row.get("answer_example_shape")]
+        for row in template.get("fields") or []
+        if row.get("answer_example_shape")
+    ]
+    if examples:
+        lines.extend(["", "## Answer Shape Examples", ""])
+        lines.extend(_simple_markdown_table(["Alias", "Example shape"], examples))
     lines.extend(["", "## Answers JSON", "", "```json"])
     lines.append(json.dumps({"answers": template.get("answers") or {}}, ensure_ascii=True, indent=2))
     lines.extend(["```", ""])
@@ -5637,6 +5671,7 @@ def render_final_answer_intake_template_html(
         platforms = ", ".join(_string_list(row.get("platforms")))
         format_hint = str(row.get("answer_format_hint") or "")
         specificity_hint = str(row.get("answer_specificity_hint") or "")
+        example_shape = str(row.get("answer_example_shape") or "")
         checkbox = (
             '<label class="confirm"><input type="checkbox" data-confirm="{alias}" {checked}> '
             "I confirm this high-risk answer is exact and truthful.</label>"
@@ -5658,6 +5693,7 @@ def render_final_answer_intake_template_html(
                     f"<p><strong>Why not inferred:</strong> {_html_escape(row.get('why_not_inferred'))}</p>",
                     f"<p><strong>Answer format hint:</strong> {_html_escape(format_hint)}</p>",
                     f"<p><strong>Specificity check:</strong> {_html_escape(specificity_hint)}</p>",
+                    f"<p><strong>Example shape:</strong> {_html_escape(example_shape)}</p>",
                     f"<p><strong>Platforms:</strong> {_html_escape(platforms)}</p>",
                     f"<p><strong>Observed prompts:</strong> {_html_escape(row.get('required_count'))}</p>",
                     (
@@ -6049,6 +6085,10 @@ def _final_answer_intake_specificity_hint(alias: str, high_risk: bool) -> str:
     if high_risk:
         return "Avoid placeholders or bare yes/no answers unless the field explicitly asks only for yes/no."
     return "Avoid placeholders; provide the stable value exactly as it should be reused."
+
+
+def _final_answer_intake_example_shape(alias: str) -> str:
+    return FINAL_ANSWER_INTAKE_EXAMPLE_SHAPES.get(alias, "")
 
 
 def _final_answer_intake_answer_specificity(
@@ -16941,7 +16981,7 @@ def render_platform_question_playbook_html(report: dict[str, Any]) -> str:
             "</section>",
             "<section><h2>Final Answer Intake</h2>",
             _html_table(
-                ["Alias", "Input ID", "Status", "High risk", "Prompts", "Question"],
+                ["Alias", "Input ID", "Status", "High risk", "Prompts", "Question", "Example shape"],
                 [
                     [
                         row.get("alias"),
@@ -16950,6 +16990,7 @@ def render_platform_question_playbook_html(report: dict[str, Any]) -> str:
                         row.get("high_risk"),
                         row.get("required_count"),
                         row.get("question"),
+                        row.get("answer_example_shape"),
                     ]
                     for row in report.get("final_answer_intake", [])
                 ],
@@ -17636,7 +17677,17 @@ def render_question_export_html(export: dict[str, Any]) -> str:
         "</section>",
         "<section><h2>Final-Answer Intake</h2>",
         _html_table(
-            ["Alias", "Input ID", "Status", "High risk", "Prompts", "Question", "Required response"],
+            [
+                "Alias",
+                "Input ID",
+                "Status",
+                "High risk",
+                "Prompts",
+                "Question",
+                "Required response",
+                "Specificity check",
+                "Example shape",
+            ],
             [
                 [
                     row.get("alias"),
@@ -17646,6 +17697,8 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                     row.get("required_count"),
                     row.get("question"),
                     row.get("required_user_response"),
+                    row.get("answer_specificity_hint"),
+                    row.get("answer_example_shape"),
                 ]
                 for row in export.get("final_answer_intake", [])
             ],
@@ -20242,6 +20295,8 @@ def build_final_answer_blocker_report(
                     "question": field.get("question"),
                     "answer_format_hint": field.get("answer_format_hint"),
                     "answer_specificity_hint": field.get("answer_specificity_hint"),
+                    "answer_example_shape": field.get("answer_example_shape")
+                    or _final_answer_intake_example_shape(alias),
                 }
             )
     summary = {
@@ -20331,7 +20386,23 @@ def render_final_answer_reply_template_text(report: dict[str, Any]) -> str:
     ]
     reply_lines = report.get("reply_template_lines") or []
     if reply_lines:
-        lines.extend(str(line) for line in reply_lines)
+        blocker_by_alias = {
+            str(row.get("alias") or "").strip(): row
+            for row in report.get("blockers") or []
+            if isinstance(row, dict)
+        }
+        for reply_line in reply_lines:
+            text_line = str(reply_line)
+            alias = _final_answer_reply_line_alias(text_line)
+            blocker = blocker_by_alias.get(alias, {})
+            if blocker:
+                hint = blocker.get("answer_specificity_hint") or blocker.get("answer_format_hint")
+                example_shape = blocker.get("answer_example_shape")
+                if hint:
+                    lines.append(f"# {alias} hint: {hint}")
+                if example_shape:
+                    lines.append(f"# {alias} shape: {example_shape}")
+            lines.append(text_line)
     else:
         lines.append("# No final-answer blockers remain.")
     return "\n".join(lines).rstrip() + "\n"
@@ -20357,7 +20428,15 @@ def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
     if blockers:
         lines.extend(
             _simple_markdown_table(
-                ["Alias", "Status", "High Risk", "Required", "Question", "Specificity Hint"],
+                [
+                    "Alias",
+                    "Status",
+                    "High Risk",
+                    "Required",
+                    "Question",
+                    "Specificity Hint",
+                    "Example Shape",
+                ],
                 [
                     [
                         row.get("alias"),
@@ -20366,6 +20445,7 @@ def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
                         row.get("required_count"),
                         row.get("question"),
                         row.get("answer_specificity_hint"),
+                        row.get("answer_example_shape"),
                     ]
                     for row in blockers
                 ],
@@ -20419,6 +20499,9 @@ def build_telegram_final_answer_blocker_alert(
         hint = row.get("answer_specificity_hint") or row.get("answer_format_hint")
         if hint:
             lines.append(f"   Hint: {hint}")
+        example_shape = row.get("answer_example_shape")
+        if example_shape:
+            lines.append(f"   Shape: {example_shape}")
     if len(blockers) > max_items:
         lines.append(f"... {len(blockers) - max_items} more in job_apply_agent/outbox")
     lines.append("")
@@ -20445,6 +20528,20 @@ def _final_answer_blocker_reply_template_lines(blockers: list[dict[str, Any]]) -
         if row.get("high_risk"):
             lines.append(f"{alias}_confirmed\uff1a\u786e\u8ba4")
     return lines
+
+
+def _final_answer_reply_line_alias(line: str) -> str:
+    key, _value = _split_final_answer_reply_line(str(line or ""))
+    normalized_key = _final_answer_reply_key(key)
+    for suffix in [
+        "_confirmed",
+        "_confirm",
+        "_high_risk_user_confirmed",
+        "_explicitly_confirmed",
+    ]:
+        if normalized_key.endswith(suffix):
+            return ""
+    return normalized_key
 
 
 def notify_telegram_for_final_answer_blockers(
@@ -26140,10 +26237,12 @@ def _final_answer_intake_export_rows(
         if not isinstance(item, dict):
             continue
         input_id = str(item.get("input_id") or "")
+        alias = str(item.get("alias") or _final_answer_intake_alias(input_id))
+        high_risk = bool(item.get("high_risk"))
         update_field = update_fields_by_id.get(input_id) or {}
         rows.append(
             {
-                "alias": item.get("alias"),
+                "alias": alias,
                 "input_id": input_id,
                 "status": update_field.get("status", "waiting_for_answer"),
                 "high_risk": item.get("high_risk"),
@@ -26151,8 +26250,12 @@ def _final_answer_intake_export_rows(
                 "question": item.get("question"),
                 "required_user_response": item.get("required_user_response"),
                 "why_not_inferred": item.get("why_not_inferred"),
-                "answer_format_hint": item.get("answer_format_hint"),
-                "answer_specificity_hint": item.get("answer_specificity_hint"),
+                "answer_format_hint": item.get("answer_format_hint")
+                or _final_answer_intake_answer_format_hint(alias, high_risk),
+                "answer_specificity_hint": item.get("answer_specificity_hint")
+                or _final_answer_intake_specificity_hint(alias, high_risk),
+                "answer_example_shape": item.get("answer_example_shape")
+                or _final_answer_intake_example_shape(alias),
                 "specificity_reason": update_field.get("specificity_reason", ""),
                 "platforms": ", ".join(_string_list(item.get("platforms"))),
                 "labels": "\n".join(_string_list(item.get("labels"))),
@@ -26174,6 +26277,7 @@ def _final_answer_intake_export_rows(
                     "why_not_inferred": "",
                     "answer_format_hint": "",
                     "answer_specificity_hint": "",
+                    "answer_example_shape": "",
                     "specificity_reason": item.get("specificity_reason", ""),
                     "platforms": "",
                     "labels": "",
