@@ -15,7 +15,9 @@ from .core import (
     build_answer_gap_report,
     build_application_draft,
     build_application_research,
+    build_final_answer_intake_update,
     build_final_answer_intake_template,
+    build_final_answer_reply_intake,
     build_position_readiness_report,
     build_synthetic_learning_state,
     import_candidate_observations,
@@ -1155,6 +1157,11 @@ def main() -> int:
         "--run-post-answer-pipeline",
         action="store_true",
         help="after parsing and validation, run post-answer-pipeline using the parsed intake payload",
+    )
+    final_answer_reply_parser.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="parse and validate the reply without writing output files or running post-answer steps",
     )
     final_answer_reply_parser.add_argument(
         "--synthetic-rehearse-queue",
@@ -3108,8 +3115,43 @@ def main() -> int:
             if not reply_path.exists():
                 raise FileNotFoundError(f"final answer reply file not found: {args.reply_file}")
             reply_text = reply_path.read_text(encoding="utf-8")
+        unblockers_path = Path(args.unblockers)
+        if not unblockers_path.exists():
+            raise FileNotFoundError(f"critical input unblockers not found: {args.unblockers}")
+        template_payload = json.loads(template_path.read_text(encoding="utf-8"))
+        unblockers_payload = json.loads(unblockers_path.read_text(encoding="utf-8"))
+        if args.validate_only:
+            report = build_final_answer_reply_intake(
+                template_payload,
+                str(reply_text or ""),
+                confirm_high_risk=args.confirm_high_risk,
+            )
+            intake_payload = report.get("intake_payload") if isinstance(report.get("intake_payload"), dict) else {}
+            intake_report = build_final_answer_intake_update(
+                unblockers_payload,
+                intake_payload,
+                confirm_high_risk=args.confirm_high_risk,
+            )
+            intake_summary = intake_report.get("summary") or {}
+            print("Validated final answer reply without writing files.")
+            print(f"Parsed answers: {report.get('answer_count', 0)}")
+            print(f"Unknown keys: {report.get('unknown_key_count', 0)}")
+            print(f"Duplicate keys: {report.get('duplicate_key_count', 0)}")
+            print(f"Ready for finalize: {str(bool(intake_report.get('ready_for_finalize'))).lower()}")
+            print(f"Missing unblockers: {intake_summary.get('missing_unblocker_count', 0)}")
+            print(f"High-risk confirmations missing: {intake_summary.get('unconfirmed_high_risk_count', 0)}")
+            print(f"Needs more specificity: {intake_summary.get('needs_more_specific_answer_count', 0)}")
+            print(f"Unknown answers: {intake_summary.get('unknown_answer_count', 0)}")
+            _print_final_answer_intake_problem_aliases(intake_report)
+            parser_has_errors = bool(
+                int(report.get("unknown_key_count") or 0)
+                or int(report.get("duplicate_key_count") or 0)
+            )
+            if args.fail_on_not_ready and (not intake_report.get("ready_for_finalize") or parser_has_errors):
+                return 2
+            return 0
         report = write_final_answer_reply_intake(
-            json.loads(template_path.read_text(encoding="utf-8")),
+            template_payload,
             str(reply_text or ""),
             reply_json_output,
             reply_markdown_output,
@@ -3120,10 +3162,6 @@ def main() -> int:
         print(f"Parsed answers: {report.get('answer_count', 0)}")
         print(f"Unknown keys: {report.get('unknown_key_count', 0)}")
         print(f"Duplicate keys: {report.get('duplicate_key_count', 0)}")
-
-        unblockers_path = Path(args.unblockers)
-        if not unblockers_path.exists():
-            raise FileNotFoundError(f"critical input unblockers not found: {args.unblockers}")
         intake_payload = report.get("intake_payload") if isinstance(report.get("intake_payload"), dict) else {}
         intake_output_path = Path(intake_output)
         intake_output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3133,7 +3171,7 @@ def main() -> int:
         )
         print(f"Wrote final answer intake payload JSON to {intake_output}")
         intake_report = write_final_answer_intake_update(
-            json.loads(unblockers_path.read_text(encoding="utf-8")),
+            unblockers_payload,
             intake_payload,
             compact_updates_output,
             intake_report_json_output,

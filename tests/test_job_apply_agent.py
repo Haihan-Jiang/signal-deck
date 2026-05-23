@@ -7491,6 +7491,45 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertIn("Needs specificity aliases", cli_result.stdout)
             self.assertIn("zip_or_postal_code", cli_result.stdout)
             self.assertIn("health_requirement", cli_result.stdout)
+            validate_only_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "job_apply_agent",
+                    "final-answer-reply",
+                    "--template",
+                    str(template_path),
+                    "--unblockers",
+                    str(unblockers_path),
+                    "--reply-file",
+                    str(reply_path),
+                    "--json-output",
+                    str(root / "validate_reply.json"),
+                    "--markdown-output",
+                    str(root / "validate_reply.md"),
+                    "--intake-output",
+                    str(root / "validate_payload.json"),
+                    "--compact-updates-output",
+                    str(root / "validate_compact.json"),
+                    "--final-answer-intake-report-json",
+                    str(root / "validate_intake.json"),
+                    "--final-answer-intake-report-markdown",
+                    str(root / "validate_intake.md"),
+                    "--validate-only",
+                    "--fail-on-not-ready",
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(validate_only_result.returncode, 2)
+            self.assertIn("Validated final answer reply without writing files.", validate_only_result.stdout)
+            self.assertIn("Needs specificity aliases", validate_only_result.stdout)
+            self.assertFalse((root / "validate_reply.json").exists())
+            self.assertFalse((root / "validate_payload.json").exists())
+            self.assertFalse((root / "validate_compact.json").exists())
+            self.assertFalse((root / "validate_intake.json").exists())
 
     def test_final_answer_intake_server_post_answer_flags_are_guarded(self) -> None:
         base_args = {

@@ -793,6 +793,19 @@ template, compact-update, and intake-report artifacts after you fill the form.
 It still only writes outbox files; it does not write profile/memory and does
 not submit applications.
 
+For the plain-text reply template, validate the filled text before writing any
+main outbox artifacts:
+
+```bash
+python3 -m job_apply_agent final-answer-reply \
+  --reply-file job_apply_agent/outbox/final_answer_reply_template_latest.txt \
+  --validate-only \
+  --fail-on-not-ready
+```
+
+This prints the missing, unconfirmed, or too-vague aliases and does not write
+profile/memory, compact updates, intake reports, or post-answer pipeline files.
+
 To have the local form continue into the post-answer reports immediately after
 a ready save, start it with:
 
