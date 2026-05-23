@@ -17995,6 +17995,19 @@ def _direct_answer(profile: CandidateProfile, normalized_question: str) -> str |
         return start_weeks
 
     if (
+        "actively looking for a job" in normalized_question
+        or "just exploring future opportunities" in normalized_question
+    ):
+        answer = "I am actively looking for the right role."
+        start_date = str(profile.question_answers.get("start_date") or "").strip()
+        if start_date:
+            answer = f"{answer} {_clean_sentence(start_date)}."
+        return answer
+
+    if "when would you like to hear back" in normalized_question:
+        return "As soon as convenient for the recruiting team."
+
+    if (
         ("year" in normalized_question or "years" in normalized_question)
         and ("experience" in normalized_question or "expertise" in normalized_question)
     ):

@@ -286,6 +286,8 @@ class JobApplyAgentTests(unittest.TestCase):
             "questions": [
                 "How many weeks after accepting an offer could you start?",
                 "Did AI complete or submit this application?",
+                "Are you actively looking for a job, or just exploring future opportunities?",
+                "When would you like to hear back from us regarding potential opportunities?",
             ],
         }
         draft = build_application_draft(profile, job)
@@ -296,6 +298,14 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(
             draft.answers["Did AI complete or submit this application?"],
             "Yes",
+        )
+        self.assertEqual(
+            draft.answers["Are you actively looking for a job, or just exploring future opportunities?"],
+            "I am actively looking for the right role. I can start in about two months.",
+        )
+        self.assertEqual(
+            draft.answers["When would you like to hear back from us regarding potential opportunities?"],
+            "As soon as convenient for the recruiting team.",
         )
 
     def test_pipeline_writes_dry_run_submission(self) -> None:
@@ -1776,13 +1786,33 @@ class JobApplyAgentTests(unittest.TestCase):
                     "platform": "Greenhouse",
                     "source_file": "old_snapshot.json",
                 },
+                {
+                    "label": "Are you actively looking for a job, or just exploring future opportunities?",
+                    "normalized_label": "actively looking job just exploring future opportunities",
+                    "category": "unknown",
+                    "automation_action": "human_review_required",
+                    "sensitivity": "general",
+                    "required": True,
+                    "platform": "Greenhouse",
+                    "source_file": "old_snapshot.json",
+                },
+                {
+                    "label": "When would you like to hear back from us regarding potential opportunities?",
+                    "normalized_label": "when would like hear back us regarding potential opportunities",
+                    "category": "unknown",
+                    "automation_action": "human_review_required",
+                    "sensitivity": "general",
+                    "required": True,
+                    "platform": "Greenhouse",
+                    "source_file": "old_snapshot.json",
+                },
             ],
         }
 
         report = build_answer_gap_report(research, profile=profile, answer_memory=None)
 
         self.assertEqual(report["blocking_prompt_count"], 0)
-        self.assertEqual(report["coverage_counts"]["covered_auto_answer"], 6)
+        self.assertEqual(report["coverage_counts"]["covered_auto_answer"], 8)
         start_prompt = next(
             item
             for item in report["prompt_statuses"]
@@ -1790,6 +1820,20 @@ class JobApplyAgentTests(unittest.TestCase):
         )
         self.assertEqual(start_prompt["category"], "availability")
         self.assertEqual(start_prompt["coverage_status"], "covered_auto_answer")
+        active_prompt = next(
+            item
+            for item in report["prompt_statuses"]
+            if item["label"] == "Are you actively looking for a job, or just exploring future opportunities?"
+        )
+        self.assertEqual(active_prompt["category"], "availability")
+        self.assertEqual(active_prompt["coverage_status"], "covered_auto_answer")
+        followup_prompt = next(
+            item
+            for item in report["prompt_statuses"]
+            if item["label"] == "When would you like to hear back from us regarding potential opportunities?"
+        )
+        self.assertEqual(followup_prompt["category"], "availability")
+        self.assertEqual(followup_prompt["coverage_status"], "covered_auto_answer")
 
     def test_answer_gap_report_uses_standard_source_disclosure_and_age_answers(self) -> None:
         profile = CandidateProfile(
