@@ -480,6 +480,23 @@ The fake answer file is dry-run only. `apply-critical-inputs` refuses to apply i
 without `--dry-run`, so synthetic answers cannot be written into the real
 profile or answer memory by accident.
 
+Audit the whole 100-position automation goal from the latest reports:
+
+```bash
+python3 -m job_apply_agent goal-audit
+```
+
+This writes:
+
+```text
+job_apply_agent/outbox/goal_readiness_audit_latest.json
+job_apply_agent/outbox/goal_readiness_audit_latest.md
+```
+
+The audit separates achieved evidence, remaining user-answer blockers, and
+supervised-only gates such as CAPTCHA/security, protected-class answers, and
+real employer final submit.
+
 For a captured Ashby or Greenhouse form snapshot, generate an offline fill plan:
 
 ```bash

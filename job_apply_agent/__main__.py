@@ -40,6 +40,7 @@ from .core import (
     write_fake_learning_probe,
     write_fake_critical_input_probe,
     write_fake_position_rehearsal,
+    write_goal_readiness_audit,
     write_learning_approval_pack,
     write_learning_task_template,
     write_critical_input_answer_template,
@@ -117,6 +118,8 @@ DEFAULT_CANDIDATE_OBSERVATION_JSON = Path(__file__).with_name("outbox") / "candi
 DEFAULT_CANDIDATE_OBSERVATION_MARKDOWN = Path(__file__).with_name("outbox") / "candidate_observation_latest.md"
 DEFAULT_QUESTION_EXPORT_XLSX = Path(__file__).with_name("outbox") / "application_questions_latest.xlsx"
 DEFAULT_QUESTION_EXPORT_HTML = Path(__file__).with_name("outbox") / "application_questions_latest.html"
+DEFAULT_GOAL_AUDIT_JSON = Path(__file__).with_name("outbox") / "goal_readiness_audit_latest.json"
+DEFAULT_GOAL_AUDIT_MARKDOWN = Path(__file__).with_name("outbox") / "goal_readiness_audit_latest.md"
 DEFAULT_PERSONAL_PROFILE = Path(__file__).with_name("outbox") / "alan_jiang_profile.json"
 
 
@@ -648,8 +651,29 @@ def main() -> int:
     )
     export_questions_parser.add_argument("--answer-memory-json", default=str(DEFAULT_MEMORY))
     export_questions_parser.add_argument("--closed-jobs-json", default=str(DEFAULT_CLOSED_JOBS))
+    export_questions_parser.add_argument("--goal-audit-json", default=str(DEFAULT_GOAL_AUDIT_JSON))
     export_questions_parser.add_argument("--xlsx-output", default=str(DEFAULT_QUESTION_EXPORT_XLSX))
     export_questions_parser.add_argument("--html-output", default=str(DEFAULT_QUESTION_EXPORT_HTML))
+
+    goal_audit_parser = subparsers.add_parser(
+        "goal-audit",
+        help="audit current evidence against the 100-position automation goal",
+    )
+    goal_audit_parser.add_argument("--coverage-gate-json", default=str(DEFAULT_COVERAGE_GATE_JSON))
+    goal_audit_parser.add_argument("--gaps-json", default=str(DEFAULT_GAPS_JSON))
+    goal_audit_parser.add_argument("--readiness-json", default=str(DEFAULT_READINESS_JSON))
+    goal_audit_parser.add_argument("--critical-input-status-json", default=str(DEFAULT_CRITICAL_INPUT_STATUS_JSON))
+    goal_audit_parser.add_argument(
+        "--fake-critical-input-probe-json",
+        default=str(DEFAULT_FAKE_CRITICAL_INPUT_PROBE_JSON),
+    )
+    goal_audit_parser.add_argument(
+        "--fake-position-rehearsal-json",
+        default=str(DEFAULT_FAKE_POSITION_REHEARSAL_JSON),
+    )
+    goal_audit_parser.add_argument("--closed-jobs-json", default=str(DEFAULT_CLOSED_JOBS))
+    goal_audit_parser.add_argument("--json-output", default=str(DEFAULT_GOAL_AUDIT_JSON))
+    goal_audit_parser.add_argument("--markdown-output", default=str(DEFAULT_GOAL_AUDIT_MARKDOWN))
 
     args = parser.parse_args()
 
@@ -788,12 +812,14 @@ def main() -> int:
                     "Learning approval pack": args.learning_approval_pack_json,
                     "Answer memory": args.answer_memory_json,
                     "Closed postings": args.closed_jobs_json,
+                    "Goal readiness audit": args.goal_audit_json,
                 }
             ),
             synthetic_browser_execution=_load_optional_json(args.synthetic_browser_exec_json),
             fake_learning_probe=_load_optional_json(args.fake_learning_probe_json),
             fake_critical_input_probe=_load_optional_json(args.fake_critical_input_probe_json),
             fake_position_rehearsal=_load_optional_json(args.fake_position_rehearsal_json),
+            goal_readiness_audit=_load_optional_json(args.goal_audit_json),
             learning_approval_pack=_load_optional_json(args.learning_approval_pack_json),
             answer_memory=_load_optional_json(args.answer_memory_json),
             closed_jobs=_load_optional_json(args.closed_jobs_json),
@@ -804,6 +830,25 @@ def main() -> int:
         print(f"Blocking prompts: {len(export.get('blocker_rows', []))}")
         print(f"Learning tasks: {len(export.get('user_questions', []))}")
         print(f"Critical inputs: {export.get('summary', {}).get('critical_input_count', 0)}")
+        return 0
+
+    if args.command == "goal-audit":
+        audit = write_goal_readiness_audit(
+            json.loads(Path(args.coverage_gate_json).read_text(encoding="utf-8")),
+            json.loads(Path(args.gaps_json).read_text(encoding="utf-8")),
+            json.loads(Path(args.readiness_json).read_text(encoding="utf-8")),
+            args.json_output,
+            args.markdown_output,
+            critical_input_status=_load_optional_json(args.critical_input_status_json),
+            fake_critical_input_probe=_load_optional_json(args.fake_critical_input_probe_json),
+            fake_position_rehearsal=_load_optional_json(args.fake_position_rehearsal_json),
+            closed_jobs=_load_optional_json(args.closed_jobs_json),
+        )
+        print(f"Wrote goal audit JSON to {args.json_output}")
+        print(f"Wrote goal audit Markdown to {args.markdown_output}")
+        print(f"Status: {audit.get('status')}")
+        print(f"Missing requirements: {audit.get('missing_requirement_count', 0)}")
+        print(f"Goal complete: {str(bool(audit.get('goal_complete'))).lower()}")
         return 0
 
     if args.command == "research":

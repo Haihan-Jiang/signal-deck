@@ -31,6 +31,7 @@ from job_apply_agent.core import (
     build_fake_learning_probe,
     build_fake_critical_input_probe,
     build_fake_position_rehearsal,
+    build_goal_readiness_audit,
     build_learning_approval_pack,
     build_learning_task_template,
     build_pre_submit_review,
@@ -82,6 +83,7 @@ from job_apply_agent.core import (
     render_fake_learning_probe_markdown,
     render_fake_critical_input_probe_markdown,
     render_fake_position_rehearsal_markdown,
+    render_goal_readiness_audit_markdown,
     render_learning_approval_pack_markdown,
     render_learning_task_template_markdown,
     render_pre_submit_review_markdown,
@@ -115,6 +117,7 @@ from job_apply_agent.core import (
     write_fake_learning_probe,
     write_fake_critical_input_probe,
     write_fake_position_rehearsal,
+    write_goal_readiness_audit,
     write_learning_approval_pack,
     write_learning_task_template,
     write_pre_submit_review,
@@ -5019,6 +5022,106 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(markdown_output.exists())
             self.assertIn("Research Coverage Gate", markdown_output.read_text())
 
+    def test_goal_readiness_audit_separates_user_blockers_from_policy_gates(self) -> None:
+        coverage_gate = {
+            "positions_observed_total": 400,
+            "real_platform_target_achieved": True,
+            "real_platform_role_target_achieved": True,
+            "next_collection_targets": [],
+            "synthetic": {
+                "run_count": 400,
+                "platform_role_target_achieved": True,
+                "eligible_submit_count": 350,
+                "eligible_submit_target_count": 350,
+                "eligible_submit_achieved": True,
+                "selector_miss_count": 0,
+                "real_platform_submission": False,
+            },
+        }
+        gaps = {
+            "unique_prompts_observed": 12,
+            "ready_prompt_count": 8,
+            "blocking_prompt_count": 4,
+            "coverage_counts": {
+                "needs_user_confirmation": 2,
+                "needs_resume_facts": 1,
+                "final_submit_confirmation": 1,
+                "sensitive_not_stored": 3,
+            },
+            "blocking_prompts": [
+                {
+                    "label": "Have you worked with us before?",
+                    "category": "employment_history",
+                    "coverage_status": "needs_user_confirmation",
+                    "required_count": 5,
+                    "platforms": ["Greenhouse"],
+                }
+            ],
+        }
+        readiness = {
+            "manual_gate_count": 3,
+            "readiness_counts": {"autofill_ready": 20, "closed_skip": 1, "needs_learning": 2},
+        }
+        critical_status = {"summary": {"waiting_count": 2, "supervised_only_count": 1}}
+        fake_critical = {
+            "ready_to_apply_count": 10,
+            "waiting_count": 0,
+            "real_platform_submission": False,
+            "policy": {"submits_real_applications": False},
+        }
+        fake_rehearsal = {
+            "run_count": 100,
+            "platform_role_target_achieved": True,
+            "eligible_submit_achieved": True,
+            "actual_submit_count": 100,
+            "selector_miss_count": 0,
+            "real_platform_submission": False,
+        }
+        closed_jobs = {"jobs": [{"key": "linkedin:1", "reason": "No longer accepting applications"}]}
+
+        audit = build_goal_readiness_audit(
+            coverage_gate,
+            gaps,
+            readiness,
+            critical_input_status=critical_status,
+            fake_critical_input_probe=fake_critical,
+            fake_position_rehearsal=fake_rehearsal,
+            closed_jobs=closed_jobs,
+        )
+        markdown = render_goal_readiness_audit_markdown(audit)
+
+        self.assertEqual(audit["status"], "needs_user_answers")
+        self.assertFalse(audit["goal_complete"])
+        self.assertFalse(audit["can_unattended_submit_real_employers"])
+        self.assertEqual(audit["blocker_summary"]["data_blocking_prompt_count"], 3)
+        self.assertEqual(audit["blocker_summary"]["policy_gate_prompt_count"], 4)
+        self.assertEqual(audit["requirements"][0]["status"], "achieved")
+        self.assertEqual(audit["top_data_blocking_prompts"][0]["coverage_status"], "needs_user_confirmation")
+        self.assertIn("Goal Readiness Audit", markdown)
+        self.assertIn("needs_user_answers", markdown)
+        self.assertIn("Top Data-Blocking Prompts", markdown)
+        self.assertIn("Have you worked with us before?", markdown)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            json_output = Path(temp_dir) / "goal.json"
+            markdown_output = Path(temp_dir) / "goal.md"
+            written = write_goal_readiness_audit(
+                coverage_gate,
+                gaps,
+                readiness,
+                json_output,
+                markdown_output,
+                critical_input_status=critical_status,
+                fake_critical_input_probe=fake_critical,
+                fake_position_rehearsal=fake_rehearsal,
+                closed_jobs=closed_jobs,
+            )
+
+            self.assertEqual(written["missing_requirement_count"], 1)
+            self.assertTrue(json_output.exists())
+            self.assertTrue(markdown_output.exists())
+            self.assertIn("Real employer unattended submit: false", markdown_output.read_text())
+
     def test_collection_plan_turns_coverage_shortfalls_into_search_tasks(self) -> None:
         gate = {
             "position_target": 100,
@@ -6422,6 +6525,34 @@ class JobApplyAgentTests(unittest.TestCase):
             "policy_stop_counts": {"local_synthetic_submit_allowed": 100},
             "platform_counts": {"Greenhouse": 100},
         }
+        goal_readiness_audit = {
+            "status": "needs_user_answers",
+            "goal_complete": False,
+            "missing_requirement_count": 1,
+            "can_unattended_submit_real_employers": False,
+            "blocker_summary": {"data_blocking_prompt_count": 3, "critical_waiting_count": 1},
+            "requirements": [
+                {
+                    "id": "real_position_research_100_each",
+                    "requirement": "Research at least 100 positions per target platform and role family.",
+                    "status": "achieved",
+                },
+                {
+                    "id": "real_user_answer_learning",
+                    "requirement": "Learn remaining truthful answers.",
+                    "status": "needs_user_answers",
+                },
+            ],
+            "top_data_blocking_prompts": [
+                {
+                    "coverage_status": "needs_user_confirmation",
+                    "category": "employment_history",
+                    "label": "Have you worked at DoorDash?*",
+                    "required_count": 3,
+                }
+            ],
+            "next_actions": ["Fill critical input answers."],
+        }
         answer_memory = {
             "answers": [
                 {
@@ -6459,6 +6590,7 @@ class JobApplyAgentTests(unittest.TestCase):
             fake_learning_probe=fake_learning_probe,
             fake_critical_input_probe=fake_critical_input_probe,
             fake_position_rehearsal=fake_position_rehearsal,
+            goal_readiness_audit=goal_readiness_audit,
             answer_memory=answer_memory,
             closed_jobs=closed_jobs,
         )
@@ -6468,6 +6600,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Have you worked at DoorDash?", html)
         self.assertIn("Source Artifacts", html)
         self.assertIn("Synthetic Browser Execution", html)
+        self.assertIn("Goal Readiness Audit", html)
+        self.assertIn("needs_user_answers", html)
         self.assertIn("Fake Learning Probe", html)
         self.assertIn("Fake Critical Input Probe", html)
         self.assertIn("Fake Position Rehearsal", html)
@@ -6505,6 +6639,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 fake_learning_probe=fake_learning_probe,
                 fake_critical_input_probe=fake_critical_input_probe,
                 fake_position_rehearsal=fake_position_rehearsal,
+                goal_readiness_audit=goal_readiness_audit,
                 answer_memory=answer_memory,
                 closed_jobs=closed_jobs,
             )
@@ -6516,6 +6651,7 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(result["learning_approval_critical_inputs"][0]["input_type"], "exact_prompt_answer")
             self.assertEqual(len(result["learning_approval_tasks"]), 1)
             self.assertEqual(result["summary"]["fake_critical_input_ready_count"], 10)
+            self.assertEqual(result["summary"]["goal_audit_status"], "needs_user_answers")
             self.assertEqual(result["summary"]["answer_memory_count"], 1)
             self.assertEqual(result["summary"]["closed_posting_count"], 1)
             self.assertTrue(xlsx_output.exists())
@@ -6530,6 +6666,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 self.assertIn("xl/worksheets/sheet22.xml", names)
                 self.assertIn("xl/worksheets/sheet23.xml", names)
                 self.assertIn("xl/worksheets/sheet24.xml", names)
+                self.assertIn("xl/worksheets/sheet25.xml", names)
                 critical_inputs = workbook.read("xl/worksheets/sheet2.xml").decode("utf-8")
                 self.assertIn("exact_prompt_answer", critical_inputs)
                 self.assertIn("user_answer", critical_inputs)
@@ -6556,6 +6693,8 @@ class JobApplyAgentTests(unittest.TestCase):
                 self.assertIn("exact_prompt_answer", approval_buckets)
                 approval_tasks = workbook.read("xl/worksheets/sheet23.xml").decode("utf-8")
                 self.assertIn("Have you worked at DoorDash?", approval_tasks)
+                goal_audit = workbook.read("xl/worksheets/sheet25.xml").decode("utf-8")
+                self.assertIn("needs_user_answers", goal_audit)
 
 
 if __name__ == "__main__":

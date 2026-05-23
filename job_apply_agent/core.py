@@ -6373,6 +6373,437 @@ def render_research_coverage_gate_markdown(gate: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+GOAL_DATA_BLOCKER_STATUSES = {
+    "needs_answer_memory",
+    "needs_profile_field",
+    "needs_profile_material",
+    "needs_resume_facts",
+    "needs_user_confirmation",
+}
+
+GOAL_OPTIONAL_GAP_STATUSES = {
+    "optional_missing_answer",
+    "optional_missing_profile",
+}
+
+GOAL_POLICY_GATE_STATUSES = {
+    "covered_requires_review",
+    "final_submit_confirmation",
+    "manual_security_step",
+    "sensitive_not_stored",
+}
+
+
+def build_goal_readiness_audit(
+    coverage_gate: dict[str, Any],
+    gaps: dict[str, Any],
+    readiness: dict[str, Any],
+    critical_input_status: dict[str, Any] | None = None,
+    fake_critical_input_probe: dict[str, Any] | None = None,
+    fake_position_rehearsal: dict[str, Any] | None = None,
+    closed_jobs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    coverage_counts = gaps.get("coverage_counts") or {}
+    critical_summary = (critical_input_status or {}).get("summary") or {}
+    fake_critical = fake_critical_input_probe or {}
+    fake_rehearsal = fake_position_rehearsal or {}
+    synthetic = coverage_gate.get("synthetic") or {}
+    readiness_counts = readiness.get("readiness_counts") or {}
+    closed_count = _closed_registry_count(closed_jobs)
+    data_blocker_count = _coverage_status_total(coverage_counts, GOAL_DATA_BLOCKER_STATUSES)
+    optional_gap_count = _coverage_status_total(coverage_counts, GOAL_OPTIONAL_GAP_STATUSES)
+    policy_gate_prompt_count = _coverage_status_total(coverage_counts, GOAL_POLICY_GATE_STATUSES)
+    critical_waiting_count = int(critical_summary.get("waiting_count") or 0)
+    critical_supervised_only_count = int(critical_summary.get("supervised_only_count") or 0)
+    fake_critical_ready = int(fake_critical.get("ready_to_apply_count") or 0)
+    fake_critical_waiting = int(fake_critical.get("waiting_count") or 0)
+    fake_critical_submits_real = bool(
+        fake_critical.get("real_platform_submission")
+        or (fake_critical.get("policy") or {}).get("submits_real_applications")
+    )
+    fake_rehearsal_runs = int(fake_rehearsal.get("run_count") or 0)
+    fake_rehearsal_real_submit = bool(
+        fake_rehearsal.get("real_platform_submission")
+        or (fake_rehearsal.get("policy") or {}).get("real_platform_submission")
+    )
+    fake_rehearsal_selector_misses = int(fake_rehearsal.get("selector_miss_count") or 0)
+    synthetic_selector_misses = int(synthetic.get("selector_miss_count") or 0)
+    research_ready = bool(
+        coverage_gate.get("real_platform_target_achieved")
+        and coverage_gate.get("real_platform_role_target_achieved")
+    )
+    synthetic_ready = bool(
+        synthetic.get("platform_role_target_achieved")
+        and synthetic.get("eligible_submit_achieved")
+        and synthetic_selector_misses == 0
+        and not synthetic.get("real_platform_submission")
+    )
+    fake_rehearsal_ready = bool(
+        fake_rehearsal_runs >= 100
+        and fake_rehearsal.get("platform_role_target_achieved")
+        and fake_rehearsal.get("eligible_submit_achieved")
+        and fake_rehearsal_selector_misses == 0
+        and not fake_rehearsal_real_submit
+    )
+    user_answers_ready = data_blocker_count == 0 and critical_waiting_count == 0
+    supervised_autofill_ready = bool(
+        research_ready
+        and synthetic_ready
+        and user_answers_ready
+        and synthetic_selector_misses == 0
+    )
+    requirements = [
+        {
+            "id": "closed_posting_filter",
+            "requirement": "Detect and skip postings that say No longer accepting applications.",
+            "status": "achieved" if closed_count > 0 else "needs_live_evidence",
+            "evidence": {
+                "closed_registry_count": closed_count,
+                "readiness_closed_skip_count": int(readiness_counts.get("closed_skip") or 0),
+                "policy": "closed postings are excluded before notify/open/apply",
+            },
+        },
+        {
+            "id": "real_position_research_100_each",
+            "requirement": "Research at least 100 positions per target platform and role family.",
+            "status": "achieved" if research_ready else "needs_more_collection",
+            "evidence": {
+                "real_platform_target_achieved": bool(coverage_gate.get("real_platform_target_achieved")),
+                "real_platform_role_target_achieved": bool(
+                    coverage_gate.get("real_platform_role_target_achieved")
+                ),
+                "positions_observed_total": int(coverage_gate.get("positions_observed_total") or 0),
+                "next_collection_targets": len(coverage_gate.get("next_collection_targets") or []),
+            },
+        },
+        {
+            "id": "fake_candidate_100_position_rehearsal",
+            "requirement": "Use fake candidate data to prove the automation path across at least 100 positions locally.",
+            "status": "achieved" if fake_rehearsal_ready else "needs_rehearsal",
+            "evidence": {
+                "fake_rehearsal_runs": fake_rehearsal_runs,
+                "fake_rehearsal_submit_count": int(fake_rehearsal.get("actual_submit_count") or 0),
+                "fake_rehearsal_selector_miss_count": fake_rehearsal_selector_misses,
+                "fake_rehearsal_real_platform_submission": fake_rehearsal_real_submit,
+                "synthetic_run_count": int(synthetic.get("run_count") or 0),
+                "synthetic_eligible_submit_count": int(synthetic.get("eligible_submit_count") or 0),
+            },
+        },
+        {
+            "id": "question_summary",
+            "requirement": "Summarize observed application questions and automation handling.",
+            "status": "achieved" if int(gaps.get("unique_prompts_observed") or 0) > 0 else "missing_report",
+            "evidence": {
+                "unique_prompts_observed": int(gaps.get("unique_prompts_observed") or 0),
+                "blocking_prompt_count": int(gaps.get("blocking_prompt_count") or 0),
+                "ready_prompt_count": int(gaps.get("ready_prompt_count") or 0),
+            },
+        },
+        {
+            "id": "real_user_answer_learning",
+            "requirement": "Learn the remaining truthful user answers before real autofill can run unattended through fields.",
+            "status": "achieved" if user_answers_ready else "needs_user_answers",
+            "evidence": {
+                "data_blocking_prompt_count": data_blocker_count,
+                "critical_waiting_count": critical_waiting_count,
+                "critical_supervised_only_count": critical_supervised_only_count,
+                "fake_critical_ready_count": fake_critical_ready,
+                "fake_critical_waiting_count": fake_critical_waiting,
+                "fake_critical_real_platform_submission": fake_critical_submits_real,
+            },
+        },
+        {
+            "id": "real_platform_submit_boundary",
+            "requirement": "Keep real employer final submit, CAPTCHA/security, and protected-class answers supervised.",
+            "status": "supervised_policy_gate",
+            "evidence": {
+                "policy_gate_prompt_count": policy_gate_prompt_count,
+                "manual_gate_count": int(readiness.get("manual_gate_count") or 0),
+                "can_unattended_submit_real_employers": False,
+            },
+        },
+    ]
+    missing_requirements = [
+        item
+        for item in requirements
+        if item.get("status") not in {"achieved", "supervised_policy_gate"}
+    ]
+    status = (
+        "supervised_autofill_ready"
+        if supervised_autofill_ready
+        else "needs_user_answers"
+        if research_ready and synthetic_ready and data_blocker_count > 0
+        else "needs_research_or_rehearsal"
+    )
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "goal_readiness_audit",
+        "status": status,
+        "goal_complete": bool(supervised_autofill_ready and not missing_requirements),
+        "supervised_autofill_ready_after_user_answers": supervised_autofill_ready,
+        "can_unattended_submit_real_employers": False,
+        "requirements": requirements,
+        "missing_requirement_count": len(missing_requirements),
+        "blocker_summary": {
+            "data_blocking_prompt_count": data_blocker_count,
+            "optional_gap_count": optional_gap_count,
+            "policy_gate_prompt_count": policy_gate_prompt_count,
+            "critical_waiting_count": critical_waiting_count,
+            "critical_supervised_only_count": critical_supervised_only_count,
+            "manual_gate_count": int(readiness.get("manual_gate_count") or 0),
+            "closed_registry_count": closed_count,
+        },
+        "data_blockers": _goal_coverage_status_rows(coverage_counts, GOAL_DATA_BLOCKER_STATUSES),
+        "optional_gaps": _goal_coverage_status_rows(coverage_counts, GOAL_OPTIONAL_GAP_STATUSES),
+        "policy_gates": _goal_coverage_status_rows(coverage_counts, GOAL_POLICY_GATE_STATUSES),
+        "top_blocking_prompts": _goal_top_blocking_prompts(gaps),
+        "top_data_blocking_prompts": _goal_top_blocking_prompts(
+            gaps,
+            statuses=GOAL_DATA_BLOCKER_STATUSES,
+        ),
+        "top_policy_gate_prompts": _goal_top_blocking_prompts(
+            gaps,
+            statuses=GOAL_POLICY_GATE_STATUSES,
+        ),
+        "next_actions": _goal_next_actions(
+            research_ready=research_ready,
+            synthetic_ready=synthetic_ready,
+            critical_waiting_count=critical_waiting_count,
+            data_blocker_count=data_blocker_count,
+            fake_critical_ready=fake_critical_ready,
+            fake_critical_submits_real=fake_critical_submits_real,
+        ),
+    }
+
+
+def write_goal_readiness_audit(
+    coverage_gate: dict[str, Any],
+    gaps: dict[str, Any],
+    readiness: dict[str, Any],
+    json_output: str | Path,
+    markdown_output: str | Path,
+    critical_input_status: dict[str, Any] | None = None,
+    fake_critical_input_probe: dict[str, Any] | None = None,
+    fake_position_rehearsal: dict[str, Any] | None = None,
+    closed_jobs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    audit = build_goal_readiness_audit(
+        coverage_gate,
+        gaps,
+        readiness,
+        critical_input_status=critical_input_status,
+        fake_critical_input_probe=fake_critical_input_probe,
+        fake_position_rehearsal=fake_position_rehearsal,
+        closed_jobs=closed_jobs,
+    )
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(audit, ensure_ascii=True, indent=2), encoding="utf-8")
+    markdown_path.write_text(render_goal_readiness_audit_markdown(audit), encoding="utf-8")
+    return audit
+
+
+def render_goal_readiness_audit_markdown(audit: dict[str, Any]) -> str:
+    summary = audit.get("blocker_summary") or {}
+    lines = [
+        "# Goal Readiness Audit",
+        "",
+        f"Generated: {audit.get('generated_at')}",
+        f"Status: {audit.get('status')}",
+        f"Goal complete: {str(bool(audit.get('goal_complete'))).lower()}",
+        "Real employer unattended submit: false",
+        "",
+        "## Requirement Evidence",
+        "",
+        "| Requirement | Status | Evidence |",
+        "| --- | --- | --- |",
+    ]
+    for item in audit.get("requirements") or []:
+        evidence = item.get("evidence") or {}
+        evidence_text = "; ".join(f"{key}={value}" for key, value in evidence.items())
+        lines.append(
+            "| {requirement} | {status} | {evidence} |".format(
+                requirement=_markdown_cell(item.get("requirement")),
+                status=_markdown_cell(item.get("status")),
+                evidence=_markdown_cell(evidence_text),
+            )
+        )
+
+    lines.extend(
+        [
+            "",
+            "## Blocker Summary",
+            "",
+            f"- data-blocking prompts: {summary.get('data_blocking_prompt_count', 0)}",
+            f"- optional gaps: {summary.get('optional_gap_count', 0)}",
+            f"- policy/manual prompt gates: {summary.get('policy_gate_prompt_count', 0)}",
+            f"- critical inputs waiting: {summary.get('critical_waiting_count', 0)}",
+            f"- critical supervised-only inputs: {summary.get('critical_supervised_only_count', 0)}",
+            f"- manual gates: {summary.get('manual_gate_count', 0)}",
+            f"- closed registry entries: {summary.get('closed_registry_count', 0)}",
+            "",
+            "## Data Blockers",
+            "",
+        ]
+    )
+    lines.extend(_goal_status_table_lines(audit.get("data_blockers") or []))
+    lines.extend(["", "## Top Data-Blocking Prompts", ""])
+    lines.extend(_goal_prompt_table_lines(audit.get("top_data_blocking_prompts") or []))
+    lines.extend(["", "## Policy Gates", ""])
+    lines.extend(_goal_status_table_lines(audit.get("policy_gates") or []))
+    lines.extend(["", "## Top Policy Gate Prompts", ""])
+    lines.extend(_goal_prompt_table_lines(audit.get("top_policy_gate_prompts") or []))
+    lines.extend(["", "## Top Blocking Prompts", ""])
+    lines.extend(_goal_prompt_table_lines(audit.get("top_blocking_prompts") or []))
+    lines.extend(["", "## Next Actions", ""])
+    actions = audit.get("next_actions") or []
+    if actions:
+        for action in actions:
+            lines.append(f"- {action}")
+    else:
+        lines.append("- None")
+    return "\n".join(lines) + "\n"
+
+
+def _goal_prompt_table_lines(blockers: list[dict[str, Any]]) -> list[str]:
+    if blockers:
+        lines = ["| Status | Category | Required | Prompt |", "| --- | --- | ---: | --- |"]
+        for row in blockers[:25]:
+            lines.append(
+                "| {status} | {category} | {count} | {label} |".format(
+                    status=_markdown_cell(row.get("coverage_status")),
+                    category=_markdown_cell(row.get("category")),
+                    count=row.get("required_count", 0),
+                    label=_markdown_cell(row.get("label")),
+                )
+            )
+    else:
+        lines = ["- None"]
+    return lines
+
+
+def _goal_status_table_lines(rows: list[dict[str, Any]]) -> list[str]:
+    if not rows:
+        return ["- None"]
+    lines = ["| Status | Count | Handling |", "| --- | ---: | --- |"]
+    for row in rows:
+        lines.append(
+            "| {status} | {count} | {handling} |".format(
+                status=_markdown_cell(row.get("status")),
+                count=row.get("count", 0),
+                handling=_markdown_cell(row.get("handling")),
+            )
+        )
+    return lines
+
+
+def _coverage_status_total(coverage_counts: dict[str, Any], statuses: set[str]) -> int:
+    return sum(int(coverage_counts.get(status) or 0) for status in statuses)
+
+
+def _goal_coverage_status_rows(
+    coverage_counts: dict[str, Any],
+    statuses: set[str],
+) -> list[dict[str, Any]]:
+    handling = {
+        "covered_requires_review": "keep supervised review before final submit",
+        "final_submit_confirmation": "do not click real final submit without explicit approval",
+        "manual_security_step": "pause for CAPTCHA, login, or security challenge",
+        "needs_answer_memory": "ask once and store approved reusable answer",
+        "needs_profile_field": "add stable profile field",
+        "needs_profile_material": "add approved local material path",
+        "needs_resume_facts": "add truthful resume fact or mark not applicable",
+        "needs_user_confirmation": "get explicit user confirmation before reuse",
+        "optional_missing_answer": "optional; improve coverage after required blockers",
+        "optional_missing_profile": "optional; fill when available",
+        "sensitive_not_stored": "ask in supervised browser review; do not persist protected-class answer",
+    }
+    rows = [
+        {
+            "status": status,
+            "count": int(coverage_counts.get(status) or 0),
+            "handling": handling.get(status, "inspect before automation"),
+        }
+        for status in sorted(statuses)
+        if int(coverage_counts.get(status) or 0) > 0
+    ]
+    rows.sort(key=lambda row: (-int(row.get("count") or 0), str(row.get("status") or "")))
+    return rows
+
+
+def _goal_top_blocking_prompts(
+    gaps: dict[str, Any],
+    limit: int = 50,
+    statuses: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    rows = []
+    for item in gaps.get("blocking_prompts") or []:
+        if not isinstance(item, dict):
+            continue
+        coverage_status = str(item.get("coverage_status") or "")
+        if statuses is not None and coverage_status not in statuses:
+            continue
+        rows.append(
+            {
+                "coverage_status": coverage_status,
+                "category": item.get("category"),
+                "label": item.get("label"),
+                "required_count": int(item.get("required_count") or 0),
+                "platforms": _string_list(item.get("platforms")),
+            }
+        )
+    rows.sort(
+        key=lambda row: (
+            -int(row.get("required_count") or 0),
+            str(row.get("coverage_status") or ""),
+            str(row.get("label") or ""),
+        )
+    )
+    return rows[: max(limit, 0)]
+
+
+def _goal_next_actions(
+    research_ready: bool,
+    synthetic_ready: bool,
+    critical_waiting_count: int,
+    data_blocker_count: int,
+    fake_critical_ready: int,
+    fake_critical_submits_real: bool,
+) -> list[str]:
+    actions: list[str] = []
+    if not research_ready:
+        actions.append("Run collection-plan and observe-candidates until every target platform/role has 100 observed positions.")
+    if not synthetic_ready:
+        actions.append("Run synthetic-browser-exec and fake-position-rehearsal until selector misses are zero and eligible fake submits pass locally.")
+    if critical_waiting_count:
+        actions.append(
+            "Fill job_apply_agent/outbox/critical_input_answers_latest.json with truthful answers for waiting critical inputs."
+        )
+    if fake_critical_ready and not fake_critical_submits_real:
+        actions.append("Use fake-critical-input-probe as dry-run evidence only; never apply fake answers to the real profile.")
+    if data_blocker_count:
+        actions.append("After real answers are approved, run apply-critical-inputs, gaps, readiness, coverage-gate, and export-questions again.")
+    actions.append("Keep CAPTCHA/security, protected-class self-ID, and real employer final submit as supervised browser gates.")
+    return actions
+
+
+def _closed_registry_count(closed_jobs: dict[str, Any] | None) -> int:
+    if not closed_jobs:
+        return 0
+    jobs = closed_jobs.get("jobs") or []
+    if isinstance(jobs, dict):
+        return len(jobs)
+    if isinstance(jobs, list):
+        return len(jobs)
+    return 0
+
+
+def _markdown_cell(value: Any) -> str:
+    return str(value if value is not None else "").replace("|", "\\|").replace("\n", " ")
+
+
 def build_collection_plan_from_coverage_gate(
     gate: dict[str, Any],
     max_targets: int = 20,
@@ -6947,6 +7378,7 @@ def write_question_export(
     fake_learning_probe: dict[str, Any] | None = None,
     fake_critical_input_probe: dict[str, Any] | None = None,
     fake_position_rehearsal: dict[str, Any] | None = None,
+    goal_readiness_audit: dict[str, Any] | None = None,
     learning_approval_pack: dict[str, Any] | None = None,
     answer_memory: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
@@ -6962,6 +7394,7 @@ def write_question_export(
         fake_learning_probe=fake_learning_probe,
         fake_critical_input_probe=fake_critical_input_probe,
         fake_position_rehearsal=fake_position_rehearsal,
+        goal_readiness_audit=goal_readiness_audit,
         learning_approval_pack=learning_approval_pack,
         answer_memory=answer_memory,
         closed_jobs=closed_jobs,
@@ -6987,6 +7420,7 @@ def build_question_export(
     fake_learning_probe: dict[str, Any] | None = None,
     fake_critical_input_probe: dict[str, Any] | None = None,
     fake_position_rehearsal: dict[str, Any] | None = None,
+    goal_readiness_audit: dict[str, Any] | None = None,
     learning_approval_pack: dict[str, Any] | None = None,
     answer_memory: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
@@ -7024,6 +7458,7 @@ def build_question_export(
     fake_learning_probe_rows = _fake_learning_probe_export_rows(fake_learning_probe)
     fake_critical_input_probe_rows = _fake_critical_input_probe_export_rows(fake_critical_input_probe)
     fake_position_rehearsal_rows = _fake_position_rehearsal_export_rows(fake_position_rehearsal)
+    goal_audit_rows = _goal_audit_export_rows(goal_readiness_audit)
     answer_memory_rows = _answer_memory_export_rows(answer_memory)
     closed_posting_rows = _closed_posting_export_rows(closed_jobs)
     collection_targets = [
@@ -7145,6 +7580,11 @@ def build_question_export(
         "real_submit_count": 0,
         "answer_memory_count": len(answer_memory_rows),
         "closed_posting_count": len(closed_posting_rows),
+        "goal_audit_status": (goal_readiness_audit or {}).get("status", ""),
+        "goal_audit_complete": bool((goal_readiness_audit or {}).get("goal_complete")),
+        "goal_audit_missing_requirement_count": int(
+            (goal_readiness_audit or {}).get("missing_requirement_count") or 0
+        ),
     }
     return {
         "generated_at": summary["generated_at"],
@@ -7156,6 +7596,7 @@ def build_question_export(
         "fake_learning_probe": fake_learning_probe_rows,
         "fake_critical_input_probe": fake_critical_input_probe_rows,
         "fake_position_rehearsal": fake_position_rehearsal_rows,
+        "goal_audit": goal_audit_rows,
         "answer_memory": answer_memory_rows,
         "closed_postings": closed_posting_rows,
         "coverage_counts": gaps.get("coverage_counts", {}),
@@ -7235,6 +7676,12 @@ def render_question_export_html(export: dict[str, Any]) -> str:
         _html_table(
             ["Check", "Status"],
             [
+                ["Goal audit status", summary.get("goal_audit_status", "")],
+                ["Goal audit complete", _yes_no(summary.get("goal_audit_complete"))],
+                [
+                    "Goal missing requirements",
+                    summary.get("goal_audit_missing_requirement_count", 0),
+                ],
                 ["Ready for full automation", _yes_no(summary.get("ready_for_full_automation"))],
                 ["Real platform target achieved", _yes_no(summary.get("real_platform_target_achieved"))],
                 [
@@ -7291,6 +7738,15 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                 ["Eligible synthetic submit achieved", _yes_no(summary.get("eligible_synthetic_submit_achieved"))],
                 ["Expected synthetic blocker count", summary.get("expected_synthetic_blocker_count", 0)],
                 ["Actual real submit count", summary.get("real_submit_count", 0)],
+            ],
+        ),
+        "</section>",
+        "<section><h2>Goal Readiness Audit</h2>",
+        _html_table(
+            ["Section", "Metric", "Value"],
+            [
+                [row.get("section"), row.get("metric"), row.get("value")]
+                for row in export.get("goal_audit", [])
             ],
         ),
         "</section>",
@@ -14345,6 +14801,61 @@ def _fake_position_rehearsal_export_rows(fake_position_rehearsal: dict[str, Any]
     return rows
 
 
+def _goal_audit_export_rows(goal_readiness_audit: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not goal_readiness_audit:
+        return []
+    rows = [
+        {"section": "summary", "metric": "status", "value": goal_readiness_audit.get("status")},
+        {
+            "section": "summary",
+            "metric": "goal_complete",
+            "value": goal_readiness_audit.get("goal_complete"),
+        },
+        {
+            "section": "summary",
+            "metric": "missing_requirement_count",
+            "value": goal_readiness_audit.get("missing_requirement_count"),
+        },
+        {
+            "section": "summary",
+            "metric": "can_unattended_submit_real_employers",
+            "value": goal_readiness_audit.get("can_unattended_submit_real_employers"),
+        },
+    ]
+    for key, value in sorted((goal_readiness_audit.get("blocker_summary") or {}).items()):
+        rows.append({"section": "blocker_summary", "metric": key, "value": value})
+    for item in goal_readiness_audit.get("requirements") or []:
+        if not isinstance(item, dict):
+            continue
+        rows.append(
+            {
+                "section": "requirement",
+                "metric": item.get("id"),
+                "value": "{status}: {requirement}".format(
+                    status=item.get("status"),
+                    requirement=item.get("requirement"),
+                ),
+            }
+        )
+    for item in goal_readiness_audit.get("top_data_blocking_prompts") or []:
+        if not isinstance(item, dict):
+            continue
+        rows.append(
+            {
+                "section": "top_data_blocking_prompt",
+                "metric": item.get("coverage_status"),
+                "value": "{count} | {category} | {label}".format(
+                    count=item.get("required_count", 0),
+                    category=item.get("category", ""),
+                    label=item.get("label", ""),
+                ),
+            }
+        )
+    for action in goal_readiness_audit.get("next_actions") or []:
+        rows.append({"section": "next_action", "metric": "action", "value": action})
+    return rows
+
+
 def _answer_memory_export_rows(answer_memory: dict[str, Any] | None) -> list[dict[str, Any]]:
     if not answer_memory:
         return []
@@ -14656,6 +15167,7 @@ def _write_question_export_xlsx(export: dict[str, Any], path: Path) -> None:
         ("Approval Buckets", _table_rows(export.get("learning_approval_buckets", []))),
         ("Approval Tasks", _table_rows(export.get("learning_approval_tasks", []))),
         ("Approval Manual Gates", _table_rows(export.get("learning_approval_manual_gates", []))),
+        ("Goal Audit", _table_rows(export.get("goal_audit", []))),
     ]
     sheet_names = [_safe_sheet_name(name) for name, _rows in sheets]
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
