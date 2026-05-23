@@ -13840,6 +13840,8 @@ def write_question_export(
     critical_input_questionnaire: dict[str, Any] | None = None,
     critical_input_preflight: dict[str, Any] | None = None,
     critical_input_impact: dict[str, Any] | None = None,
+    critical_input_unblockers: dict[str, Any] | None = None,
+    post_answer_pipeline: dict[str, Any] | None = None,
     autofill_batch: dict[str, Any] | None = None,
     apply_queue_handoff: dict[str, Any] | None = None,
     automation_handoff: dict[str, Any] | None = None,
@@ -13864,6 +13866,8 @@ def write_question_export(
         critical_input_questionnaire=critical_input_questionnaire,
         critical_input_preflight=critical_input_preflight,
         critical_input_impact=critical_input_impact,
+        critical_input_unblockers=critical_input_unblockers,
+        post_answer_pipeline=post_answer_pipeline,
         autofill_batch=autofill_batch,
         apply_queue_handoff=apply_queue_handoff,
         automation_handoff=automation_handoff,
@@ -13898,6 +13902,8 @@ def build_question_export(
     critical_input_questionnaire: dict[str, Any] | None = None,
     critical_input_preflight: dict[str, Any] | None = None,
     critical_input_impact: dict[str, Any] | None = None,
+    critical_input_unblockers: dict[str, Any] | None = None,
+    post_answer_pipeline: dict[str, Any] | None = None,
     autofill_batch: dict[str, Any] | None = None,
     apply_queue_handoff: dict[str, Any] | None = None,
     automation_handoff: dict[str, Any] | None = None,
@@ -13944,6 +13950,8 @@ def build_question_export(
     critical_questionnaire_rows = _critical_input_questionnaire_export_rows(critical_input_questionnaire)
     critical_preflight_rows = _critical_input_preflight_export_rows(critical_input_preflight)
     critical_impact_rows = _critical_input_impact_export_rows(critical_input_impact)
+    critical_unblocker_rows = _critical_input_unblocker_export_rows(critical_input_unblockers)
+    post_answer_pipeline_rows = _post_answer_pipeline_export_rows(post_answer_pipeline)
     autofill_batch_rows = _autofill_batch_export_rows(autofill_batch)
     autofill_batch_position_rows = _autofill_batch_position_export_rows(autofill_batch)
     autofill_batch_stop_rows = _autofill_batch_stop_action_export_rows(autofill_batch)
@@ -14162,6 +14170,16 @@ def build_question_export(
         "critical_impact_top_input_id": (
             ((critical_input_impact or {}).get("summary") or {}).get("top_input_id") or ""
         ),
+        "final_unblocker_count": int((critical_input_unblockers or {}).get("input_count") or len(critical_unblocker_rows)),
+        "final_unblocker_high_risk_count": int((critical_input_unblockers or {}).get("high_risk_count") or 0),
+        "final_unblocker_prefilled_update_count": int(
+            (critical_input_unblockers or {}).get("prefilled_update_count") or 0
+        ),
+        "post_answer_pipeline_status": (post_answer_pipeline or {}).get("status", ""),
+        "post_answer_pipeline_ready_for_workflow": bool((post_answer_pipeline or {}).get("ready_for_workflow")),
+        "post_answer_pipeline_synthetic_final_answers": bool(
+            (post_answer_pipeline or {}).get("synthetic_final_answers")
+        ),
         "critical_preflight_data_blocking_delta": int(
             ((critical_input_preflight or {}).get("summary") or {}).get(
                 "data_blocking_prompts_delta"
@@ -14214,6 +14232,8 @@ def build_question_export(
         ),
         "critical_input_preflight": critical_preflight_rows,
         "critical_input_impact": critical_impact_rows,
+        "critical_input_unblockers": critical_unblocker_rows,
+        "post_answer_pipeline": post_answer_pipeline_rows,
         "autofill_batch": autofill_batch_rows,
         "autofill_batch_positions": autofill_batch_position_rows,
         "autofill_batch_stop_actions": autofill_batch_stop_rows,
@@ -14481,6 +14501,42 @@ def render_question_export_html(export: dict[str, Any]) -> str:
             [
                 [row.get("section"), row.get("metric"), row.get("value")]
                 for row in export.get("goal_audit", [])
+            ],
+        ),
+        "</section>",
+        "<section><h2>Final Answer Unblockers</h2>",
+        _html_table(
+            [
+                "Input ID",
+                "High risk",
+                "Question",
+                "Required response",
+                "Data blockers delta",
+                "Autofill positions delta",
+                "Platforms",
+                "Labels",
+            ],
+            [
+                [
+                    row.get("input_id"),
+                    row.get("high_risk"),
+                    row.get("question"),
+                    row.get("required_user_response"),
+                    row.get("data_blocking_prompts_delta"),
+                    row.get("positions_ready_for_autofill_delta"),
+                    row.get("platforms"),
+                    row.get("labels"),
+                ]
+                for row in export.get("critical_input_unblockers", [])
+            ],
+        ),
+        "</section>",
+        "<section><h2>Post-Answer Pipeline</h2>",
+        _html_table(
+            ["Section", "Metric", "Value"],
+            [
+                [row.get("section"), row.get("metric"), row.get("value")]
+                for row in export.get("post_answer_pipeline", [])
             ],
         ),
         "</section>",
@@ -22342,6 +22398,83 @@ def _critical_input_impact_export_rows(
     return rows
 
 
+def _critical_input_unblocker_export_rows(
+    critical_input_unblockers: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if not critical_input_unblockers:
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in critical_input_unblockers.get("unblockers") or []:
+        if not isinstance(item, dict):
+            continue
+        impact = item.get("impact") or {}
+        rows.append(
+            {
+                "input_id": item.get("input_id"),
+                "input_type": item.get("input_type"),
+                "high_risk": item.get("high_risk"),
+                "question": item.get("question"),
+                "required_user_response": item.get("required_user_response"),
+                "why_not_inferred": item.get("why_not_inferred"),
+                "data_blocking_prompts_delta": impact.get("data_blocking_prompts_delta", 0),
+                "positions_ready_for_autofill_delta": impact.get("positions_ready_for_autofill_delta", 0),
+                "required_count": item.get("required_count", 0),
+                "platforms": ", ".join(_string_list(item.get("platforms"))),
+                "labels": "\n".join(_string_list(item.get("labels"))),
+            }
+        )
+    return rows
+
+
+def _post_answer_pipeline_export_rows(
+    post_answer_pipeline: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if not post_answer_pipeline:
+        return []
+    rows: list[dict[str, Any]] = []
+    for key in [
+        "generated_at",
+        "status",
+        "ready_for_workflow",
+        "synthetic_final_answers",
+        "apply_requested",
+        "live_check_requested",
+        "open_browser_requested",
+        "include_values",
+        "confirmed_updates_output",
+        "synthetic_compact_updates_output",
+        "handoff_status",
+        "handoff_open_ready",
+        "autofill_packet_status",
+        "autofill_packet_selected",
+        "opened_count",
+    ]:
+        if key in post_answer_pipeline:
+            rows.append({"section": "summary", "metric": key, "value": post_answer_pipeline.get(key)})
+    final_report = post_answer_pipeline.get("final_update_report") or {}
+    for key, value in sorted((final_report.get("summary") or {}).items()):
+        rows.append({"section": "final_answer_gate", "metric": key, "value": value})
+    for key, value in sorted((post_answer_pipeline.get("policy") or {}).items()):
+        rows.append({"section": "policy", "metric": key, "value": value})
+    for step in post_answer_pipeline.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        details = step.get("details") or {}
+        rows.append(
+            {
+                "section": "step",
+                "metric": step.get("name"),
+                "value": "{status} | {details}".format(
+                    status=step.get("status"),
+                    details="; ".join(f"{key}={value}" for key, value in details.items())
+                    if isinstance(details, dict)
+                    else "",
+                ),
+            }
+        )
+    return rows
+
+
 def _autofill_batch_export_rows(autofill_batch: dict[str, Any] | None) -> list[dict[str, Any]]:
     if not autofill_batch:
         return []
@@ -23004,6 +23137,8 @@ def _write_question_export_xlsx(export: dict[str, Any], path: Path) -> None:
         ("Goal Audit", _table_rows(export.get("goal_audit", []))),
         ("Critical Suggestions", _table_rows(export.get("critical_input_suggestions", []))),
         ("Profile Snapshot", _table_rows(export.get("profile_snapshot", []))),
+        ("Final Unblockers", _table_rows(export.get("critical_input_unblockers", []))),
+        ("Post Answer Pipeline", _table_rows(export.get("post_answer_pipeline", []))),
     ]
     sheet_names = [_safe_sheet_name(name) for name, _rows in sheets]
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:

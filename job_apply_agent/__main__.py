@@ -1291,6 +1291,22 @@ def main() -> int:
         "--critical-input-impact-html",
         default=str(DEFAULT_CRITICAL_INPUT_IMPACT_HTML),
     )
+    export_questions_parser.add_argument(
+        "--critical-input-unblockers-json",
+        default=str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_JSON),
+    )
+    export_questions_parser.add_argument(
+        "--critical-input-unblockers-html",
+        default=str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_HTML),
+    )
+    export_questions_parser.add_argument(
+        "--post-answer-pipeline-json",
+        default=str(DEFAULT_POST_ANSWER_PIPELINE_JSON),
+    )
+    export_questions_parser.add_argument(
+        "--post-answer-pipeline-markdown",
+        default=str(DEFAULT_POST_ANSWER_PIPELINE_MARKDOWN),
+    )
     export_questions_parser.add_argument("--xlsx-output", default=str(DEFAULT_QUESTION_EXPORT_XLSX))
     export_questions_parser.add_argument("--html-output", default=str(DEFAULT_QUESTION_EXPORT_HTML))
 
@@ -1486,6 +1502,10 @@ def main() -> int:
                     "Critical input preflight HTML": args.critical_input_preflight_html,
                     "Critical input impact": args.critical_input_impact_json,
                     "Critical input impact HTML": args.critical_input_impact_html,
+                    "Critical input final unblockers": args.critical_input_unblockers_json,
+                    "Critical input final unblockers HTML": args.critical_input_unblockers_html,
+                    "Post-answer pipeline": args.post_answer_pipeline_json,
+                    "Post-answer pipeline Markdown": args.post_answer_pipeline_markdown,
                 }
             ),
             synthetic_browser_execution=_load_optional_json(args.synthetic_browser_exec_json),
@@ -1497,6 +1517,8 @@ def main() -> int:
             critical_input_questionnaire=_load_optional_json(args.critical_input_questionnaire_json),
             critical_input_preflight=_load_optional_json(args.critical_input_preflight_json),
             critical_input_impact=_load_optional_json(args.critical_input_impact_json),
+            critical_input_unblockers=_load_optional_json(args.critical_input_unblockers_json),
+            post_answer_pipeline=_load_optional_json(args.post_answer_pipeline_json),
             autofill_batch=_load_optional_json(args.autofill_batch_json),
             apply_queue_handoff=_load_optional_json(args.apply_queue_handoff_json),
             automation_handoff=_load_optional_json(args.automation_handoff_json),

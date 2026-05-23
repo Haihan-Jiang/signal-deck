@@ -10260,6 +10260,54 @@ class JobApplyAgentTests(unittest.TestCase):
             "policy": {"writes_real_profile_or_memory": False},
             "next_commands": ["python3 -m job_apply_agent critical-inputs-workflow --apply"],
         }
+        critical_input_unblockers = {
+            "input_count": 1,
+            "high_risk_count": 0,
+            "prefilled_update_count": 2,
+            "unblockers": [
+                {
+                    "input_id": "profile_zip_or_postal_code",
+                    "input_type": "profile_or_resume_fact",
+                    "high_risk": False,
+                    "question": "What ZIP/postal code should automation use?",
+                    "required_user_response": "Provide exact ZIP/postal code.",
+                    "why_not_inferred": "Profile has city but no exact ZIP.",
+                    "impact": {
+                        "data_blocking_prompts_delta": -2,
+                        "positions_ready_for_autofill_delta": 3,
+                    },
+                    "required_count": 4,
+                    "platforms": ["Ashby"],
+                    "labels": ["Zip Code"],
+                }
+            ],
+        }
+        post_answer_pipeline = {
+            "generated_at": "2026-05-23T00:00:00+00:00",
+            "status": "waiting_for_confirmed_answers",
+            "ready_for_workflow": False,
+            "synthetic_final_answers": False,
+            "apply_requested": False,
+            "live_check_requested": False,
+            "open_browser_requested": False,
+            "confirmed_updates_output": "job_apply_agent/outbox/critical_input_confirmed_updates_latest.json",
+            "final_update_report": {
+                "summary": {
+                    "merged_update_count": 89,
+                    "missing_unblocker_count": 1,
+                    "unconfirmed_high_risk_count": 0,
+                    "unknown_compact_update_count": 0,
+                }
+            },
+            "steps": [
+                {
+                    "name": "finalize_confirmed_updates",
+                    "status": "waiting_for_answers",
+                    "details": {"missing_unblockers": 1},
+                }
+            ],
+            "policy": {"final_submit_remains_supervised": True},
+        }
         autofill_batch = {
             "generated_at": "2026-05-22T00:00:00+00:00",
             "requested_count": 100,
@@ -10460,6 +10508,8 @@ class JobApplyAgentTests(unittest.TestCase):
             critical_input_questionnaire=critical_input_questionnaire,
             critical_input_preflight=critical_input_preflight,
             critical_input_impact=critical_input_impact,
+            critical_input_unblockers=critical_input_unblockers,
+            post_answer_pipeline=post_answer_pipeline,
             autofill_batch=autofill_batch,
             apply_queue_handoff=apply_queue_handoff,
             automation_handoff=automation_handoff,
@@ -10482,6 +10532,9 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Critical Input Questionnaire", html)
         self.assertIn("Critical Input Impact", html)
         self.assertIn("Critical Input Preflight", html)
+        self.assertIn("Final Answer Unblockers", html)
+        self.assertIn("Post-Answer Pipeline", html)
+        self.assertIn("waiting_for_answers", html)
         self.assertIn("Autofill Batch", html)
         self.assertIn("Apply Queue Handoff", html)
         self.assertIn("waiting_for_answers_before_open", html)
@@ -10537,6 +10590,8 @@ class JobApplyAgentTests(unittest.TestCase):
                 critical_input_questionnaire=critical_input_questionnaire,
                 critical_input_preflight=critical_input_preflight,
                 critical_input_impact=critical_input_impact,
+                critical_input_unblockers=critical_input_unblockers,
+                post_answer_pipeline=post_answer_pipeline,
                 autofill_batch=autofill_batch,
                 apply_queue_handoff=apply_queue_handoff,
                 automation_handoff=automation_handoff,
@@ -10556,6 +10611,8 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(result["summary"]["critical_input_direct_suggestion_count"], 1)
             self.assertEqual(result["summary"]["critical_questionnaire_question_count"], 1)
             self.assertEqual(result["summary"]["critical_impact_top_input_id"], "profile_zip_or_postal_code")
+            self.assertEqual(result["summary"]["final_unblocker_count"], 1)
+            self.assertEqual(result["summary"]["post_answer_pipeline_status"], "waiting_for_confirmed_answers")
             self.assertEqual(result["summary"]["autofill_batch_selected_count"], 1)
             self.assertEqual(result["summary"]["apply_queue_handoff_status"], "waiting_for_confirmed_answers")
             self.assertEqual(result["summary"]["apply_queue_handoff_open_after_answers_count"], 1)
@@ -10580,6 +10637,8 @@ class JobApplyAgentTests(unittest.TestCase):
                 self.assertIn("xl/worksheets/sheet39.xml", names)
                 self.assertIn("xl/worksheets/sheet40.xml", names)
                 self.assertIn("xl/worksheets/sheet42.xml", names)
+                self.assertIn("xl/worksheets/sheet43.xml", names)
+                self.assertIn("xl/worksheets/sheet44.xml", names)
                 critical_inputs = workbook.read("xl/worksheets/sheet2.xml").decode("utf-8")
                 self.assertIn("exact_prompt_answer", critical_inputs)
                 self.assertIn("user_answer", critical_inputs)
@@ -10640,6 +10699,12 @@ class JobApplyAgentTests(unittest.TestCase):
                 self.assertIn("minimum_compensation_usd", profile_snapshot)
                 self.assertIn("configured; redacted in export", profile_snapshot)
                 self.assertNotIn("example@example.com", profile_snapshot)
+                final_unblockers = workbook.read("xl/worksheets/sheet43.xml").decode("utf-8")
+                self.assertIn("profile_zip_or_postal_code", final_unblockers)
+                self.assertIn("Provide exact ZIP/postal code.", final_unblockers)
+                post_answer = workbook.read("xl/worksheets/sheet44.xml").decode("utf-8")
+                self.assertIn("waiting_for_confirmed_answers", post_answer)
+                self.assertIn("missing_unblocker_count", post_answer)
 
 
 if __name__ == "__main__":

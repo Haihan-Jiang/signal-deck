@@ -447,7 +447,8 @@ needed from the user, the impact-ranked questionnaire, critical-input impact
 and preflight results, the 100-position autofill batch, batch stop-action
 labels, user questions, blocking prompts, all observed prompts, per-position
 readiness, platform/role summary tables, fake learning and critical-input
-probe metrics, collection targets, collection tasks, manual gates, approval
+probe metrics, the final answer unblockers, the latest post-answer pipeline
+gate result, collection targets, collection tasks, manual gates, approval
 buckets, approval tasks, and approval-only manual gates. The HTML file presents
 the same information as a dashboard for quick review.
 
