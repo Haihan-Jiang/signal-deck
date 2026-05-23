@@ -26,6 +26,7 @@ from .core import (
     load_jobs,
     load_profile,
     load_submissions_jsonl,
+    notify_telegram_for_final_answer_blockers,
     notify_telegram_for_submissions,
     open_apply_urls_in_browser,
     record_closed_job,
@@ -65,6 +66,7 @@ from .core import (
     write_fake_position_rehearsal,
     write_final_answer_intake_template,
     write_final_answer_intake_update,
+    write_final_answer_blocker_report,
     build_synthetic_unblocker_compact_updates,
     write_goal_readiness_audit,
     write_critical_input_suggestion_packet,
@@ -202,6 +204,12 @@ DEFAULT_FINAL_ANSWER_INTAKE_REPORT_JSON = (
 )
 DEFAULT_FINAL_ANSWER_INTAKE_REPORT_MARKDOWN = (
     Path(__file__).with_name("outbox") / "final_answer_intake_update_latest.md"
+)
+DEFAULT_FINAL_ANSWER_BLOCKERS_JSON = (
+    Path(__file__).with_name("outbox") / "final_answer_blockers_latest.json"
+)
+DEFAULT_FINAL_ANSWER_BLOCKERS_MARKDOWN = (
+    Path(__file__).with_name("outbox") / "final_answer_blockers_latest.md"
 )
 DEFAULT_POST_ANSWER_SYNTHETIC_COMPACT_UPDATES_JSON = (
     Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_unblockers_updates_latest.json"
@@ -628,6 +636,14 @@ def main() -> int:
         "--final-answer-intake-report-json",
         default=str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_JSON),
     )
+    automation_handoff_parser.add_argument(
+        "--final-answer-blockers-json",
+        default=str(DEFAULT_FINAL_ANSWER_BLOCKERS_JSON),
+    )
+    automation_handoff_parser.add_argument(
+        "--final-answer-blockers-markdown",
+        default=str(DEFAULT_FINAL_ANSWER_BLOCKERS_MARKDOWN),
+    )
     automation_handoff_parser.add_argument("--autofill-batch-json", default=str(DEFAULT_AUTOFILL_BATCH_JSON))
     automation_handoff_parser.add_argument("--apply-queue-handoff-json", default=str(DEFAULT_APPLY_QUEUE_HANDOFF_JSON))
     automation_handoff_parser.add_argument(
@@ -1012,6 +1028,28 @@ def main() -> int:
         "--post-answer-markdown-output",
         default=str(DEFAULT_POST_ANSWER_PIPELINE_MARKDOWN),
     )
+
+    final_answer_blockers_parser = subparsers.add_parser(
+        "final-answer-blockers",
+        help="write or Telegram-send a compact reminder for the final truthful answers still blocking the 100-job queue",
+    )
+    final_answer_blockers_parser.add_argument(
+        "--template",
+        default=str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON),
+    )
+    final_answer_blockers_parser.add_argument(
+        "--goal-audit",
+        default=str(DEFAULT_GOAL_AUDIT_JSON),
+    )
+    final_answer_blockers_parser.add_argument("--json-output", default=str(DEFAULT_FINAL_ANSWER_BLOCKERS_JSON))
+    final_answer_blockers_parser.add_argument(
+        "--markdown-output",
+        default=str(DEFAULT_FINAL_ANSWER_BLOCKERS_MARKDOWN),
+    )
+    final_answer_blockers_parser.add_argument("--notify-telegram", action="store_true")
+    final_answer_blockers_parser.add_argument("--telegram-env", default=None)
+    final_answer_blockers_parser.add_argument("--telegram-dry-run", action="store_true")
+    final_answer_blockers_parser.add_argument("--limit", type=int, default=6)
 
     post_answer_pipeline_parser = subparsers.add_parser(
         "post-answer-pipeline",
@@ -2330,6 +2368,8 @@ def main() -> int:
                     "Final answer intake template": args.final_answer_intake_template_json,
                     "Final answer intake template HTML": args.final_answer_intake_template_html,
                     "Final answer intake report": args.final_answer_intake_report_json,
+                    "Final answer blockers": args.final_answer_blockers_json,
+                    "Final answer blockers Markdown": args.final_answer_blockers_markdown,
                     "Apply queue handoff": args.apply_queue_handoff_json,
                     "Apply queue autofill packet": args.apply_queue_autofill_packet_json,
                     "Position execution audit": args.position_execution_audit_json,
@@ -2716,6 +2756,37 @@ def main() -> int:
 
     if args.command == "final-answer-intake-server":
         return _run_final_answer_intake_server(args)
+
+    if args.command == "final-answer-blockers":
+        template_path = Path(args.template)
+        if not template_path.exists():
+            raise FileNotFoundError(f"final answer intake template not found: {args.template}")
+        report = write_final_answer_blocker_report(
+            json.loads(template_path.read_text(encoding="utf-8")),
+            _load_optional_json(args.goal_audit),
+            args.json_output,
+            args.markdown_output,
+        )
+        summary = report.get("summary") or {}
+        print(f"Wrote final answer blockers JSON to {args.json_output}")
+        print(f"Wrote final answer blockers Markdown to {args.markdown_output}")
+        print(f"Blockers: {summary.get('blocker_count', 0)}")
+        print(f"Missing answers: {summary.get('missing_answer_count', 0)}")
+        print(f"Unconfirmed high-risk: {summary.get('unconfirmed_high_risk_count', 0)}")
+        if args.notify_telegram:
+            result = notify_telegram_for_final_answer_blockers(
+                report,
+                env_path=args.telegram_env,
+                dry_run=args.telegram_dry_run,
+                max_items=args.limit,
+            )
+            if result.get("skipped"):
+                print(f"Telegram notification skipped: {result.get('reason')}")
+            else:
+                print(f"Sent Telegram notification to {result.get('chat_count', 0)} chat(s)")
+            if args.telegram_dry_run:
+                print(result["message"])
+        return 0
 
     if args.command == "post-answer-pipeline":
         return _run_post_answer_pipeline(args)
@@ -4413,6 +4484,13 @@ def _refresh_application_automation_reports() -> dict[str, object]:
         platform_question_playbook=_load_optional_json(str(DEFAULT_PLATFORM_QUESTION_PLAYBOOK_JSON)),
         position_execution_audit=_load_optional_json(str(DEFAULT_POSITION_EXECUTION_AUDIT_JSON)),
     )
+    if DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON.exists():
+        write_final_answer_blocker_report(
+            _load_optional_json(str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON)) or {},
+            goal,
+            DEFAULT_FINAL_ANSWER_BLOCKERS_JSON,
+            DEFAULT_FINAL_ANSWER_BLOCKERS_MARKDOWN,
+        )
     apply_queue = write_apply_queue_readiness(
         DEFAULT_AUTOFILL_BATCH_JSON,
         DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_JSON,
@@ -4519,6 +4597,8 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                 "Final answer intake template HTML": str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_HTML),
                 "Final answer intake report": str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_JSON),
                 "Final answer intake report Markdown": str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_MARKDOWN),
+                "Final answer blockers": str(DEFAULT_FINAL_ANSWER_BLOCKERS_JSON),
+                "Final answer blockers Markdown": str(DEFAULT_FINAL_ANSWER_BLOCKERS_MARKDOWN),
                 "Apply queue": str(DEFAULT_APPLY_QUEUE_JSON),
                 "Apply queue HTML": str(DEFAULT_APPLY_QUEUE_HTML),
                 "Apply queue live-check jobs": str(DEFAULT_APPLY_QUEUE_LIVE_CHECK_JOBS),
@@ -4592,6 +4672,8 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                     "Final answer intake template HTML": str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_HTML),
                     "Final answer intake report": str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_JSON),
                     "Final answer intake report Markdown": str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_MARKDOWN),
+                    "Final answer blockers": str(DEFAULT_FINAL_ANSWER_BLOCKERS_JSON),
+                    "Final answer blockers Markdown": str(DEFAULT_FINAL_ANSWER_BLOCKERS_MARKDOWN),
                 }
             ),
             synthetic_browser_execution=_load_optional_json(str(DEFAULT_SYNTHETIC_BROWSER_EXEC_JSON)),

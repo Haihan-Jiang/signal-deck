@@ -19848,6 +19848,223 @@ def notify_telegram_for_submissions(
     }
 
 
+def build_final_answer_blocker_report(
+    template: dict[str, Any],
+    goal_audit: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if not isinstance(template, dict):
+        raise ValueError("final answer intake template must be a JSON object")
+    answers = template.get("answers") if isinstance(template.get("answers"), dict) else {}
+    blocker_rows: list[dict[str, Any]] = []
+    ready_count = 0
+    missing_answer_count = 0
+    unconfirmed_high_risk_count = 0
+    for field in template.get("fields") or []:
+        if not isinstance(field, dict):
+            continue
+        alias = str(field.get("alias") or "").strip()
+        input_id = str(field.get("input_id") or "").strip()
+        raw_answer, _answer_key = _final_answer_intake_raw_answer(answers, input_id, alias)
+        answer_text, high_risk_confirmed = _final_answer_intake_answer_text(raw_answer)
+        high_risk = bool(field.get("high_risk"))
+        if not answer_text:
+            status = "missing_answer"
+            missing_answer_count += 1
+        elif high_risk and not high_risk_confirmed:
+            status = "high_risk_unconfirmed"
+            unconfirmed_high_risk_count += 1
+        else:
+            status = "ready"
+            ready_count += 1
+        if status != "ready":
+            blocker_rows.append(
+                {
+                    "alias": alias,
+                    "input_id": input_id,
+                    "status": status,
+                    "high_risk": high_risk,
+                    "required_count": int(field.get("required_count") or 0),
+                    "platforms": field.get("platforms") or [],
+                    "question": field.get("question"),
+                    "answer_format_hint": field.get("answer_format_hint"),
+                    "answer_specificity_hint": field.get("answer_specificity_hint"),
+                }
+            )
+    summary = {
+        "field_count": len(template.get("fields") or []),
+        "ready_count": ready_count,
+        "blocker_count": len(blocker_rows),
+        "missing_answer_count": missing_answer_count,
+        "unconfirmed_high_risk_count": unconfirmed_high_risk_count,
+        "high_risk_count": int(template.get("high_risk_count") or 0),
+        "goal_status": (goal_audit or {}).get("status", ""),
+        "goal_complete": bool((goal_audit or {}).get("goal_complete")),
+        "final_answer_waiting_count_after_drafts": int(
+            ((goal_audit or {}).get("blocker_summary") or {}).get(
+                "final_answer_waiting_count_after_drafts"
+            )
+            or 0
+        ),
+        "position_execution_remaining_user_answers": int(
+            ((goal_audit or {}).get("blocker_summary") or {}).get(
+                "position_execution_remaining_user_answers"
+            )
+            or 0
+        ),
+        "post_answer_synthetic_queue_rehearsal_ready": bool(
+            ((goal_audit or {}).get("blocker_summary") or {}).get(
+                "post_answer_synthetic_queue_rehearsal_ready"
+            )
+        ),
+    }
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "final_answer_blocker_report",
+        "ready_for_post_answer_pipeline": bool(summary["blocker_count"] == 0),
+        "summary": summary,
+        "blockers": blocker_rows,
+        "next_commands": [
+            "python3 -m job_apply_agent final-answer-intake-server --open-browser --finalize --confirm-high-risk",
+            "python3 -m job_apply_agent post-answer-pipeline --final-answer-intake-json job_apply_agent/outbox/final_answer_intake_template_latest.json --confirm-high-risk --apply --live-check --fail-on-not-ready",
+        ],
+        "policy": {
+            "stores_answer_text": False,
+            "sends_answer_text": False,
+            "writes_profile_or_memory": False,
+            "submits_real_applications": False,
+            "high_risk_requires_user_confirmation": True,
+        },
+    }
+
+
+def write_final_answer_blocker_report(
+    template: dict[str, Any],
+    goal_audit: dict[str, Any] | None,
+    json_output: str | Path,
+    markdown_output: str | Path,
+) -> dict[str, Any]:
+    report = build_final_answer_blocker_report(template, goal_audit=goal_audit)
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    for output_path in [json_path, markdown_path]:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(render_final_answer_blocker_report_markdown(report), encoding="utf-8")
+    return report
+
+
+def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    lines = [
+        "# Final Answer Blockers",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        f"Ready for post-answer pipeline: {str(bool(report.get('ready_for_post_answer_pipeline'))).lower()}",
+        f"Goal status: {summary.get('goal_status', '')}",
+        f"Blockers: {summary.get('blocker_count', 0)}",
+        f"Missing answers: {summary.get('missing_answer_count', 0)}",
+        f"Unconfirmed high-risk answers: {summary.get('unconfirmed_high_risk_count', 0)}",
+        f"Position answers remaining: {summary.get('position_execution_remaining_user_answers', 0)}",
+        "",
+        "## Blocking Questions",
+        "",
+    ]
+    blockers = report.get("blockers") or []
+    if blockers:
+        lines.extend(
+            _simple_markdown_table(
+                ["Alias", "Status", "High Risk", "Required", "Question", "Specificity Hint"],
+                [
+                    [
+                        row.get("alias"),
+                        row.get("status"),
+                        str(bool(row.get("high_risk"))).lower(),
+                        row.get("required_count"),
+                        row.get("question"),
+                        row.get("answer_specificity_hint"),
+                    ]
+                    for row in blockers
+                ],
+            )
+        )
+    else:
+        lines.append("- None")
+    lines.extend(["", "## Next Commands", ""])
+    for command in report.get("next_commands") or []:
+        lines.append(f"- `{command}`")
+    lines.extend(["", "## Policy", ""])
+    for key, value in sorted((report.get("policy") or {}).items()):
+        lines.append(f"- {key}: {str(bool(value)).lower()}")
+    return "\n".join(lines) + "\n"
+
+
+def build_telegram_final_answer_blocker_alert(
+    report: dict[str, Any],
+    generated_at: datetime | None = None,
+    max_items: int = 6,
+) -> str:
+    summary = report.get("summary") or {}
+    now = generated_at or datetime.now(timezone.utc)
+    blockers = report.get("blockers") or []
+    lines = [
+        "🧾 Job automation needs final answers",
+        f"🕔 Generated: {now.astimezone().strftime('%Y-%m-%d %H:%M %Z')}",
+        f"📌 Goal status: {summary.get('goal_status', '') or 'unknown'}",
+        "🤖 100-position queue waits for these truthful answers before real autofill.",
+        f"❓ Blockers: {summary.get('blocker_count', 0)}; high-risk fields: {summary.get('high_risk_count', 0)}",
+        "",
+    ]
+    if not blockers:
+        lines.append("No final-answer blockers remain. Run the post-answer pipeline.")
+    for index, row in enumerate(blockers[: max(max_items, 0)], start=1):
+        alias = row.get("alias") or row.get("input_id") or "unknown"
+        status = row.get("status") or "missing"
+        required = row.get("required_count", 0)
+        lines.append(f"{index}. {alias} [{status}]")
+        lines.append(f"   Required in {required} observed prompt(s)")
+        hint = row.get("answer_specificity_hint") or row.get("answer_format_hint")
+        if hint:
+            lines.append(f"   Hint: {hint}")
+    if len(blockers) > max_items:
+        lines.append(f"... {len(blockers) - max_items} more in job_apply_agent/outbox")
+    lines.append("")
+    lines.append("Open Codex final-answer intake. This alert does not include your answers.")
+    return _truncate_telegram_text("\n".join(lines))
+
+
+def notify_telegram_for_final_answer_blockers(
+    report: dict[str, Any],
+    env_path: str | Path | None = None,
+    dry_run: bool = False,
+    max_items: int = 6,
+) -> dict[str, Any]:
+    config = load_telegram_config(env_path)
+    text = build_telegram_final_answer_blocker_alert(report, max_items=max_items)
+    if not config["configured"]:
+        return {
+            "ok": False,
+            "skipped": True,
+            "reason": "telegram bot token or chat id is not configured",
+            "env_path": config["env_path"],
+            "message": text,
+        }
+    if dry_run:
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "dry run",
+            "chat_count": len(config["chat_ids"]),
+            "message": text,
+        }
+    send_telegram_message(config["bot_token"], config["chat_ids"], text)
+    return {
+        "ok": True,
+        "skipped": False,
+        "chat_count": len(config["chat_ids"]),
+        "message": text,
+    }
+
+
 def open_apply_urls_in_browser(
     submissions: list[dict[str, Any]],
     max_items: int = 5,

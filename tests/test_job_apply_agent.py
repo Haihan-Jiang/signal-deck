@@ -48,6 +48,7 @@ from job_apply_agent.core import (
     build_fake_learning_probe,
     build_fake_critical_input_probe,
     build_fake_position_rehearsal,
+    build_final_answer_blocker_report,
     build_final_answer_intake_template,
     build_final_answer_intake_update,
     build_goal_readiness_audit,
@@ -58,6 +59,7 @@ from job_apply_agent.core import (
     build_pre_submit_review,
     build_position_readiness_report,
     build_research_coverage_gate,
+    build_telegram_final_answer_blocker_alert,
     build_telegram_job_alert,
     build_synthetic_learning_state,
     build_synthetic_unblocker_compact_updates,
@@ -84,6 +86,7 @@ from job_apply_agent.core import (
     load_profile,
     load_submissions_jsonl,
     load_telegram_config,
+    notify_telegram_for_final_answer_blockers,
     notify_telegram_for_submissions,
     observe_candidate_pages,
     open_apply_urls_in_browser,
@@ -134,6 +137,7 @@ from job_apply_agent.core import (
     render_final_answer_intake_template_html,
     render_final_answer_intake_template_markdown,
     render_final_answer_intake_update_markdown,
+    render_final_answer_blocker_report_markdown,
     render_goal_readiness_audit_markdown,
     render_learning_approval_pack_markdown,
     render_learning_task_template_markdown,
@@ -189,6 +193,7 @@ from job_apply_agent.core import (
     write_fake_position_rehearsal,
     write_final_answer_intake_template,
     write_final_answer_intake_update,
+    write_final_answer_blocker_report,
     write_goal_readiness_audit,
     write_learning_approval_pack,
     write_learning_task_template,
@@ -6870,6 +6875,96 @@ class JobApplyAgentTests(unittest.TestCase):
                     "high_risk_user_confirmed"
                 ]
             )
+
+    def test_final_answer_blocker_report_and_telegram_alert_exclude_answer_text(self) -> None:
+        unblockers = {
+            "unblockers": [
+                {
+                    "input_id": "profile_zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "required_user_response": "Provide exact ZIP/postal code.",
+                    "high_risk": False,
+                    "required_count": 4,
+                    "platforms": ["Ashby"],
+                },
+                {
+                    "input_id": "answer_memory_citizenship_status_default_policy",
+                    "input_type": "high_risk_exact_confirmation",
+                    "question": "What citizenship answers should automation use?",
+                    "required_user_response": "Confirm the exact truthful legal answer.",
+                    "high_risk": True,
+                    "required_count": 7,
+                    "platforms": ["Greenhouse"],
+                },
+            ]
+        }
+        template = build_final_answer_intake_template(
+            unblockers,
+            existing_intake_payload={
+                "answers": {
+                    "zip_or_postal_code": "98004",
+                    "citizenship_status": {
+                        "answer": "Sensitive citizenship answer phrase 12345.",
+                        "high_risk_user_confirmed": False,
+                    },
+                }
+            },
+        )
+        goal_audit = {
+            "status": "needs_user_answers",
+            "goal_complete": False,
+            "blocker_summary": {
+                "final_answer_waiting_count_after_drafts": 1,
+                "position_execution_remaining_user_answers": 1,
+                "post_answer_synthetic_queue_rehearsal_ready": True,
+            },
+        }
+        report = build_final_answer_blocker_report(template, goal_audit=goal_audit)
+        markdown = render_final_answer_blocker_report_markdown(report)
+        alert = build_telegram_final_answer_blocker_alert(report)
+
+        self.assertFalse(report["ready_for_post_answer_pipeline"])
+        self.assertEqual(report["summary"]["blocker_count"], 1)
+        self.assertEqual(report["summary"]["missing_answer_count"], 0)
+        self.assertEqual(report["summary"]["unconfirmed_high_risk_count"], 1)
+        self.assertEqual(report["blockers"][0]["alias"], "citizenship_status")
+        self.assertIn("Final Answer Blockers", markdown)
+        self.assertIn("citizenship_status", markdown)
+        self.assertIn("Job automation needs final answers", alert)
+        self.assertIn("citizenship_status", alert)
+        self.assertNotIn("98004", json.dumps(report))
+        self.assertNotIn("98004", markdown)
+        self.assertNotIn("98004", alert)
+        self.assertNotIn("Sensitive citizenship answer phrase 12345", json.dumps(report))
+        self.assertNotIn("Sensitive citizenship answer phrase 12345", markdown)
+        self.assertNotIn("Sensitive citizenship answer phrase 12345", alert)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            json_output = root / "blockers.json"
+            markdown_output = root / "blockers.md"
+            env_path = root / "telegram.env"
+            env_path.write_text(
+                'export SIGNAL_DECK_TELEGRAM_BOT_TOKEN="token-123"\n'
+                'export SIGNAL_DECK_TELEGRAM_CHAT_ID="111"\n',
+                encoding="utf-8",
+            )
+            written = write_final_answer_blocker_report(
+                template,
+                goal_audit,
+                json_output,
+                markdown_output,
+            )
+            notify_result = notify_telegram_for_final_answer_blockers(
+                written,
+                env_path=env_path,
+                dry_run=True,
+            )
+            self.assertTrue(json_output.exists())
+            self.assertTrue(markdown_output.exists())
+            self.assertTrue(notify_result["ok"])
+            self.assertTrue(notify_result["skipped"])
+            self.assertNotIn("Sensitive citizenship answer phrase 12345", notify_result["message"])
 
     def test_final_answer_intake_server_post_answer_flags_are_guarded(self) -> None:
         base_args = {
