@@ -369,12 +369,12 @@ job_apply_agent/outbox/application_questions_latest.html
 
 The Excel workbook includes sheets for summary metrics, critical inputs still
 needed from the user, the impact-ranked questionnaire, critical-input impact
-and preflight results, the 100-position autofill batch, user questions,
-blocking prompts, all observed prompts, per-position readiness, platform/role
-summary tables, fake learning and critical-input probe metrics, collection
-targets, collection tasks, manual gates, approval buckets, approval tasks, and
-approval-only manual gates. The HTML file presents the same information as a
-dashboard for quick review.
+and preflight results, the 100-position autofill batch, batch stop-action
+labels, user questions, blocking prompts, all observed prompts, per-position
+readiness, platform/role summary tables, fake learning and critical-input
+probe metrics, collection targets, collection tasks, manual gates, approval
+buckets, approval tasks, and approval-only manual gates. The HTML file presents
+the same information as a dashboard for quick review.
 
 Turn that learning queue into a fill-in template:
 

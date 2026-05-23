@@ -3352,8 +3352,13 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["would_submit_count"], 0)
         self.assertFalse(report["real_platform_submission"])
         self.assertEqual(report["positions"][0]["manifest_status"], "autofill_ready_with_supervised_gates")
+        self.assertEqual(report["positions"][0]["stop_action_summaries"][0]["status"], "final_submit_confirmation")
+        self.assertEqual(report["selected_stop_actions"][0]["label"], "Submit application")
+        self.assertEqual(report["selected_stop_action_counts"]["final_submit_confirmation | Submit application"], 1)
         self.assertIn("Autofill Batch Plan", render_autofill_batch_plan_markdown(report))
+        self.assertIn("Selected Stop Actions", render_autofill_batch_plan_markdown(report))
         self.assertIn("Autofill Batch Plan", render_autofill_batch_plan_html(report))
+        self.assertIn("Selected Stop Actions", render_autofill_batch_plan_html(report))
 
         with tempfile.TemporaryDirectory() as temp_dir:
             json_output = Path(temp_dir) / "autofill_batch.json"
@@ -7636,6 +7641,22 @@ class JobApplyAgentTests(unittest.TestCase):
             "would_submit_count": 0,
             "real_platform_submission": False,
             "platform_counts": {"Greenhouse": 1},
+            "selected_stop_actions": [
+                {
+                    "scope": "selected",
+                    "position_index": 1,
+                    "platform": "Greenhouse",
+                    "company": "DoorDash",
+                    "title": "Software Engineer",
+                    "role_family": "Software Backend",
+                    "apply_url": "https://job-boards.greenhouse.io/doordash/jobs/1",
+                    "status": "final_submit_confirmation",
+                    "label": "Submit application",
+                    "category": "final_submit",
+                    "required": True,
+                    "handling": "stop before final submit and wait for explicit approval",
+                }
+            ],
             "positions": [
                 {
                     "index": 1,
@@ -7718,6 +7739,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Critical Input Impact", html)
         self.assertIn("Critical Input Preflight", html)
         self.assertIn("Autofill Batch", html)
+        self.assertIn("Submit application", html)
         self.assertIn("Impact blockers", html)
         self.assertIn("Fake Learning Probe", html)
         self.assertIn("Fake Critical Input Probe", html)
@@ -7795,7 +7817,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 self.assertIn("xl/worksheets/sheet28.xml", names)
                 self.assertIn("xl/worksheets/sheet29.xml", names)
                 self.assertIn("xl/worksheets/sheet30.xml", names)
-                self.assertIn("xl/worksheets/sheet33.xml", names)
+                self.assertIn("xl/worksheets/sheet34.xml", names)
                 critical_inputs = workbook.read("xl/worksheets/sheet2.xml").decode("utf-8")
                 self.assertIn("exact_prompt_answer", critical_inputs)
                 self.assertIn("user_answer", critical_inputs)
@@ -7820,25 +7842,27 @@ class JobApplyAgentTests(unittest.TestCase):
                 self.assertIn("selected_count", autofill_sheet)
                 autofill_positions = workbook.read("xl/worksheets/sheet14.xml").decode("utf-8")
                 self.assertIn("final_submit_confirmation", autofill_positions)
-                problem_buckets = workbook.read("xl/worksheets/sheet15.xml").decode("utf-8")
+                autofill_stops = workbook.read("xl/worksheets/sheet15.xml").decode("utf-8")
+                self.assertIn("Submit application", autofill_stops)
+                problem_buckets = workbook.read("xl/worksheets/sheet16.xml").decode("utf-8")
                 self.assertIn("needs_user_confirmation", problem_buckets)
-                user_questions = workbook.read("xl/worksheets/sheet16.xml").decode("utf-8")
+                user_questions = workbook.read("xl/worksheets/sheet17.xml").decode("utf-8")
                 self.assertIn("Have you worked at DoorDash?", user_questions)
-                platform_role_summary = workbook.read("xl/worksheets/sheet20.xml").decode("utf-8")
+                platform_role_summary = workbook.read("xl/worksheets/sheet21.xml").decode("utf-8")
                 self.assertIn("Software Backend", platform_role_summary)
-                platform_role_blockers = workbook.read("xl/worksheets/sheet21.xml").decode("utf-8")
+                platform_role_blockers = workbook.read("xl/worksheets/sheet22.xml").decode("utf-8")
                 self.assertIn("Have you worked at DoorDash?", platform_role_blockers)
-                platform_shortfalls = workbook.read("xl/worksheets/sheet23.xml").decode("utf-8")
+                platform_shortfalls = workbook.read("xl/worksheets/sheet24.xml").decode("utf-8")
                 self.assertIn("Greenhouse", platform_shortfalls)
-                closed_postings = workbook.read("xl/worksheets/sheet28.xml").decode("utf-8")
+                closed_postings = workbook.read("xl/worksheets/sheet29.xml").decode("utf-8")
                 self.assertIn("No longer accepting applications", closed_postings)
-                approval_buckets = workbook.read("xl/worksheets/sheet29.xml").decode("utf-8")
+                approval_buckets = workbook.read("xl/worksheets/sheet30.xml").decode("utf-8")
                 self.assertIn("exact_prompt_answer", approval_buckets)
-                approval_tasks = workbook.read("xl/worksheets/sheet30.xml").decode("utf-8")
+                approval_tasks = workbook.read("xl/worksheets/sheet31.xml").decode("utf-8")
                 self.assertIn("Have you worked at DoorDash?", approval_tasks)
-                goal_audit = workbook.read("xl/worksheets/sheet32.xml").decode("utf-8")
+                goal_audit = workbook.read("xl/worksheets/sheet33.xml").decode("utf-8")
                 self.assertIn("needs_user_answers", goal_audit)
-                critical_suggestions = workbook.read("xl/worksheets/sheet33.xml").decode("utf-8")
+                critical_suggestions = workbook.read("xl/worksheets/sheet34.xml").decode("utf-8")
                 self.assertIn("profile_zip_or_postal_code", critical_suggestions)
 
 

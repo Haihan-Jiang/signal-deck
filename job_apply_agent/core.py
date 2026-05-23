@@ -7307,6 +7307,7 @@ def build_autofill_batch_plan(
             closed_jobs=closed_jobs,
             include_values=include_values,
         )
+        stop_summaries = _autofill_stop_action_summaries(manifest)
         local_check = execute_browser_action_manifest_locally(
             manifest,
             snapshot,
@@ -7333,10 +7334,11 @@ def build_autofill_batch_plan(
             "stop_action_statuses": sorted(
                 {
                     str(action.get("status") or "")
-                    for action in manifest.get("stop_actions") or []
+                    for action in stop_summaries
                     if str(action.get("status") or "")
                 }
             ),
+            "stop_action_summaries": stop_summaries,
             "local_check_outcome": local_check.get("outcome"),
             "local_check_policy_stop": local_check.get("policy_stop"),
             "local_check_executed_action_count": int(local_check.get("executed_action_count") or 0),
@@ -7354,6 +7356,8 @@ def build_autofill_batch_plan(
             break
 
     runs = selected_runs
+    selected_stop_actions = _autofill_batch_stop_action_rows(runs, scope="selected")
+    blocked_stop_actions = _autofill_batch_stop_action_rows(blocked_candidates, scope="blocked_candidate")
     selector_miss_count = sum(int(run.get("local_check_selector_miss_count") or 0) for run in runs)
     blocked_missing_count = sum(
         1 for run in blocked_candidates if run.get("manifest_status") == "blocked_missing_inputs"
@@ -7390,6 +7394,10 @@ def build_autofill_batch_plan(
         "manifest_status_counts": _count_by(runs, "manifest_status"),
         "local_outcome_counts": _count_by(runs, "local_check_outcome"),
         "local_policy_stop_counts": _count_by(runs, "local_check_policy_stop"),
+        "selected_stop_action_counts": _autofill_stop_action_counts(selected_stop_actions),
+        "blocked_stop_action_counts": _autofill_stop_action_counts(blocked_stop_actions),
+        "selected_stop_actions": selected_stop_actions,
+        "blocked_candidate_stop_actions": blocked_stop_actions[:250],
         "first_urls": [
             {
                 "index": run.get("index"),
@@ -7418,6 +7426,60 @@ def build_autofill_batch_plan(
             "python3 -m job_apply_agent pre-submit-review --outbox-dir job_apply_agent/outbox",
         ],
     }
+
+
+def _autofill_stop_action_summaries(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for stop in manifest.get("stop_actions") or []:
+        if not isinstance(stop, dict):
+            continue
+        rows.append(
+            {
+                "status": stop.get("status"),
+                "label": stop.get("label"),
+                "category": stop.get("category"),
+                "required": bool(stop.get("required")),
+                "handling": stop.get("handling") or stop.get("next_action"),
+                "reason": stop.get("reason"),
+            }
+        )
+    return rows
+
+
+def _autofill_batch_stop_action_rows(runs: list[dict[str, Any]], scope: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for run in runs:
+        for stop in run.get("stop_action_summaries") or []:
+            if not isinstance(stop, dict):
+                continue
+            rows.append(
+                {
+                    "scope": scope,
+                    "position_index": run.get("index"),
+                    "platform": run.get("platform"),
+                    "company": run.get("company"),
+                    "title": run.get("title"),
+                    "role_family": run.get("role_family"),
+                    "apply_url": run.get("apply_url"),
+                    "status": stop.get("status"),
+                    "label": stop.get("label"),
+                    "category": stop.get("category"),
+                    "required": bool(stop.get("required")),
+                    "handling": stop.get("handling"),
+                    "reason": stop.get("reason"),
+                }
+            )
+    return rows
+
+
+def _autofill_stop_action_counts(stop_actions: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in stop_actions:
+        status = str(row.get("status") or "unknown")
+        label = str(row.get("label") or "").strip() or "unlabeled"
+        key = f"{status} | {label}"
+        counts[key] = counts.get(key, 0) + 1
+    return counts
 
 
 def write_autofill_batch_plan(
@@ -7474,6 +7536,14 @@ def render_autofill_batch_plan_markdown(report: dict[str, Any]) -> str:
     ]
     for status, count in sorted((report.get("manifest_status_counts") or {}).items()):
         lines.append(f"- {status}: {count}")
+    if report.get("selected_stop_action_counts"):
+        lines.extend(["", "## Selected Stop Actions", ""])
+        for label, count in sorted((report.get("selected_stop_action_counts") or {}).items()):
+            lines.append(f"- {label}: {count}")
+    if report.get("blocked_stop_action_counts"):
+        lines.extend(["", "## Blocked Candidate Stop Actions", ""])
+        for label, count in sorted((report.get("blocked_stop_action_counts") or {}).items()):
+            lines.append(f"- {label}: {count}")
     lines.extend(["", "## Platform Counts", ""])
     for platform, count in sorted((report.get("platform_counts") or {}).items()):
         lines.append(f"- {platform}: {count}")
@@ -7529,6 +7599,12 @@ def render_autofill_batch_plan_html(report: dict[str, Any]) -> str:
     platform_rows = [
         [platform, count] for platform, count in sorted((report.get("platform_counts") or {}).items())
     ]
+    selected_stop_rows = [
+        [label, count] for label, count in sorted((report.get("selected_stop_action_counts") or {}).items())
+    ]
+    blocked_stop_rows = [
+        [label, count] for label, count in sorted((report.get("blocked_stop_action_counts") or {}).items())
+    ]
     return "\n".join(
         [
             "<!doctype html>",
@@ -7559,6 +7635,12 @@ def render_autofill_batch_plan_html(report: dict[str, Any]) -> str:
             ),
             "<section><h2>Manifest Status Counts</h2>",
             _html_table(["Status", "Count"], status_rows),
+            "</section>",
+            "<section><h2>Selected Stop Actions</h2>",
+            _html_table(["Status and label", "Count"], selected_stop_rows),
+            "</section>",
+            "<section><h2>Blocked Candidate Stop Actions</h2>",
+            _html_table(["Status and label", "Count"], blocked_stop_rows),
             "</section>",
             "<section><h2>Platform Counts</h2>",
             _html_table(["Platform", "Count"], platform_rows),
@@ -9891,6 +9973,7 @@ def build_question_export(
     critical_impact_rows = _critical_input_impact_export_rows(critical_input_impact)
     autofill_batch_rows = _autofill_batch_export_rows(autofill_batch)
     autofill_batch_position_rows = _autofill_batch_position_export_rows(autofill_batch)
+    autofill_batch_stop_rows = _autofill_batch_stop_action_export_rows(autofill_batch)
     answer_memory_rows = _answer_memory_export_rows(answer_memory)
     closed_posting_rows = _closed_posting_export_rows(closed_jobs)
     platform_role_summary_rows = _platform_role_summary_export_rows(readiness)
@@ -10095,6 +10178,7 @@ def build_question_export(
         "critical_input_impact": critical_impact_rows,
         "autofill_batch": autofill_batch_rows,
         "autofill_batch_positions": autofill_batch_position_rows,
+        "autofill_batch_stop_actions": autofill_batch_stop_rows,
         "platform_role_summary": platform_role_summary_rows,
         "platform_role_blockers": platform_role_blocker_rows,
         "answer_memory": answer_memory_rows,
@@ -10519,6 +10603,33 @@ def render_question_export_html(export: dict[str, Any]) -> str:
         _html_table(
             ["Metric", "Value"],
             [[row.get("metric"), row.get("value")] for row in export.get("autofill_batch", [])],
+        ),
+        _html_table(
+            [
+                "Scope",
+                "Position",
+                "Platform",
+                "Company",
+                "Title",
+                "Status",
+                "Label",
+                "Category",
+                "Handling",
+            ],
+            [
+                [
+                    row.get("scope"),
+                    row.get("position_index"),
+                    row.get("platform"),
+                    row.get("company"),
+                    row.get("title"),
+                    row.get("status"),
+                    row.get("label"),
+                    row.get("category"),
+                    row.get("handling"),
+                ]
+                for row in export.get("autofill_batch_stop_actions", [])
+            ],
         ),
         _html_table(
             [
@@ -17803,6 +17914,59 @@ def _autofill_batch_position_export_rows(
     return rows
 
 
+def _autofill_batch_stop_action_export_rows(
+    autofill_batch: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if not autofill_batch:
+        return []
+    rows: list[dict[str, Any]] = []
+    for source_key in ["selected_stop_actions", "blocked_candidate_stop_actions"]:
+        for item in autofill_batch.get(source_key) or []:
+            if not isinstance(item, dict):
+                continue
+            rows.append(
+                {
+                    "scope": item.get("scope"),
+                    "position_index": item.get("position_index"),
+                    "platform": item.get("platform"),
+                    "company": item.get("company"),
+                    "title": item.get("title"),
+                    "role_family": item.get("role_family"),
+                    "status": item.get("status"),
+                    "label": item.get("label"),
+                    "category": item.get("category"),
+                    "required": item.get("required"),
+                    "handling": item.get("handling"),
+                    "apply_url": item.get("apply_url"),
+                }
+            )
+    if rows:
+        return rows
+    for run in autofill_batch.get("positions") or []:
+        if not isinstance(run, dict):
+            continue
+        for item in run.get("stop_action_summaries") or []:
+            if not isinstance(item, dict):
+                continue
+            rows.append(
+                {
+                    "scope": "selected",
+                    "position_index": run.get("index"),
+                    "platform": run.get("platform"),
+                    "company": run.get("company"),
+                    "title": run.get("title"),
+                    "role_family": run.get("role_family"),
+                    "status": item.get("status"),
+                    "label": item.get("label"),
+                    "category": item.get("category"),
+                    "required": item.get("required"),
+                    "handling": item.get("handling"),
+                    "apply_url": run.get("apply_url"),
+                }
+            )
+    return rows
+
+
 def _answer_memory_export_rows(answer_memory: dict[str, Any] | None) -> list[dict[str, Any]]:
     if not answer_memory:
         return []
@@ -18209,6 +18373,7 @@ def _write_question_export_xlsx(export: dict[str, Any], path: Path) -> None:
         ("Critical Input Preflight", _table_rows(export.get("critical_input_preflight", []))),
         ("Autofill Batch", _table_rows(export.get("autofill_batch", []))),
         ("Autofill Batch Positions", _table_rows(export.get("autofill_batch_positions", []))),
+        ("Autofill Batch Stops", _table_rows(export.get("autofill_batch_stop_actions", []))),
         ("Problem Buckets", _table_rows(export.get("problem_buckets", []))),
         ("User Questions", _table_rows(export.get("user_questions", []))),
         ("Blocking Prompts", _table_rows(export.get("blocker_rows", []))),
