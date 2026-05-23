@@ -1160,6 +1160,14 @@ class JobApplyAgentTests(unittest.TestCase):
             "do_not_store_sensitive",
         )
         self.assertEqual(
+            classify_application_prompt("Middle Eastern or North African").automation_action,
+            "do_not_store_sensitive",
+        )
+        self.assertEqual(
+            classify_application_prompt("Non-binary").automation_action,
+            "do_not_store_sensitive",
+        )
+        self.assertEqual(
             classify_application_prompt("Do you speak English fluently?").category,
             "language_ability",
         )
@@ -1170,6 +1178,16 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(
             classify_application_prompt("Are you willing to undergo a background check?").category,
             "background_or_export_control",
+        )
+        self.assertEqual(
+            classify_application_prompt(
+                "Are you open to significant travel (80-100%) to Toulouse, France?"
+            ).category,
+            "location_constraint",
+        )
+        self.assertEqual(
+            classify_application_prompt("Yes, I can legally work and live in the UAE").category,
+            "country_work_permit",
         )
         self.assertEqual(
             classify_application_prompt("When do you graduate?").category,
@@ -1184,6 +1202,12 @@ class JobApplyAgentTests(unittest.TestCase):
                 "A data scientist proposes a complex ensemble model. What is the most appropriate response?"
             ).category,
             "assessment_question",
+        )
+        self.assertEqual(
+            classify_application_prompt(
+                "A data scientist proposes a complex ensemble model. What is the most appropriate response?"
+            ).automation_action,
+            "generate_custom_material",
         )
         self.assertEqual(
             classify_application_prompt("Do you have blockchain/crypto experience?").category,
@@ -2084,6 +2108,7 @@ class JobApplyAgentTests(unittest.TestCase):
                             "Built In",
                             "Glassdoor",
                             "Grafana",
+                            "Linux environment",
                             "Outra",
                             "Outro",
                             "You’ve Got This?",
@@ -2125,6 +2150,7 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertNotIn("Built In", labels)
             self.assertNotIn("Glassdoor", labels)
             self.assertNotIn("Grafana", labels)
+            self.assertNotIn("Linux environment", labels)
             self.assertNotIn("Outra", labels)
             self.assertNotIn("Outro", labels)
             self.assertNotIn("You’ve Got This?", labels)
@@ -2540,6 +2566,38 @@ class JobApplyAgentTests(unittest.TestCase):
                     "observed_count": 2,
                     "required_count": 2,
                 },
+                {
+                    "group_key": "answer_memory:needs_user_confirmation:event",
+                    "question": "If you attended an on-campus or virtual event, which did you attend?",
+                    "recommended_storage": "answer_memory",
+                    "labels": ["If you attended an on-campus or virtual event, which did you attend?"],
+                    "platforms": ["Greenhouse"],
+                    "related_prompt_count": 1,
+                    "observed_count": 3,
+                    "required_count": 3,
+                },
+                {
+                    "group_key": "answer_memory:needs_user_confirmation:certification",
+                    "question": "Do you possess any of these certifications?",
+                    "recommended_storage": "answer_memory",
+                    "labels": ["Do you possess any of these certifications?"],
+                    "platforms": ["Ashby"],
+                    "related_prompt_count": 1,
+                    "observed_count": 2,
+                    "required_count": 2,
+                },
+                {
+                    "group_key": "answer_memory:needs_user_confirmation:perimeter",
+                    "question": "What can you tell us about our infrastructure by examining our system’s perimeter? (URLs, DNS records, etc)",
+                    "recommended_storage": "answer_memory",
+                    "labels": [
+                        "What can you tell us about our infrastructure by examining our system’s perimeter? (URLs, DNS records, etc)"
+                    ],
+                    "platforms": ["Lever"],
+                    "related_prompt_count": 1,
+                    "observed_count": 4,
+                    "required_count": 4,
+                },
             ]
         }
 
@@ -2600,6 +2658,18 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn(
             "Current resume facts support",
             tasks["answer_memory:needs_user_confirmation:oncall"]["suggested_answer"],
+        )
+        self.assertIn(
+            "no specific campus or virtual event",
+            tasks["answer_memory:needs_user_confirmation:event"]["suggested_answer"],
+        )
+        self.assertIn(
+            "No confirmed relevant certification",
+            tasks["answer_memory:needs_user_confirmation:certification"]["suggested_answer"],
+        )
+        self.assertIn(
+            "public, non-invasive signals",
+            tasks["answer_memory:needs_user_confirmation:perimeter"]["suggested_answer"],
         )
 
     def test_direct_answers_cover_localized_compensation_and_years_questions(self) -> None:

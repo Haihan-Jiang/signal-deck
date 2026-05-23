@@ -1020,6 +1020,10 @@ def classify_application_prompt(
             "black or african american",
             "female",
             "male",
+            "middle eastern or north african",
+            "native hawaiian",
+            "pacific islander",
+            "non binary",
             "asian",
             "indigenous peoples",
             "native american",
@@ -1046,6 +1050,9 @@ def classify_application_prompt(
         "inuk inuit",
         "latin american",
         "male",
+        "middle eastern or north african",
+        "native hawaiian or other pacific islander",
+        "non binary",
         "parda",
         "preta",
         "prefiro n o revelar",
@@ -1139,6 +1146,8 @@ def classify_application_prompt(
             "legally entitled to work in canada",
             "legally entitled to work in australia",
             "right to live and work in singapore",
+            "legally work and live in the uae",
+            "work and live in the uae",
             "basis of your working rights",
         ]
     ):
@@ -1343,6 +1352,7 @@ def classify_application_prompt(
             "postal code",
             "please select your state",
             "what state do you currently live in",
+            "where do you currently live",
             "do you live in",
         ]
     ) or raw_label in {"state", "country", "city", "contact number"}:
@@ -1425,6 +1435,7 @@ def classify_application_prompt(
         or "personal information retained" in text
         or "consenting to the use of ai" in text
         or "ai for evaluating my candidacy" in text
+        or "has my consent to contact me about future job opportunities" in text
     ):
         return ApplicationPromptClassification(
             "policy_acknowledgement",
@@ -1825,9 +1836,9 @@ def classify_application_prompt(
     ):
         return ApplicationPromptClassification(
             "assessment_question",
-            "human_review_required",
-            "assessment",
-            "job_assessment_question_requires_review",
+            "generate_custom_material",
+            "custom_material",
+            "assessment_draft_generation_requires_review",
         )
     if raw_label in {"name", "preferred name"} or any(
         term in text
@@ -1961,6 +1972,7 @@ def classify_application_prompt(
             "what makes you a great fit",
             "what are we looking for in you",
             "what are the performance metrics",
+            "what can you tell us about our infrastructure",
             "two most important things",
             "most important criteria",
             "what do you see as the two most important criteria",
@@ -2045,6 +2057,10 @@ def classify_application_prompt(
             "favorite ai agentic technology",
             "system s perimeter",
             "systems perimeter",
+            "internet entities and protocols",
+            "hostnames",
+            "whois",
+            "dns record types",
         ]
     ):
         return ApplicationPromptClassification(
@@ -2146,6 +2162,9 @@ def classify_application_prompt(
             "open to travel",
             "can you travel",
             "comfortable traveling",
+            "significant travel",
+            "80 100",
+            "toulouse france",
             "interview takes place in person",
             "final interview",
             "50 70 travel",
@@ -10389,8 +10408,143 @@ def _learning_task_answer_suggestion(
         resume_suggestion = _resume_based_learning_answer_suggestion(task, profile)
         if resume_suggestion:
             return {**base, **resume_suggestion}
+        standard_suggestion = _standard_learning_answer_suggestion(task, profile)
+        if standard_suggestion:
+            return {**base, **standard_suggestion}
 
     return base
+
+
+def _standard_learning_answer_suggestion(
+    task: dict[str, Any],
+    profile: CandidateProfile | None,
+) -> dict[str, Any] | None:
+    text = _normalize(" ".join([str(task.get("question") or ""), *_string_list(task.get("labels"))]))
+    if not text:
+        return None
+    if "attended an on campus or virtual event" in text:
+        return _suggested_learning_answer(
+            "N/A - no specific campus or virtual event attended unless an event is confirmed.",
+            "standard_no_event_attendance",
+            "No event attendance is stored in the current profile; verify before approving.",
+        )
+    if "active member or contributor" in text and "communities" in text:
+        return _suggested_learning_answer(
+            "No confirmed active community membership or contributor status in the current profile.",
+            "profile.resume_facts_absence",
+            "Negative draft based on missing profile evidence; verify before approving.",
+        )
+    if any(term in text for term in ["certification", "certifications", "itil", "vibration certification"]):
+        return _suggested_learning_answer(
+            "No confirmed relevant certification in the current resume facts.",
+            "profile.resume_facts_absence",
+            "Do not claim certifications unless explicitly confirmed.",
+        )
+    if any(term in text for term in ["net technology", "net framework", "dotnet"]):
+        return _suggested_learning_answer(
+            "No confirmed .NET experience in the current resume facts.",
+            "profile.resume_facts_absence",
+            "Negative draft based on missing resume evidence; verify before approving.",
+        )
+    if any(term in text for term in ["spi", "i2c", "uart", "usb", "firmware", "multithreaded firmware"]):
+        return _suggested_learning_answer(
+            "No confirmed low-level hardware protocol or firmware experience in the current resume facts.",
+            "profile.resume_facts_absence",
+            "Negative draft based on missing resume evidence; verify before approving.",
+        )
+    if "business or executive stakeholders" in text and "dashboards" in text:
+        return _suggested_learning_answer(
+            "No confirmed executive-stakeholder dashboard ownership in the current resume facts.",
+            "profile.resume_facts_absence",
+            "Negative draft based on missing resume evidence; verify before approving.",
+        )
+    if "content delivery" in text or "waf providers" in text:
+        return _suggested_learning_answer(
+            "No confirmed CDN/WAF provider ownership in the current resume facts.",
+            "profile.resume_facts_absence",
+            "Negative draft based on missing resume evidence; verify before approving.",
+        )
+    if "subdomains are most relevant" in text:
+        skills = (profile.resume_facts.get("strongest_skills") if profile else "") or ""
+        answer = (
+            "Site reliability, cloud infrastructure, Linux operations, API gateway reliability, "
+            "automation tooling, data infrastructure, incident response, and observability."
+        )
+        if skills:
+            answer = f"{answer} Current skill evidence: {_clean_sentence(skills)}."
+        return _suggested_learning_answer(
+            answer,
+            "profile.resume_facts",
+            "Drafted from resume skill areas; verify the employer's exact option wording.",
+        )
+    if "infrastructure by examining" in text or "system s perimeter" in text:
+        return _suggested_learning_answer(
+            (
+                "I would review only public, non-invasive signals such as DNS records, TLS/certificate "
+                "metadata, public endpoints, headers, and visible cloud/CDN patterns, then describe "
+                "reliability and security observations without scanning or making claims beyond public data."
+            ),
+            "standard_public_infrastructure_review",
+            "Methodology draft only; verify employer-specific facts before approving.",
+        )
+    if "internet entities and protocols" in text or "hostnames" in text or "whois" in text:
+        return _suggested_learning_answer(
+            (
+                "Current resume facts support production infrastructure, TLS/certificate automation, "
+                "API gateway operations, Linux reliability work, and incident response; no specific "
+                "WHOIS/SAN ownership is confirmed."
+            ),
+            "profile.resume_facts",
+            "Drafted from infrastructure resume facts; verify exact protocol experience before approving.",
+        )
+    if "security and isolation controls" in text and "ai agents" in text:
+        return _suggested_learning_answer(
+            (
+                "No confirmed production ownership of security/isolation controls for AI agents with "
+                "regulated-data access in the current resume facts."
+            ),
+            "profile.resume_facts_absence",
+            "Negative draft based on missing resume evidence; verify before approving.",
+        )
+    if "thermal management" in text or "power distribution" in text or "structural constraints" in text:
+        return _suggested_learning_answer(
+            "No confirmed thermal, power-distribution, or structural engineering experience in the current resume facts.",
+            "profile.resume_facts_absence",
+            "Negative draft based on missing resume evidence; verify before approving.",
+        )
+    if "actively looking for a job" in text or "just exploring future opportunities" in text:
+        start_date = (profile.question_answers.get("start_date") if profile else "") or ""
+        answer = "I am actively looking for the right role."
+        if start_date:
+            answer = f"{answer} {_clean_sentence(start_date)}."
+        return _suggested_learning_answer(
+            answer,
+            "profile.question_answers.start_date",
+            "Drafted from current job-search availability; verify before approving.",
+        )
+    if "when would you like to hear back" in text:
+        return _suggested_learning_answer(
+            "As soon as convenient for the recruiting team.",
+            "standard_recruiter_followup_preference",
+            "Low-specificity scheduling preference; verify before approving.",
+        )
+    if "which environment best matches" in text:
+        return _suggested_learning_answer(
+            "Production infrastructure and reliability-focused engineering environments.",
+            "profile.resume_facts",
+            "Drafted from the current SRE/production engineering profile; verify before approving.",
+        )
+    return None
+
+
+def _suggested_learning_answer(answer: str, source: str, note: str) -> dict[str, Any]:
+    return {
+        "suggested_answer": answer,
+        "suggested_answer_source": source,
+        "suggestion_confidence": "low" if "absence" in source or source.startswith("standard_no") else "medium",
+        "approval_risk": "medium",
+        "approval_note": note,
+    }
 
 
 def _resume_based_learning_answer_suggestion(
@@ -12705,6 +12859,7 @@ def _is_low_signal_application_prompt(normalized: str) -> bool:
         "ind gena",
         "indigenous peoples first nations native american or alaska native",
         "if you answered yes to the question above please provide more details",
+        "intermediate",
         "keyword filter",
         "l objectif",
         "linked in data",
@@ -12844,6 +12999,7 @@ def _is_low_signal_application_prompt(normalized: str) -> bool:
         "llm",
         "lxd",
         "linux desktop",
+        "linux environment",
         "machine learning",
         "mcse",
         "mongodb",
@@ -12853,6 +13009,7 @@ def _is_low_signal_application_prompt(normalized: str) -> bool:
         "mysql postgresql",
         "n a",
         "n o",
+        "nginx",
         "nist",
         "no",
         "none",
@@ -12878,6 +13035,7 @@ def _is_low_signal_application_prompt(normalized: str) -> bool:
         "qemu kvm",
         "ready to apply",
         "react",
+        "restaurant365 career page",
         "recruiter outreach",
         "red hat linux",
         "redux",
@@ -12904,6 +13062,7 @@ def _is_low_signal_application_prompt(normalized: str) -> bool:
         "what do you need",
         "tech stack",
         "they them",
+        "time series databases",
         "top secret sci ts sci",
         "ts sci with ci poly",
         "ts sci with full scope poly",
