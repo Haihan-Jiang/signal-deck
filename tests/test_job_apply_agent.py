@@ -1120,6 +1120,12 @@ class JobApplyAgentTests(unittest.TestCase):
             "location_constraint",
         )
         self.assertEqual(
+            classify_application_prompt(
+                "If you are in a commutable distance from our Cork office, are you able to work a hybrid schedule?"
+            ).category,
+            "location_constraint",
+        )
+        self.assertEqual(
             classify_application_prompt("Resume").category,
             "resume_upload",
         )
@@ -1150,6 +1156,12 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(
             classify_application_prompt(
                 "By selecting Yes, I am consenting to the use of AI for evaluating my candidacy."
+            ).category,
+            "policy_acknowledgement",
+        )
+        self.assertEqual(
+            classify_application_prompt(
+                "Please indicate your understanding and agreement with this approach by selecting Yes below."
             ).category,
             "policy_acknowledgement",
         )
@@ -2069,6 +2081,86 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(
             statuses["How would you evaluate your English Level?"],
             "covered_auto_answer",
+        )
+
+    def test_answer_gap_report_prefills_reviewed_location_and_domain_answers(self) -> None:
+        profile = CandidateProfile(
+            name="Alan Jiang",
+            email="alan@example.com",
+            phone="555-0100",
+            location="Bellevue, WA",
+            target_titles=["Site Reliability Engineer"],
+            target_locations=["United States", "San Francisco Bay Area"],
+            remote_ok=True,
+            keywords=["sre"],
+            blocklist=[],
+            min_score=1,
+            resume_facts={
+                "professional_summary": "SRE and production engineer",
+                "strongest_skills": "Python, Go, C++, Linux, SQL, Hive, and reliability automation",
+                "cloud_experience": "Resume shows Azure and AWS infrastructure experience.",
+            },
+            question_answers={
+                "onsite_hybrid": "Yes, I am open to onsite or hybrid work for the right role.",
+                "relocation": "Yes, I am open to relocation for the right role.",
+            },
+        )
+        research = {
+            "generated_at": "2026-05-23T00:00:00+00:00",
+            "positions_observed_total": 1,
+            "items": [
+                {
+                    "label": "Are there any circumstances preventing you from traveling internationally to a week-long team offsite?",
+                    "normalized_label": "circumstances preventing traveling internationally week long team offsite",
+                    "category": "location_constraint",
+                    "automation_action": "human_review_required",
+                    "sensitivity": "candidate_preference",
+                    "required": True,
+                    "platform": "Greenhouse",
+                    "source_file": "form.json",
+                },
+                {
+                    "label": "Are you currently based in the greater San Francisco / Bay Area?",
+                    "normalized_label": "currently based greater san francisco bay area",
+                    "category": "location_constraint",
+                    "automation_action": "human_review_required",
+                    "sensitivity": "candidate_preference",
+                    "required": True,
+                    "platform": "Greenhouse",
+                    "source_file": "form.json",
+                },
+                {
+                    "label": "Do you have hands on experience with Go or C++?",
+                    "normalized_label": "hands on experience go c",
+                    "category": "domain_experience",
+                    "automation_action": "human_review_required",
+                    "sensitivity": "resume_fact",
+                    "required": True,
+                    "platform": "Greenhouse",
+                    "source_file": "form.json",
+                },
+            ],
+        }
+
+        report = build_answer_gap_report(research, profile=profile, answer_memory=None)
+        statuses = {item["label"]: item for item in report["prompt_statuses"]}
+
+        self.assertEqual(report["blocking_prompt_count"], 0)
+        self.assertEqual(
+            statuses[
+                "Are there any circumstances preventing you from traveling internationally to a week-long team offsite?"
+            ]["coverage_status"],
+            "covered_requires_review",
+        )
+        self.assertEqual(
+            statuses[
+                "Are you currently based in the greater San Francisco / Bay Area?"
+            ]["coverage_status"],
+            "covered_requires_review",
+        )
+        self.assertEqual(
+            statuses["Do you have hands on experience with Go or C++?"]["answer_source"],
+            "profile.resume_facts",
         )
 
     def test_profile_identity_uses_specific_location_parts(self) -> None:
@@ -3680,6 +3772,121 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["positions"][0]["position_key"], "ashby:clean:1")
         self.assertEqual(report["stop_action_count"], 1)
         self.assertEqual(report["selected_stop_actions"][0]["status"], "final_submit_confirmation")
+
+    def test_autofill_batch_prefers_clean_group_when_limit_is_tight(self) -> None:
+        profile = CandidateProfile(
+            name="Alan Jiang",
+            email="alan@example.com",
+            phone="555-0100",
+            location="Bellevue, WA",
+            target_titles=["SRE"],
+            target_locations=["United States"],
+            remote_ok=True,
+            keywords=[],
+            blocklist=[],
+            min_score=1,
+            resume_facts={"professional_summary": "SRE"},
+            question_answers={},
+        )
+        positions = [
+            {
+                "position_key": "ashby:dirty:1",
+                "platform": "Ashby",
+                "company": "A Co",
+                "title": "Site Reliability Engineer",
+                "role_family": "SRE",
+                "apply_url": "https://jobs.ashbyhq.com/a/1",
+            },
+            {
+                "position_key": "lever:clean:1",
+                "platform": "Lever",
+                "company": "B Co",
+                "title": "Platform Engineer",
+                "role_family": "Platform",
+                "apply_url": "https://jobs.lever.co/b/1",
+            },
+        ]
+        research = {
+            "positions": positions,
+            "items": [
+                {
+                    "position_key": "ashby:dirty:1",
+                    "label": "Email",
+                    "category": "profile_identity",
+                    "automation_action": "auto_fill_from_profile",
+                    "required": True,
+                    "platform": "Ashby",
+                    "source_file": "test",
+                },
+                {
+                    "position_key": "ashby:dirty:1",
+                    "label": "Gender",
+                    "category": "protected_class_self_id",
+                    "automation_action": "do_not_store_sensitive",
+                    "required": True,
+                    "platform": "Ashby",
+                    "source_file": "test",
+                },
+                {
+                    "position_key": "ashby:dirty:1",
+                    "label": "Submit application",
+                    "category": "final_submit",
+                    "automation_action": "submit_gate",
+                    "required": True,
+                    "platform": "Ashby",
+                    "source_file": "test",
+                },
+                {
+                    "position_key": "lever:clean:1",
+                    "label": "Email",
+                    "category": "profile_identity",
+                    "automation_action": "auto_fill_from_profile",
+                    "required": True,
+                    "platform": "Lever",
+                    "source_file": "test",
+                },
+                {
+                    "position_key": "lever:clean:1",
+                    "label": "Submit application",
+                    "category": "final_submit",
+                    "automation_action": "submit_gate",
+                    "required": True,
+                    "platform": "Lever",
+                    "source_file": "test",
+                },
+            ],
+        }
+        readiness = {
+            "positions": [
+                {
+                    **positions[0],
+                    "readiness": "supervised_ready",
+                    "ready_for_autofill": True,
+                    "required_prompt_count": 3,
+                    "covered_prompt_count": 2,
+                },
+                {
+                    **positions[1],
+                    "readiness": "supervised_ready",
+                    "ready_for_autofill": True,
+                    "required_prompt_count": 2,
+                    "covered_prompt_count": 1,
+                },
+            ]
+        }
+
+        report = build_autofill_batch_plan(
+            research,
+            readiness,
+            profile=profile,
+            answer_memory={"version": 1, "answers": []},
+            closed_jobs={"version": 1, "jobs": []},
+            limit=1,
+        )
+
+        self.assertEqual(report["selected_count"], 1)
+        self.assertEqual(report["positions"][0]["position_key"], "lever:clean:1")
+        self.assertEqual(report["stop_action_count"], 1)
 
     def test_write_browser_action_manifest_outputs_reports(self) -> None:
         plan = {

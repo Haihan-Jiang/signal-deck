@@ -901,6 +901,24 @@ def load_submissions_jsonl(path: str | Path, limit: int | None = None) -> list[d
     return rows[-limit:]
 
 
+def _prompt_sensitive_term_matches(text: str, term: str) -> bool:
+    normalized_term = _normalize(term)
+    if not normalized_term:
+        return False
+    whole_word_terms = {
+        "asian",
+        "black",
+        "female",
+        "male",
+        "race",
+        "visual",
+        "white",
+    }
+    if normalized_term in whole_word_terms:
+        return _normalized_contains_term(text, normalized_term)
+    return normalized_term in text
+
+
 def classify_application_prompt(
     label: str,
     field: dict[str, Any] | None = None,
@@ -959,7 +977,7 @@ def classify_application_prompt(
             "final_submit_requires_confirmation",
         )
     if any(
-        term in text
+        _prompt_sensitive_term_matches(text, term)
         for term in [
             "gender",
             "hispanic",
@@ -1445,6 +1463,11 @@ def classify_application_prompt(
         or "use the information submitted" in text
         or "12 month contract" in text
         or "confirm your understanding" in text
+        or "indicate your understanding" in text
+        or "indicate understanding" in text
+        or "understanding and agreement" in text
+        or "agree with this approach" in text
+        or "ask that you do not use any ai tools" in text
         or "questions below are intended for u s based applicants only and are voluntary" in text
         or raw_label in {"acknowledge", "acknowledged"}
         or "personal information retained" in text
@@ -8026,14 +8049,21 @@ def _select_autofill_batch_positions(
         positions.sort(key=lambda position: _autofill_position_selection_key(position, items_by_position))
 
     selected: list[dict[str, Any]] = []
+    selected_by_group: dict[str, int] = {}
     group_keys = sorted(grouped)
     target = max(int(limit), 0)
     while len(selected) < target and any(grouped.get(key) for key in group_keys):
-        for key in group_keys:
-            if len(selected) >= target:
-                break
-            if grouped.get(key):
-                selected.append(grouped[key].pop(0))
+        active_group_keys = sorted(
+            [key for key in group_keys if grouped.get(key)],
+            key=lambda key: (
+                _autofill_position_selection_key(grouped[key][0], items_by_position),
+                selected_by_group.get(key, 0),
+                key,
+            ),
+        )
+        key = active_group_keys[0]
+        selected.append(grouped[key].pop(0))
+        selected_by_group[key] = selected_by_group.get(key, 0) + 1
     return {
         "selected_positions": selected,
         "excluded_closed_positions": excluded_closed,
@@ -14437,6 +14467,15 @@ def _answer_gap_status(
                 "answer_source": "profile.question_answers",
                 "next_action": "preselect profile answer and keep human review gate",
             }
+        if category in {"domain_experience", "skills_experience", "technical_experience"} and profile:
+            resume_prefill = _resume_fact_prefill_for_review(label, profile)
+            if resume_prefill:
+                return {
+                    "coverage_status": "covered_requires_review",
+                    "coverage_reason": "verified_resume_fact_prefill_still_requires_review",
+                    "answer_source": "profile.resume_facts",
+                    "next_action": "preselect resume-derived answer and keep human review gate",
+                }
         if optional_prompt:
             return {
                 "coverage_status": "optional_missing_answer",
@@ -14568,6 +14607,23 @@ def _profile_field_status(
             "next_action": "record the approved resume file path for upload automation",
         }
     return {"covered": True, "reason": "profile_category_assumed_available", "source": "profile"}
+
+
+def _resume_fact_prefill_for_review(label: str, profile: CandidateProfile) -> str:
+    normalized = _normalize(label)
+    if not normalized:
+        return ""
+    if _strict_missing_experience_subject(profile, normalized):
+        return ""
+    matched_terms = _resume_supported_terms_for_prompt(profile, normalized)
+    if not matched_terms:
+        return ""
+    evidence = _resume_evidence_for_terms(profile, matched_terms)
+    if not evidence:
+        return ""
+    return "Yes. Current resume facts support this through: {evidence}.".format(
+        evidence=_clean_sentence(evidence)
+    )
 
 
 def _profile_answer_contains_any(profile: CandidateProfile, keys: list[str]) -> bool:
@@ -15595,9 +15651,18 @@ def _resume_skill_term_groups() -> list[tuple[str, list[str], list[str]]]:
         ("API gateway operations", ["api gateway", "apisix"], ["api gateway", "apisix"]),
         (
             "SQL/data infrastructure",
-            ["sql", "database", "data warehouse", "data infrastructure"],
+            [
+                "sql",
+                "database",
+                "data warehouse",
+                "data infrastructure",
+                "clickhouse",
+                "olap",
+                "dbaas",
+            ],
             ["sql", "hive", "data infrastructure"],
         ),
+        ("Go/C++", ["go", "golang", "c++", "go or c"], ["go", "golang", "c++"]),
         ("Redis", ["redis"], ["redis"]),
         ("MongoDB", ["mongodb"], ["mongodb"]),
         (
@@ -18068,6 +18133,10 @@ def _direct_answer(profile: CandidateProfile, normalized_question: str) -> str |
     if "when would you like to hear back" in normalized_question:
         return "As soon as convenient for the recruiting team."
 
+    location_constraint = _direct_location_constraint_answer(profile, normalized_question)
+    if location_constraint:
+        return location_constraint
+
     if (
         ("year" in normalized_question or "years" in normalized_question)
         and ("experience" in normalized_question or "expertise" in normalized_question)
@@ -18177,6 +18246,114 @@ def _direct_answer(profile: CandidateProfile, normalized_question: str) -> str |
         if answer and any(_direct_answer_hint_matches(normalized_question, hint) for hint in hints):
             return answer
     return None
+
+
+def _direct_location_constraint_answer(
+    profile: CandidateProfile,
+    normalized_question: str,
+) -> str:
+    location = str(profile.location or "").strip() or "Bellevue, WA"
+    onsite = str(profile.question_answers.get("onsite_hybrid") or "").strip()
+    relocation = str(profile.question_answers.get("relocation") or "").strip()
+    onsite_or_relocation = onsite or relocation
+
+    if any(
+        term in normalized_question
+        for term in [
+            "open to travel",
+            "can you travel",
+            "comfortable traveling",
+            "travel internationally",
+            "week long team offsite",
+            "team offsite",
+        ]
+    ):
+        if "preventing" in normalized_question or "circumstances" in normalized_question:
+            return "No, I do not have confirmed circumstances preventing reasonable work travel."
+        return "Yes, I am open to reasonable work travel for the right role."
+
+    if any(term in normalized_question for term in ["west coast hours", "work west coast hours"]):
+        return "Yes, I can work West Coast hours."
+
+    if any(
+        term in normalized_question
+        for term in ["reside near seattle", "near seattle", "seattle wa", "commutable distance of seattle"]
+    ):
+        return f"Yes, I am currently based in {location}, near Seattle."
+
+    if any(
+        term in normalized_question
+        for term in [
+            "based in the us",
+            "based in the united states",
+            "currently based in the united states",
+            "currently based in the us",
+            "located in the united states",
+            "are you based in the us",
+            "are you based in the united states",
+        ]
+    ):
+        return f"Yes, I am currently based in {location}, United States."
+
+    current_location_prompt = any(
+        term in normalized_question
+        for term in [
+            "are you based in",
+            "are you currently based in",
+            "currently based in",
+            "are you located in",
+            "currently located in",
+            "permanently located in",
+            "permanently reside in",
+            "do you reside in",
+            "within commuting distance",
+            "living within",
+        ]
+    )
+    non_current_regions = [
+        "argentina",
+        "latam",
+        "europe",
+        "ireland",
+        "uk",
+        "united kingdom",
+        "toronto",
+        "canada",
+        "hyderabad",
+        "noida",
+        "bangalore",
+        "riyadh",
+        "taipei",
+        "toulouse",
+        "france",
+        "vancouver",
+        "san francisco bay area",
+        "greater san francisco",
+        "bay area",
+    ]
+    if current_location_prompt and any(region in normalized_question for region in non_current_regions):
+        return f"No, I am currently based in {location}."
+
+    if any(
+        term in normalized_question
+        for term in [
+            "able to work from san francisco",
+            "work from san francisco",
+            "work on site in san francisco",
+            "work on-site in san francisco",
+            "come onsite",
+            "in office",
+            "in-office",
+            "onsite",
+            "on-site",
+            "hybrid schedule",
+            "hybrid policy",
+            "hybrid work",
+        ]
+    ) and onsite_or_relocation:
+        return onsite_or_relocation
+
+    return ""
 
 
 def _direct_answer_hint_matches(normalized_question: str, hint: str) -> bool:
