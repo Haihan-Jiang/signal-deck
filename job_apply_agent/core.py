@@ -13329,6 +13329,7 @@ def build_goal_readiness_audit(
     post_answer_pipeline: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
     platform_question_playbook: dict[str, Any] | None = None,
+    position_execution_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     coverage_counts = gaps.get("coverage_counts") or {}
     critical_summary = (critical_input_status or {}).get("summary") or {}
@@ -13344,6 +13345,8 @@ def build_goal_readiness_audit(
     post_answer_synthetic = post_answer.get("synthetic_queue_rehearsal") or {}
     playbook = platform_question_playbook or {}
     playbook_summary = playbook.get("summary") or {}
+    position_audit = position_execution_audit or {}
+    position_audit_summary = position_audit.get("summary") or {}
     synthetic = coverage_gate.get("synthetic") or {}
     readiness_counts = readiness.get("readiness_counts") or {}
     closed_count = _closed_registry_count(closed_jobs)
@@ -13466,6 +13469,37 @@ def build_goal_readiness_audit(
         and playbook_question_item_count > 0
         and not playbook_real_platform_submission
     )
+    position_audit_target = int(position_audit_summary.get("target_count") or 0)
+    position_audit_count = int(position_audit_summary.get("position_count") or 0)
+    position_audit_ready_after_answers = int(
+        position_audit_summary.get("ready_after_answers_count") or 0
+    )
+    position_audit_synthetic_ready_now = int(
+        position_audit_summary.get("synthetic_ready_now_count") or 0
+    )
+    position_audit_local_submit_positions = int(
+        position_audit_summary.get("local_synthetic_submit_position_count") or 0
+    )
+    position_audit_selector_misses = int(position_audit_summary.get("selector_miss_count") or 0)
+    position_audit_unsafe_real_submit = int(
+        position_audit_summary.get("unsafe_real_submit_position_count") or 0
+    )
+    position_audit_final_submit_stops = int(
+        position_audit_summary.get("final_submit_stop_position_count") or 0
+    )
+    position_audit_remaining_answers = int(
+        position_audit_summary.get("remaining_user_answer_count") or 0
+    )
+    position_audit_ready = bool(
+        position_audit_target >= 100
+        and position_audit_count >= position_audit_target
+        and position_audit_ready_after_answers >= position_audit_target
+        and position_audit_synthetic_ready_now >= position_audit_target
+        and position_audit_local_submit_positions >= position_audit_target
+        and position_audit_selector_misses == 0
+        and position_audit_unsafe_real_submit == 0
+        and position_audit_final_submit_stops >= position_audit_target
+    )
     user_answers_ready = data_blocker_count == 0 and critical_waiting_count == 0
     supervised_autofill_ready = bool(
         research_ready
@@ -13579,6 +13613,22 @@ def build_goal_readiness_audit(
             },
         },
         {
+            "id": "position_execution_100_ledger",
+            "requirement": "Prove the selected 100-position queue row by row, including live status, selector misses, local synthetic submit, and final-submit stops.",
+            "status": "achieved" if position_audit_ready else "missing_or_incomplete_report",
+            "evidence": {
+                "position_count": position_audit_count,
+                "target_count": position_audit_target,
+                "ready_after_answers_count": position_audit_ready_after_answers,
+                "synthetic_ready_now_count": position_audit_synthetic_ready_now,
+                "local_synthetic_submit_positions": position_audit_local_submit_positions,
+                "selector_miss_count": position_audit_selector_misses,
+                "unsafe_real_submit_positions": position_audit_unsafe_real_submit,
+                "final_submit_stop_positions": position_audit_final_submit_stops,
+                "remaining_user_answers": position_audit_remaining_answers,
+            },
+        },
+        {
             "id": "real_user_answer_learning",
             "requirement": "Learn the remaining truthful user answers before real autofill can run unattended through fields.",
             "status": "achieved" if user_answers_ready else "needs_user_answers",
@@ -13672,6 +13722,17 @@ def build_goal_readiness_audit(
             "platform_playbook_closed_posting_count": playbook_closed_count,
             "platform_playbook_final_answer_missing_count": playbook_final_answer_missing_count,
             "platform_playbook_real_platform_submission": playbook_real_platform_submission,
+            "position_execution_ready": position_audit_ready,
+            "position_execution_status": position_audit.get("status", ""),
+            "position_execution_position_count": position_audit_count,
+            "position_execution_target_count": position_audit_target,
+            "position_execution_ready_after_answers_count": position_audit_ready_after_answers,
+            "position_execution_synthetic_ready_now_count": position_audit_synthetic_ready_now,
+            "position_execution_local_synthetic_submit_positions": position_audit_local_submit_positions,
+            "position_execution_selector_miss_count": position_audit_selector_misses,
+            "position_execution_unsafe_real_submit_positions": position_audit_unsafe_real_submit,
+            "position_execution_final_submit_stop_positions": position_audit_final_submit_stops,
+            "position_execution_remaining_user_answers": position_audit_remaining_answers,
         },
         "data_blockers": _goal_coverage_status_rows(coverage_counts, GOAL_DATA_BLOCKER_STATUSES),
         "optional_gaps": _goal_coverage_status_rows(coverage_counts, GOAL_OPTIONAL_GAP_STATUSES),
@@ -13713,6 +13774,7 @@ def write_goal_readiness_audit(
     post_answer_pipeline: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
     platform_question_playbook: dict[str, Any] | None = None,
+    position_execution_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     audit = build_goal_readiness_audit(
         coverage_gate,
@@ -13727,6 +13789,7 @@ def write_goal_readiness_audit(
         post_answer_pipeline=post_answer_pipeline,
         closed_jobs=closed_jobs,
         platform_question_playbook=platform_question_playbook,
+        position_execution_audit=position_execution_audit,
     )
     json_path = Path(json_output)
     markdown_path = Path(markdown_output)
@@ -13796,6 +13859,14 @@ def render_goal_readiness_audit_markdown(audit: dict[str, Any]) -> str:
             f"{summary.get('platform_playbook_selected_position_count', 0)}, "
             f"local submits {summary.get('platform_playbook_selected_local_synthetic_submit_count', 0)}, "
             f"selector misses {summary.get('platform_playbook_selector_miss_count', 0)}",
+            f"- position execution audit ready: {str(bool(summary.get('position_execution_ready'))).lower()}",
+            "- position execution audited: "
+            f"{summary.get('position_execution_position_count', 0)} / "
+            f"{summary.get('position_execution_target_count', 0)}, "
+            f"ready after answers {summary.get('position_execution_ready_after_answers_count', 0)}, "
+            f"synthetic ready {summary.get('position_execution_synthetic_ready_now_count', 0)}, "
+            f"selector misses {summary.get('position_execution_selector_miss_count', 0)}, "
+            f"final-submit stops {summary.get('position_execution_final_submit_stop_positions', 0)}",
             "",
             "## Data Blockers",
             "",

@@ -1728,6 +1728,10 @@ def main() -> int:
         "--platform-question-playbook-json",
         default=str(DEFAULT_PLATFORM_QUESTION_PLAYBOOK_JSON),
     )
+    goal_audit_parser.add_argument(
+        "--position-execution-audit-json",
+        default=str(DEFAULT_POSITION_EXECUTION_AUDIT_JSON),
+    )
     goal_audit_parser.add_argument("--json-output", default=str(DEFAULT_GOAL_AUDIT_JSON))
     goal_audit_parser.add_argument("--markdown-output", default=str(DEFAULT_GOAL_AUDIT_MARKDOWN))
 
@@ -1996,6 +2000,7 @@ def main() -> int:
             post_answer_pipeline=_load_optional_json(args.post_answer_pipeline_json),
             closed_jobs=_load_optional_json(args.closed_jobs_json),
             platform_question_playbook=_load_optional_json(args.platform_question_playbook_json),
+            position_execution_audit=_load_optional_json(args.position_execution_audit_json),
         )
         print(f"Wrote goal audit JSON to {args.json_output}")
         print(f"Wrote goal audit Markdown to {args.markdown_output}")
@@ -4356,6 +4361,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
         post_answer_pipeline=_load_optional_json(str(DEFAULT_POST_ANSWER_PIPELINE_JSON)),
         closed_jobs=_load_optional_json(str(DEFAULT_CLOSED_JOBS)),
         platform_question_playbook=_load_optional_json(str(DEFAULT_PLATFORM_QUESTION_PLAYBOOK_JSON)),
+        position_execution_audit=_load_optional_json(str(DEFAULT_POSITION_EXECUTION_AUDIT_JSON)),
     )
     apply_queue = write_apply_queue_readiness(
         DEFAULT_AUTOFILL_BATCH_JSON,
@@ -4413,6 +4419,23 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             DEFAULT_POSITION_EXECUTION_AUDIT_MARKDOWN,
             DEFAULT_POSITION_EXECUTION_AUDIT_HTML,
             target_count=100,
+        )
+        goal = write_goal_readiness_audit(
+            coverage,
+            gaps,
+            readiness,
+            DEFAULT_GOAL_AUDIT_JSON,
+            DEFAULT_GOAL_AUDIT_MARKDOWN,
+            critical_input_status=critical_status,
+            critical_input_updates_readiness=_load_optional_json(str(DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_JSON)),
+            fake_critical_input_probe=_load_optional_json(str(DEFAULT_FAKE_CRITICAL_INPUT_PROBE_JSON)),
+            fake_position_rehearsal=_load_optional_json(str(DEFAULT_FAKE_POSITION_REHEARSAL_JSON)),
+            autofill_batch_plan=_load_optional_json(str(DEFAULT_AUTOFILL_BATCH_JSON)),
+            synthetic_unblocker_proof=_load_optional_json(str(DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_JSON)),
+            post_answer_pipeline=_load_optional_json(str(DEFAULT_POST_ANSWER_PIPELINE_JSON)),
+            closed_jobs=_load_optional_json(str(DEFAULT_CLOSED_JOBS)),
+            platform_question_playbook=_load_optional_json(str(DEFAULT_PLATFORM_QUESTION_PLAYBOOK_JSON)),
+            position_execution_audit=position_execution_audit,
         )
     automation_handoff = write_automation_handoff_report(
         goal,

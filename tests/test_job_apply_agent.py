@@ -8076,6 +8076,20 @@ class JobApplyAgentTests(unittest.TestCase):
                 "real_platform_submission": False,
             }
         }
+        position_execution_audit = {
+            "status": "ready_after_confirmed_answers",
+            "summary": {
+                "target_count": 100,
+                "position_count": 100,
+                "ready_after_answers_count": 100,
+                "synthetic_ready_now_count": 100,
+                "local_synthetic_submit_position_count": 100,
+                "selector_miss_count": 0,
+                "unsafe_real_submit_position_count": 0,
+                "final_submit_stop_position_count": 100,
+                "remaining_user_answer_count": 2,
+            },
+        }
 
         audit = build_goal_readiness_audit(
             coverage_gate,
@@ -8090,6 +8104,7 @@ class JobApplyAgentTests(unittest.TestCase):
             post_answer_pipeline=post_answer_pipeline,
             closed_jobs=closed_jobs,
             platform_question_playbook=platform_question_playbook,
+            position_execution_audit=position_execution_audit,
         )
         markdown = render_goal_readiness_audit_markdown(audit)
 
@@ -8113,12 +8128,20 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertTrue(audit["blocker_summary"]["platform_playbook_ready"])
         self.assertEqual(audit["blocker_summary"]["platform_playbook_target_platforms_at_100"], "2/2")
         self.assertEqual(audit["blocker_summary"]["platform_playbook_selected_position_count"], 100)
+        self.assertTrue(audit["blocker_summary"]["position_execution_ready"])
+        self.assertEqual(audit["blocker_summary"]["position_execution_position_count"], 100)
+        self.assertEqual(audit["blocker_summary"]["position_execution_selector_miss_count"], 0)
         self.assertEqual(audit["requirements"][0]["status"], "achieved")
         fake_requirement = next(item for item in audit["requirements"] if item["id"] == "fake_candidate_100_position_rehearsal")
         self.assertTrue(fake_requirement["evidence"]["post_answer_synthetic_queue_rehearsal_ready"])
         playbook_requirement = next(item for item in audit["requirements"] if item["id"] == "platform_question_playbook")
         self.assertEqual(playbook_requirement["status"], "achieved")
         self.assertEqual(playbook_requirement["evidence"]["target_platforms_at_100"], "2/2")
+        position_requirement = next(
+            item for item in audit["requirements"] if item["id"] == "position_execution_100_ledger"
+        )
+        self.assertEqual(position_requirement["status"], "achieved")
+        self.assertEqual(position_requirement["evidence"]["position_count"], 100)
         self.assertEqual(audit["requirements"][4]["status"], "achieved")
         self.assertEqual(audit["top_data_blocking_prompts"][0]["coverage_status"], "needs_user_confirmation")
         self.assertIn("Goal Readiness Audit", markdown)
@@ -8130,6 +8153,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("post-answer synthetic selected: 100, selector misses 0, final-submit stops 100", markdown)
         self.assertIn("platform playbook ready: true", markdown)
         self.assertIn("platform playbook targets at 100: 2/2", markdown)
+        self.assertIn("position execution audit ready: true", markdown)
+        self.assertIn("position execution audited: 100 / 100", markdown)
         self.assertIn("Top Data-Blocking Prompts", markdown)
         self.assertIn("Have you worked with us before?", markdown)
 
@@ -8151,6 +8176,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 post_answer_pipeline=post_answer_pipeline,
                 closed_jobs=closed_jobs,
                 platform_question_playbook=platform_question_playbook,
+                position_execution_audit=position_execution_audit,
             )
 
             self.assertEqual(written["missing_requirement_count"], 1)
