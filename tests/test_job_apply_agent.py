@@ -1110,6 +1110,12 @@ class JobApplyAgentTests(unittest.TestCase):
             "role_specific_free_text",
         )
         self.assertEqual(
+            classify_application_prompt(
+                "What is your favorite AI Agentic technology for IaC authoring?"
+            ).automation_action,
+            "generate_custom_material",
+        )
+        self.assertEqual(
             classify_application_prompt("Are you a U.S. Citizen?").category,
             "citizenship_status",
         )
@@ -1132,6 +1138,38 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(
             classify_application_prompt("What age range do you fall within?").automation_action,
             "do_not_store_sensitive",
+        )
+        self.assertEqual(
+            classify_application_prompt("Gênero - Qual gênero você se identifica?").automation_action,
+            "do_not_store_sensitive",
+        )
+        self.assertEqual(
+            classify_application_prompt("Tenho uma deficiência auditiva").automation_action,
+            "do_not_store_sensitive",
+        )
+        self.assertEqual(
+            classify_application_prompt("Amarela").automation_action,
+            "do_not_store_sensitive",
+        )
+        self.assertEqual(
+            classify_application_prompt("Black or African American").automation_action,
+            "do_not_store_sensitive",
+        )
+        self.assertEqual(
+            classify_application_prompt("Female").automation_action,
+            "do_not_store_sensitive",
+        )
+        self.assertEqual(
+            classify_application_prompt("Do you speak English fluently?").category,
+            "language_ability",
+        )
+        self.assertEqual(
+            classify_application_prompt("💰 Combien tu vas gagner chez SFEIR ?").category,
+            "compensation",
+        )
+        self.assertEqual(
+            classify_application_prompt("Are you willing to undergo a background check?").category,
+            "background_or_export_control",
         )
         self.assertEqual(
             classify_application_prompt("When do you graduate?").category,
@@ -2033,6 +2071,24 @@ class JobApplyAgentTests(unittest.TestCase):
                             "Use name only",
                             "btn clear filters",
                             "Prêt·e à passer au niveau supérieur sans renoncer à tes valeurs ?",
+                            "Anytime/as needed",
+                            "N/A",
+                            "Não",
+                            "Sim",
+                            "Recruiter Outreach",
+                            "SHPE Conference",
+                            "Event, Media Interview, or other PR",
+                            "Advanced",
+                            "Beginner",
+                            "Expert",
+                            "Built In",
+                            "Glassdoor",
+                            "Grafana",
+                            "Outra",
+                            "Outro",
+                            "You’ve Got This?",
+                            "Human Factors, Safety & Sociotechnical Systems",
+                            "Indigenous Peoples, First Nations, Native American, or Alaska Native",
                             "Do you have blockchain/crypto experience?",
                         ],
                     }
@@ -2056,6 +2112,24 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertNotIn("Use name only", labels)
             self.assertNotIn("btn clear filters", labels)
             self.assertNotIn("Prêt·e à passer au niveau supérieur sans renoncer à tes valeurs ?", labels)
+            self.assertNotIn("Anytime/as needed", labels)
+            self.assertNotIn("N/A", labels)
+            self.assertNotIn("Não", labels)
+            self.assertNotIn("Sim", labels)
+            self.assertNotIn("Recruiter Outreach", labels)
+            self.assertNotIn("SHPE Conference", labels)
+            self.assertNotIn("Event, Media Interview, or other PR", labels)
+            self.assertNotIn("Advanced", labels)
+            self.assertNotIn("Beginner", labels)
+            self.assertNotIn("Expert", labels)
+            self.assertNotIn("Built In", labels)
+            self.assertNotIn("Glassdoor", labels)
+            self.assertNotIn("Grafana", labels)
+            self.assertNotIn("Outra", labels)
+            self.assertNotIn("Outro", labels)
+            self.assertNotIn("You’ve Got This?", labels)
+            self.assertNotIn("Human Factors, Safety & Sociotechnical Systems", labels)
+            self.assertNotIn("Indigenous Peoples, First Nations, Native American, or Alaska Native", labels)
             self.assertIn("Do you have blockchain/crypto experience?", labels)
 
     def test_question_export_xlsx_strips_invalid_xml_control_characters(self) -> None:
@@ -2454,6 +2528,18 @@ class JobApplyAgentTests(unittest.TestCase):
                     "observed_count": 2,
                     "required_count": 2,
                 },
+                {
+                    "group_key": "answer_memory:needs_user_confirmation:oncall",
+                    "question": "This role includes an on-call rotation. Is this something you are comfortable with?",
+                    "recommended_storage": "answer_memory",
+                    "labels": [
+                        "This role includes an on-call rotation. Is this something you are comfortable with?"
+                    ],
+                    "platforms": ["Lever"],
+                    "related_prompt_count": 1,
+                    "observed_count": 2,
+                    "required_count": 2,
+                },
             ]
         }
 
@@ -2511,6 +2597,60 @@ class JobApplyAgentTests(unittest.TestCase):
             "No confirmed FedRAMP or DoD IL5 experience",
             tasks["answer_memory:needs_user_confirmation:fedramp"]["suggested_answer"],
         )
+        self.assertIn(
+            "Current resume facts support",
+            tasks["answer_memory:needs_user_confirmation:oncall"]["suggested_answer"],
+        )
+
+    def test_direct_answers_cover_localized_compensation_and_years_questions(self) -> None:
+        gaps = build_answer_gap_report(
+            {
+                "generated_at": "2026-05-23T00:00:00+00:00",
+                "positions_observed_total": 1,
+                "items": [
+                    {
+                        "label": "💰 Combien tu vas gagner chez SFEIR ?",
+                        "normalized_label": "combien tu vas gagner chez sfeir",
+                        "category": "compensation",
+                        "automation_action": "auto_answer_from_memory",
+                        "sensitivity": "standard_preference",
+                        "required": True,
+                        "platform": "Lever",
+                        "source_file": "test.json",
+                    },
+                    {
+                        "label": "Have you previously designed, deployed and maintained cloud infrastructure? If so, for how many years?",
+                        "normalized_label": "have you previously designed deployed and maintained cloud infrastructure if so for how many years",
+                        "category": "experience_years",
+                        "automation_action": "auto_answer_from_memory",
+                        "sensitivity": "standard_preference",
+                        "required": True,
+                        "platform": "Lever",
+                        "source_file": "test.json",
+                    },
+                ],
+            },
+            profile=CandidateProfile(
+                name=self.profile.name,
+                email=self.profile.email,
+                phone=self.profile.phone,
+                location=self.profile.location,
+                target_titles=self.profile.target_titles,
+                target_locations=self.profile.target_locations,
+                remote_ok=self.profile.remote_ok,
+                keywords=self.profile.keywords,
+                blocklist=self.profile.blocklist,
+                min_score=self.profile.min_score,
+                resume_facts=self.profile.resume_facts,
+                question_answers={
+                    **self.profile.question_answers,
+                    "compensation": "$100,000+",
+                    "years_experience": "4 years or less",
+                },
+            ),
+        )
+
+        self.assertEqual(gaps["coverage_counts"], {"covered_auto_answer": 2})
 
     def test_learning_approval_pack_groups_tasks_by_review_action(self) -> None:
         learning_tasks = {
