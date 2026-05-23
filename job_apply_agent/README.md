@@ -382,6 +382,24 @@ resume facts, exact prompt answers, high-risk confirmations, and supervised-only
 items. Use it to decide what can be approved once versus what still needs an
 exact user answer before automation can safely fill real applications.
 
+After filling `user_answer` and setting `approval_decision` to `approved` for
+truthful reusable rows in `learning_approval_pack_latest.json`, apply the
+critical inputs with a dry run first:
+
+```bash
+python3 -m job_apply_agent apply-critical-inputs --dry-run
+```
+
+Then apply the approved values:
+
+```bash
+python3 -m job_apply_agent apply-critical-inputs
+```
+
+This writes approved profile fields, resume facts, and reusable answer memory.
+Supervised-only privacy acknowledgements stay as browser review steps, and
+final submit remains supervised.
+
 After editing the JSON so only approved non-sensitive tasks have
 `approved: true` and an `answer`, apply those approved answers locally:
 

@@ -3848,7 +3848,7 @@ def build_learning_task_template(
                 "approved": False,
                 "answer": "",
                 "notes": "",
-                "persist_allowed": storage in {"profile", "local_material", "answer_memory"},
+                "persist_allowed": storage in {"profile", "local_material", "resume_facts", "answer_memory"},
             }
         )
     return {
@@ -4011,8 +4011,9 @@ def build_learning_approval_pack(
         "tasks": task_rows,
         "manual_gates": manual_gate_rows,
         "instructions": (
-            "Review draft answers, set approved=true in the learning template only for "
-            "truthful non-sensitive answers, then run apply-learning. High-risk and "
+            "Review draft answers, fill critical_inputs.user_answer and set "
+            "approval_decision=approved only for truthful reusable answers, then run "
+            "apply-critical-inputs. High-risk rows require exact confirmation and "
             "manual-gate rows stay supervised."
         ),
     }
@@ -4134,12 +4135,102 @@ def apply_learning_task_answers(
     payload = _read_json_file(Path(tasks_path))
     if not isinstance(payload, dict):
         raise ValueError("learning tasks file must be a JSON object")
+    return _apply_learning_task_payload(payload, profile_path, memory_path, source=source, dry_run=dry_run)
+
+
+def apply_critical_input_answers(
+    approval_pack_path: str | Path,
+    profile_path: str | Path,
+    memory_path: str | Path,
+    source: str = "critical_inputs",
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    payload = _read_json_file(Path(approval_pack_path))
+    if not isinstance(payload, dict):
+        raise ValueError("approval pack must be a JSON object")
+    tasks_by_key = {
+        _critical_input_task_key(task): task
+        for task in payload.get("tasks", [])
+        if isinstance(task, dict)
+    }
+    approved_tasks: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for item in payload.get("critical_inputs", []):
+        if not isinstance(item, dict):
+            continue
+        group_key = str(item.get("group_key") or "")
+        question = str(item.get("question") or "")
+        if item.get("input_type") == "supervised_browser_review_only":
+            skipped.append(
+                {
+                    "group_key": group_key,
+                    "question": question,
+                    "reason": "supervised_browser_review_only",
+                }
+            )
+            continue
+        if not _approval_decision_is_approved(item.get("approval_decision")):
+            skipped.append(
+                {
+                    "group_key": group_key,
+                    "question": question,
+                    "reason": "approval_decision_not_approved",
+                }
+            )
+            continue
+        answer = str(item.get("user_answer") or "").strip()
+        if not answer:
+            skipped.append({"group_key": group_key, "question": question, "reason": "empty_user_answer"})
+            continue
+        task = dict(tasks_by_key.get(_critical_input_task_key(item)) or {})
+        if not task:
+            task = {
+                "group_key": group_key,
+                "question": question,
+                "recommended_storage": item.get("storage_after_approval"),
+                "labels": item.get("labels", []),
+            }
+        task["approved"] = True
+        task["answer"] = answer
+        task["recommended_storage"] = task.get("recommended_storage") or item.get("storage_after_approval")
+        if not task.get("labels"):
+            task["labels"] = item.get("labels", [])
+        approved_tasks.append(task)
+
+    result = _apply_learning_task_payload(
+        {"tasks": approved_tasks},
+        profile_path,
+        memory_path,
+        source=source,
+        dry_run=dry_run,
+    )
+    return {
+        "dry_run": dry_run,
+        "critical_input_count": len(
+            [item for item in payload.get("critical_inputs", []) if isinstance(item, dict)]
+        ),
+        "approved_input_count": len(approved_tasks),
+        "skipped_input_count": len(skipped),
+        "critical_input_skipped": skipped,
+        **result,
+    }
+
+
+def _apply_learning_task_payload(
+    payload: dict[str, Any],
+    profile_path: str | Path,
+    memory_path: str | Path,
+    source: str,
+    dry_run: bool,
+) -> dict[str, Any]:
     profile_payload = _read_json_file(Path(profile_path)) or {}
     if not isinstance(profile_payload, dict):
         raise ValueError("profile must be a JSON object")
     memory = load_answer_memory(memory_path)
     profile_answers = profile_payload.setdefault("question_answers", {})
+    resume_facts = profile_payload.setdefault("resume_facts", {})
     profile_updates: dict[str, str] = {}
+    resume_fact_updates: dict[str, str] = {}
     answer_updates: dict[str, str] = {}
     category_policy_updates: dict[str, str] = {}
     skipped: list[dict[str, Any]] = []
@@ -4155,8 +4246,12 @@ def apply_learning_task_answers(
         group_key = str(task.get("group_key") or "")
         if storage == "profile" and group_key == "profile:profile_links":
             profile_updates["linkedin_profile"] = answer
+        elif storage == "profile" and group_key == "profile:zip_or_postal_code":
+            profile_updates["zip_code"] = answer
         elif storage == "local_material" and group_key == "local_material:resume_file":
             profile_updates["resume_path"] = answer
+        elif storage == "resume_facts":
+            resume_fact_updates[_resume_fact_key_from_learning_task(group_key)] = answer
         elif storage == "answer_memory":
             labels = [str(label) for label in task.get("labels", []) if str(label).strip()]
             if not labels:
@@ -4176,8 +4271,9 @@ def apply_learning_task_answers(
             )
 
     if not dry_run:
-        if profile_updates:
+        if profile_updates or resume_fact_updates:
             profile_answers.update(profile_updates)
+            resume_facts.update(resume_fact_updates)
             Path(profile_path).write_text(
                 json.dumps(profile_payload, ensure_ascii=True, indent=2) + "\n",
                 encoding="utf-8",
@@ -4209,11 +4305,37 @@ def apply_learning_task_answers(
     return {
         "dry_run": dry_run,
         "profile_updates": sorted(profile_updates.keys()),
+        "resume_fact_updates": sorted(resume_fact_updates.keys()),
         "answer_memory_updates": sorted(answer_updates.keys()),
         "category_policy_updates": sorted(category_policy_updates.keys()),
         "skipped": skipped,
         "answer_memory_count": len(memory.get("answers", [])),
     }
+
+
+def _critical_input_task_key(item: dict[str, Any]) -> str:
+    return "{group_key}\n{question}".format(
+        group_key=str(item.get("group_key") or ""),
+        question=str(item.get("question") or ""),
+    )
+
+
+def _approval_decision_is_approved(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    normalized = _normalize(str(value or ""))
+    return normalized in {"approved", "approve", "yes", "y", "true", "ok", "confirmed", "confirm"}
+
+
+def _resume_fact_key_from_learning_task(group_key: str) -> str:
+    if group_key == "resume_facts:education_grading":
+        return "grading_system"
+    if group_key.startswith("resume_facts:"):
+        key = group_key.split(":", 1)[1].strip()
+    else:
+        key = group_key.strip()
+    key = re.sub(r"[^a-zA-Z0-9_]+", "_", key).strip("_").lower()
+    return key or "application_fact"
 
 
 def render_learning_task_template_markdown(template: dict[str, Any]) -> str:

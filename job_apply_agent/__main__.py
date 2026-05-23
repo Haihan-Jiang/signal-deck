@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .core import (
+    apply_critical_input_answers,
     apply_learning_task_answers,
     build_answer_gap_report,
     build_application_draft,
@@ -369,6 +370,19 @@ def main() -> int:
     apply_learning_parser.add_argument("--memory", default=str(DEFAULT_MEMORY))
     apply_learning_parser.add_argument("--source", default="learning_task_template")
     apply_learning_parser.add_argument("--dry-run", action="store_true")
+
+    apply_critical_inputs_parser = subparsers.add_parser(
+        "apply-critical-inputs",
+        help="apply approved critical input answers from the learning approval pack",
+    )
+    apply_critical_inputs_parser.add_argument("--approval-pack", default=str(DEFAULT_LEARNING_APPROVAL_PACK_JSON))
+    apply_critical_inputs_parser.add_argument(
+        "--profile",
+        default=str(DEFAULT_PERSONAL_PROFILE if DEFAULT_PERSONAL_PROFILE.exists() else DEFAULT_PROFILE),
+    )
+    apply_critical_inputs_parser.add_argument("--memory", default=str(DEFAULT_MEMORY))
+    apply_critical_inputs_parser.add_argument("--source", default="critical_inputs")
+    apply_critical_inputs_parser.add_argument("--dry-run", action="store_true")
 
     fake_learning_probe_parser = subparsers.add_parser(
         "fake-learning-probe",
@@ -986,6 +1000,24 @@ def main() -> int:
         print(f"Profile updates: {len(result.get('profile_updates', []))}")
         print(f"Answer memory updates: {len(result.get('answer_memory_updates', []))}")
         print(f"Skipped: {len(result.get('skipped', []))}")
+        return 0
+
+    if args.command == "apply-critical-inputs":
+        result = apply_critical_input_answers(
+            args.approval_pack,
+            args.profile,
+            args.memory,
+            source=args.source,
+            dry_run=args.dry_run,
+        )
+        print(f"Dry run: {str(bool(result.get('dry_run'))).lower()}")
+        print(f"Critical inputs: {result.get('critical_input_count', 0)}")
+        print(f"Approved inputs: {result.get('approved_input_count', 0)}")
+        print(f"Profile updates: {len(result.get('profile_updates', []))}")
+        print(f"Resume fact updates: {len(result.get('resume_fact_updates', []))}")
+        print(f"Answer memory updates: {len(result.get('answer_memory_updates', []))}")
+        print(f"Skipped inputs: {result.get('skipped_input_count', 0)}")
+        print(f"Skipped writes: {len(result.get('skipped', []))}")
         return 0
 
     if args.command == "fake-learning-probe":

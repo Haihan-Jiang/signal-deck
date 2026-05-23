@@ -11,6 +11,7 @@ from pathlib import Path
 from job_apply_agent.core import (
     CandidateProfile,
     DEFAULT_QUESTIONS,
+    apply_critical_input_answers,
     apply_learning_task_answers,
     build_answer_gap_report,
     build_apply_run_audit,
@@ -4061,6 +4062,118 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(len(result["skipped"]), 1)
             markdown = render_learning_task_template_markdown(build_learning_task_template(readiness))
             self.assertIn("Learning Task Template", markdown)
+
+    def test_apply_critical_input_answers_persists_user_approved_values(self) -> None:
+        learning_tasks = {
+            "tasks": [
+                {
+                    "group_key": "profile:zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "recommended_storage": "profile",
+                    "labels": ["Zip Code"],
+                    "platforms": ["Ashby"],
+                    "related_prompt_count": 1,
+                    "observed_count": 4,
+                    "required_count": 4,
+                    "persist_allowed": True,
+                },
+                {
+                    "group_key": "resume_facts:education_grading",
+                    "question": "What GPA or grading answer should automation use?",
+                    "recommended_storage": "resume_facts",
+                    "labels": ["What is your GPA?"],
+                    "platforms": ["Greenhouse"],
+                    "related_prompt_count": 1,
+                    "observed_count": 7,
+                    "required_count": 7,
+                    "persist_allowed": True,
+                },
+                {
+                    "group_key": "answer_memory:favorite_restaurant",
+                    "question": "What is your favorite restaurant?",
+                    "recommended_storage": "answer_memory",
+                    "labels": ["What is your favorite restaurant?"],
+                    "platforms": ["Greenhouse"],
+                    "related_prompt_count": 1,
+                    "observed_count": 1,
+                    "required_count": 1,
+                    "persist_allowed": True,
+                },
+                {
+                    "group_key": "answer_memory:citizenship_status:default_policy",
+                    "question": "What citizenship answers should automation use?",
+                    "recommended_storage": "answer_memory",
+                    "answer_scope": "category_default_policy",
+                    "suggested_answer_source": "requires_exact_user_confirmation",
+                    "approval_risk": "high",
+                    "labels": ["Are you a U.S. citizen?"],
+                    "platforms": ["Greenhouse"],
+                    "related_prompt_count": 1,
+                    "observed_count": 2,
+                    "required_count": 2,
+                    "persist_allowed": True,
+                },
+                {
+                    "group_key": "supervised_confirmation:policy_acknowledgement",
+                    "question": "May automation mark applicant privacy acknowledgement?",
+                    "recommended_storage": "supervised_confirmation",
+                    "answer_scope": "supervised_only",
+                    "labels": ["Privacy policy"],
+                    "platforms": ["Lever"],
+                    "related_prompt_count": 1,
+                    "observed_count": 1,
+                    "required_count": 1,
+                    "persist_allowed": False,
+                },
+            ],
+        }
+        pack = build_learning_approval_pack(learning_tasks, {})
+        answers = {
+            "profile:zip_or_postal_code": "94105",
+            "resume_facts:education_grading": "Not applicable",
+            "answer_memory:favorite_restaurant": "Din Tai Fung",
+            "answer_memory:citizenship_status:default_policy": "No restricted-country citizenship.",
+            "supervised_confirmation:policy_acknowledgement": "Approved after browser review",
+        }
+        for item in pack["critical_inputs"]:
+            item["user_answer"] = answers[item["group_key"]]
+            item["approval_decision"] = "approved"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pack_path = Path(temp_dir) / "approval_pack.json"
+            profile_path = Path(temp_dir) / "profile.json"
+            memory_path = Path(temp_dir) / "memory.json"
+            pack_path.write_text(json.dumps(pack), encoding="utf-8")
+            profile_path.write_text(
+                json.dumps(
+                    {
+                        "candidate": {"name": "Test User"},
+                        "preferences": {},
+                        "resume_facts": {},
+                        "question_answers": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            dry_run = apply_critical_input_answers(pack_path, profile_path, memory_path, dry_run=True)
+            self.assertEqual(dry_run["approved_input_count"], 4)
+            self.assertEqual(dry_run["profile_updates"], ["zip_code"])
+            self.assertEqual(dry_run["resume_fact_updates"], ["grading_system"])
+            self.assertEqual(dry_run["skipped_input_count"], 1)
+            self.assertFalse(memory_path.exists())
+
+            result = apply_critical_input_answers(pack_path, profile_path, memory_path)
+
+            self.assertEqual(result["approved_input_count"], 4)
+            self.assertEqual(result["skipped_input_count"], 1)
+            profile = json.loads(profile_path.read_text(encoding="utf-8"))
+            self.assertEqual(profile["question_answers"]["zip_code"], "94105")
+            self.assertEqual(profile["resume_facts"]["grading_system"], "Not applicable")
+            memory = load_answer_memory(memory_path)
+            self.assertIsNotNone(find_learned_answer(memory, "What is your favorite restaurant?"))
+            self.assertIsNotNone(find_learned_answer(memory, "Are you a U.S. citizen?"))
+            self.assertEqual(result["category_policy_updates"], ["citizenship_status"])
 
     def test_fake_learning_probe_clears_learning_blockers_without_real_submission(self) -> None:
         research = {
