@@ -21,6 +21,7 @@ from job_apply_agent.core import (
     build_collection_plan_from_coverage_gate,
     build_critical_input_answer_template,
     build_critical_input_answer_update,
+    build_critical_input_questionnaire,
     build_critical_input_suggestion_packet,
     build_critical_input_status_report,
     build_question_export,
@@ -81,6 +82,8 @@ from job_apply_agent.core import (
     render_critical_input_answer_template_markdown,
     render_critical_input_answer_workflow_markdown,
     render_critical_input_answer_update_markdown,
+    render_critical_input_questionnaire_html,
+    render_critical_input_questionnaire_markdown,
     render_critical_input_suggestions_markdown,
     render_critical_input_status_markdown,
     render_browser_dom_execution_plan_markdown,
@@ -117,6 +120,7 @@ from job_apply_agent.core import (
     write_critical_input_answer_template,
     write_critical_input_answer_workflow,
     write_critical_input_answer_update,
+    write_critical_input_questionnaire,
     write_critical_input_suggestion_packet,
     write_critical_input_status_report,
     write_question_export,
@@ -4703,6 +4707,94 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(json_output.exists())
             self.assertTrue(markdown_output.exists())
             self.assertIn("98004", markdown_output.read_text())
+
+    def test_critical_input_questionnaire_outputs_compact_json_html_form(self) -> None:
+        learning_tasks = {
+            "tasks": [
+                {
+                    "group_key": "profile:zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "recommended_storage": "profile",
+                    "labels": ["Zip Code"],
+                    "platforms": ["Ashby"],
+                    "required_count": 4,
+                    "persist_allowed": True,
+                },
+                {
+                    "group_key": "answer_memory:citizenship_status:default_policy",
+                    "question": "What citizenship answers should automation use?",
+                    "recommended_storage": "answer_memory",
+                    "answer_scope": "category_default_policy",
+                    "suggested_answer_source": "requires_exact_user_confirmation",
+                    "approval_risk": "high",
+                    "labels": ["Are you a U.S. citizen?"],
+                    "platforms": ["Greenhouse"],
+                    "required_count": 2,
+                    "persist_allowed": True,
+                },
+                {
+                    "group_key": "supervised_confirmation:policy_acknowledgement",
+                    "question": "May automation mark applicant privacy acknowledgement?",
+                    "recommended_storage": "supervised_confirmation",
+                    "answer_scope": "supervised_only",
+                    "labels": ["Privacy policy"],
+                    "platforms": ["Lever"],
+                    "required_count": 1,
+                    "persist_allowed": False,
+                },
+            ],
+        }
+        profile = CandidateProfile.from_mapping(
+            {
+                "candidate": {"name": "Test User", "location": "Bellevue, WA"},
+                "question_answers": {"zip_code": "98004"},
+                "preferences": {},
+                "resume_facts": {},
+            }
+        )
+        pack = build_learning_approval_pack(learning_tasks, {})
+        template = build_critical_input_answer_template(pack)
+        suggestions = build_critical_input_suggestion_packet(template, profile=profile)
+
+        questionnaire = build_critical_input_questionnaire(template, suggestions)
+        html = render_critical_input_questionnaire_html(questionnaire)
+        markdown = render_critical_input_questionnaire_markdown(questionnaire)
+
+        self.assertEqual(questionnaire["question_count"], 3)
+        self.assertEqual(questionnaire["answerable_question_count"], 2)
+        self.assertEqual(questionnaire["high_risk_question_count"], 1)
+        self.assertEqual(questionnaire["supervised_only_count"], 1)
+        self.assertEqual(questionnaire["compact_updates_template"]["profile_zip_or_postal_code"], "")
+        self.assertFalse(
+            questionnaire["compact_updates_template"][
+                "answer_memory_citizenship_status_default_policy"
+            ]["high_risk_user_confirmed"]
+        )
+        self.assertNotIn(
+            "supervised_confirmation_policy_acknowledgement",
+            questionnaire["compact_updates_template"],
+        )
+        self.assertIn("Critical Input Questionnaire", html)
+        self.assertIn("buildCriticalInputUpdates", html)
+        self.assertIn("critical-inputs-workflow", html)
+        self.assertIn("High risk", html)
+        self.assertIn("Compact Updates Template", markdown)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            json_output = Path(temp_dir) / "questionnaire.json"
+            markdown_output = Path(temp_dir) / "questionnaire.md"
+            html_output = Path(temp_dir) / "questionnaire.html"
+            written = write_critical_input_questionnaire(
+                template,
+                json_output,
+                markdown_output,
+                html_output,
+                suggestions_payload=suggestions,
+            )
+            self.assertEqual(written["answerable_question_count"], 2)
+            self.assertTrue(json_output.exists())
+            self.assertTrue(markdown_output.exists())
+            self.assertTrue(html_output.exists())
 
     def test_fake_critical_input_probe_is_dry_run_only(self) -> None:
         learning_tasks = {

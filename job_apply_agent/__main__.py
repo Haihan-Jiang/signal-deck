@@ -39,6 +39,7 @@ from .core import (
     write_collection_plan,
     write_critical_input_answer_workflow,
     write_critical_input_answer_update,
+    write_critical_input_questionnaire,
     write_form_fill_plan,
     write_fake_learning_probe,
     write_fake_critical_input_probe,
@@ -99,6 +100,9 @@ DEFAULT_CRITICAL_INPUT_UPDATE_JSON = Path(__file__).with_name("outbox") / "criti
 DEFAULT_CRITICAL_INPUT_UPDATE_MARKDOWN = Path(__file__).with_name("outbox") / "critical_input_update_latest.md"
 DEFAULT_CRITICAL_INPUT_WORKFLOW_JSON = Path(__file__).with_name("outbox") / "critical_input_workflow_latest.json"
 DEFAULT_CRITICAL_INPUT_WORKFLOW_MARKDOWN = Path(__file__).with_name("outbox") / "critical_input_workflow_latest.md"
+DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_JSON = Path(__file__).with_name("outbox") / "critical_input_questionnaire_latest.json"
+DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_MARKDOWN = Path(__file__).with_name("outbox") / "critical_input_questionnaire_latest.md"
+DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_HTML = Path(__file__).with_name("outbox") / "critical_input_questionnaire_latest.html"
 DEFAULT_FAKE_CRITICAL_INPUT_PROBE_JSON = Path(__file__).with_name("outbox") / "fake_critical_input_probe_latest.json"
 DEFAULT_FAKE_CRITICAL_INPUT_PROBE_MARKDOWN = Path(__file__).with_name("outbox") / "fake_critical_input_probe_latest.md"
 DEFAULT_FAKE_CRITICAL_INPUT_ANSWERS_JSON = Path(__file__).with_name("outbox") / "fake_critical_input_answers_latest.json"
@@ -417,6 +421,22 @@ def main() -> int:
         "--markdown-output",
         default=str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_MARKDOWN),
     )
+
+    critical_inputs_questionnaire_parser = subparsers.add_parser(
+        "critical-inputs-questionnaire",
+        help="write a compact confirmed-answer questionnaire for the remaining critical inputs",
+    )
+    critical_inputs_questionnaire_parser.add_argument("--answers", default=str(DEFAULT_CRITICAL_INPUT_ANSWERS_JSON))
+    critical_inputs_questionnaire_parser.add_argument(
+        "--suggestions",
+        default=str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON),
+    )
+    critical_inputs_questionnaire_parser.add_argument("--json-output", default=str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_JSON))
+    critical_inputs_questionnaire_parser.add_argument(
+        "--markdown-output",
+        default=str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_MARKDOWN),
+    )
+    critical_inputs_questionnaire_parser.add_argument("--html-output", default=str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_HTML))
 
     critical_inputs_update_parser = subparsers.add_parser(
         "critical-inputs-update",
@@ -750,6 +770,14 @@ def main() -> int:
         "--critical-input-suggestions-json",
         default=str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON),
     )
+    export_questions_parser.add_argument(
+        "--critical-input-questionnaire-json",
+        default=str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_JSON),
+    )
+    export_questions_parser.add_argument(
+        "--critical-input-questionnaire-html",
+        default=str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_HTML),
+    )
     export_questions_parser.add_argument("--xlsx-output", default=str(DEFAULT_QUESTION_EXPORT_XLSX))
     export_questions_parser.add_argument("--html-output", default=str(DEFAULT_QUESTION_EXPORT_HTML))
 
@@ -912,6 +940,8 @@ def main() -> int:
                     "Closed postings": args.closed_jobs_json,
                     "Goal readiness audit": args.goal_audit_json,
                     "Critical input suggestions": args.critical_input_suggestions_json,
+                    "Critical input questionnaire": args.critical_input_questionnaire_json,
+                    "Critical input questionnaire HTML": args.critical_input_questionnaire_html,
                 }
             ),
             synthetic_browser_execution=_load_optional_json(args.synthetic_browser_exec_json),
@@ -1255,6 +1285,26 @@ def main() -> int:
         print(f"Direct suggestions: {packet.get('direct_suggestion_count', 0)}")
         print(f"Exact user answers required: {packet.get('exact_user_answer_required_count', 0)}")
         print(f"Supervised only: {packet.get('supervised_only_count', 0)}")
+        return 0
+
+    if args.command == "critical-inputs-questionnaire":
+        answers_path = Path(args.answers)
+        if not answers_path.exists():
+            raise FileNotFoundError(f"critical input answers not found: {args.answers}")
+        questionnaire = write_critical_input_questionnaire(
+            json.loads(answers_path.read_text(encoding="utf-8")),
+            args.json_output,
+            args.markdown_output,
+            args.html_output,
+            suggestions_payload=_load_optional_json(args.suggestions),
+        )
+        print(f"Wrote critical input questionnaire JSON to {args.json_output}")
+        print(f"Wrote critical input questionnaire Markdown to {args.markdown_output}")
+        print(f"Wrote critical input questionnaire HTML to {args.html_output}")
+        print(f"Questions: {questionnaire.get('question_count', 0)}")
+        print(f"Answerable: {questionnaire.get('answerable_question_count', 0)}")
+        print(f"High risk: {questionnaire.get('high_risk_question_count', 0)}")
+        print(f"Supervised only: {questionnaire.get('supervised_only_count', 0)}")
         return 0
 
     if args.command == "critical-inputs-update":
@@ -1816,6 +1866,13 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             profile=profile,
             answer_memory=answer_memory,
         )
+        write_critical_input_questionnaire(
+            answers_payload,
+            DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_JSON,
+            DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_MARKDOWN,
+            DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_HTML,
+            suggestions_payload=_load_optional_json(str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON)),
+        )
     goal = write_goal_readiness_audit(
         coverage,
         gaps,
@@ -1853,6 +1910,8 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                     "Closed postings": str(DEFAULT_CLOSED_JOBS),
                     "Goal readiness audit": str(DEFAULT_GOAL_AUDIT_JSON),
                     "Critical input suggestions": str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON),
+                    "Critical input questionnaire": str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_JSON),
+                    "Critical input questionnaire HTML": str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_HTML),
                 }
             ),
             synthetic_browser_execution=_load_optional_json(str(DEFAULT_SYNTHETIC_BROWSER_EXEC_JSON)),
@@ -1872,6 +1931,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             "coverage-gate",
             "critical-inputs-status",
             "critical-input-suggestions",
+            "critical-inputs-questionnaire",
             "goal-audit",
             "export-questions",
         ],

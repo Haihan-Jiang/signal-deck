@@ -4368,6 +4368,313 @@ def write_critical_input_suggestion_packet(
     return packet
 
 
+def build_critical_input_questionnaire(
+    answers_payload: dict[str, Any],
+    suggestions_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if not isinstance(answers_payload, dict):
+        raise ValueError("critical input answers must be a JSON object")
+    suggestions_by_id = {
+        str(row.get("input_id") or ""): row
+        for row in (suggestions_payload or {}).get("critical_inputs", [])
+        if isinstance(row, dict)
+    }
+    questions: list[dict[str, Any]] = []
+    compact_updates_template: dict[str, Any] = {}
+    for item in _critical_input_answer_rows(answers_payload):
+        input_id = str(item.get("input_id") or "")
+        suggestion = suggestions_by_id.get(input_id, {})
+        high_risk = _critical_input_is_high_risk(item)
+        supervised_only = item.get("input_type") == "supervised_browser_review_only"
+        question = {
+            "input_id": input_id,
+            "input_type": item.get("input_type"),
+            "question": item.get("question"),
+            "required_user_response": item.get("required_user_response"),
+            "approval_risk": item.get("approval_risk"),
+            "high_risk": high_risk,
+            "supervised_only": supervised_only,
+            "suggested_answer": suggestion.get("suggested_answer", ""),
+            "suggestion_source": suggestion.get("suggestion_source", ""),
+            "suggestion_confidence": suggestion.get("suggestion_confidence", ""),
+            "suggestion_note": suggestion.get("suggestion_note", ""),
+            "review_context": suggestion.get("review_context", ""),
+            "required_count": item.get("required_count", 0),
+            "platforms": item.get("platforms") or [],
+            "labels": item.get("labels") or [],
+            "workflow_update_shape": "supervised_only"
+            if supervised_only
+            else "high_risk_object"
+            if high_risk
+            else "string_value",
+        }
+        questions.append(question)
+        if supervised_only:
+            continue
+        if high_risk:
+            compact_updates_template[input_id] = {
+                "user_answer": "",
+                "approval_decision": "approved",
+                "high_risk_user_confirmed": False,
+            }
+        else:
+            compact_updates_template[input_id] = ""
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "critical_input_questionnaire",
+        "question_count": len(questions),
+        "answerable_question_count": sum(1 for row in questions if not row.get("supervised_only")),
+        "high_risk_question_count": sum(1 for row in questions if row.get("high_risk")),
+        "supervised_only_count": sum(1 for row in questions if row.get("supervised_only")),
+        "instructions": (
+            "Fill the HTML form or compact_updates_template with truthful answers. "
+            "Run critical-inputs-workflow with the resulting JSON. High-risk rows require "
+            "high_risk_user_confirmed=true before approval."
+        ),
+        "questions": questions,
+        "compact_updates_template": compact_updates_template,
+        "workflow_command": (
+            "python3 -m job_apply_agent critical-inputs-workflow "
+            "--updates <confirmed_answers.json> --approve --apply"
+        ),
+        "policy": {
+            "writes_profile_or_memory": False,
+            "submits_real_applications": False,
+            "high_risk_requires_user_confirmation": True,
+            "supervised_browser_review_only_skipped": True,
+        },
+    }
+
+
+def write_critical_input_questionnaire(
+    answers_payload: dict[str, Any],
+    json_output: str | Path,
+    markdown_output: str | Path,
+    html_output: str | Path,
+    suggestions_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    questionnaire = build_critical_input_questionnaire(
+        answers_payload,
+        suggestions_payload=suggestions_payload,
+    )
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    html_path = Path(html_output)
+    for path in [json_path, markdown_path, html_path]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(questionnaire, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(render_critical_input_questionnaire_markdown(questionnaire), encoding="utf-8")
+    html_path.write_text(render_critical_input_questionnaire_html(questionnaire), encoding="utf-8")
+    return questionnaire
+
+
+def render_critical_input_questionnaire_markdown(questionnaire: dict[str, Any]) -> str:
+    lines = [
+        "# Critical Input Questionnaire",
+        "",
+        f"Generated: {questionnaire.get('generated_at')}",
+        f"Questions: {questionnaire.get('question_count', 0)}",
+        f"Answerable: {questionnaire.get('answerable_question_count', 0)}",
+        f"High risk: {questionnaire.get('high_risk_question_count', 0)}",
+        f"Supervised only: {questionnaire.get('supervised_only_count', 0)}",
+        "",
+        str(questionnaire.get("instructions") or ""),
+        "",
+        "Workflow command:",
+        "",
+        f"`{questionnaire.get('workflow_command')}`",
+        "",
+        "## Questions",
+        "",
+    ]
+    rows = questionnaire.get("questions") or []
+    if not rows:
+        lines.append("- None")
+    for row in rows:
+        flags = []
+        if row.get("high_risk"):
+            flags.append("high-risk")
+        if row.get("supervised_only"):
+            flags.append("supervised-only")
+        flag_text = f" ({', '.join(flags)})" if flags else ""
+        lines.append(f"- {row.get('input_id')}{flag_text}: {row.get('question')}")
+        if row.get("suggested_answer"):
+            lines.append(f"  suggested: {row.get('suggested_answer')}")
+        if row.get("required_user_response"):
+            lines.append(f"  needed: {row.get('required_user_response')}")
+        if row.get("review_context"):
+            lines.append(f"  context: {row.get('review_context')}")
+    lines.extend(
+        [
+            "",
+            "## Compact Updates Template",
+            "",
+            "```json",
+            json.dumps(questionnaire.get("compact_updates_template", {}), ensure_ascii=True, indent=2),
+            "```",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def render_critical_input_questionnaire_html(questionnaire: dict[str, Any]) -> str:
+    cards = []
+    for row in questionnaire.get("questions") or []:
+        input_id = str(row.get("input_id") or "")
+        high_risk = bool(row.get("high_risk"))
+        supervised_only = bool(row.get("supervised_only"))
+        flags = []
+        if high_risk:
+            flags.append("High risk")
+        if supervised_only:
+            flags.append("Supervised only")
+        if not flags:
+            flags.append("Reusable answer")
+        flag_html = "".join(f"<span>{_html_escape(flag)}</span>" for flag in flags)
+        textarea = (
+            "<p class=\"muted\">Handle this in supervised browser review; it is not included in compact JSON.</p>"
+            if supervised_only
+            else (
+                "<textarea rows=\"3\" placeholder=\"{placeholder}\" aria-label=\"answer for {input_id}\"></textarea>"
+            ).format(
+                placeholder=_html_escape(row.get("suggested_answer") or "Type the exact truthful answer to reuse"),
+                input_id=_html_escape(input_id),
+            )
+        )
+        high_risk_checkbox = (
+            "<label class=\"confirm\"><input type=\"checkbox\"> I explicitly confirm this high-risk answer is truthful and reusable.</label>"
+            if high_risk and not supervised_only
+            else ""
+        )
+        cards.append(
+            """
+<section class="question" data-question-id="{input_id}" data-high-risk="{high_risk}" data-supervised="{supervised}">
+  <div class="meta">{flags}</div>
+  <h2>{question}</h2>
+  <p><strong>Input ID:</strong> <code>{input_id}</code></p>
+  <p><strong>Needed:</strong> {needed}</p>
+  <p><strong>Suggested answer:</strong> {suggested}</p>
+  <p><strong>Context:</strong> {context}</p>
+  {textarea}
+  {high_risk_checkbox}
+</section>
+""".format(
+                input_id=_html_escape(input_id),
+                high_risk=str(high_risk).lower(),
+                supervised=str(supervised_only).lower(),
+                flags=flag_html,
+                question=_html_escape(row.get("question")),
+                needed=_html_escape(row.get("required_user_response")),
+                suggested=_html_escape(row.get("suggested_answer") or ""),
+                context=_html_escape(row.get("review_context") or row.get("suggestion_note") or ""),
+                textarea=textarea,
+                high_risk_checkbox=high_risk_checkbox,
+            )
+        )
+    template_json = json.dumps(
+        questionnaire.get("compact_updates_template", {}),
+        ensure_ascii=True,
+        indent=2,
+    ).replace("</", "<\\/")
+    script = """
+<script>
+function buildCriticalInputUpdates() {
+  const updates = {};
+  document.querySelectorAll("[data-question-id]").forEach((card) => {
+    if (card.dataset.supervised === "true") return;
+    const textarea = card.querySelector("textarea");
+    const value = textarea ? textarea.value.trim() : "";
+    if (!value) return;
+    const id = card.dataset.questionId;
+    if (card.dataset.highRisk === "true") {
+      const checkbox = card.querySelector("input[type=checkbox]");
+      updates[id] = {
+        user_answer: value,
+        approval_decision: "approved",
+        high_risk_user_confirmed: Boolean(checkbox && checkbox.checked)
+      };
+    } else {
+      updates[id] = value;
+    }
+  });
+  document.getElementById("compact-json").value = JSON.stringify(updates, null, 2);
+}
+function loadTemplate() {
+  document.getElementById("compact-json").value = document.getElementById("template-json").textContent.trim();
+}
+document.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("build-json").addEventListener("click", buildCriticalInputUpdates);
+  document.getElementById("load-template").addEventListener("click", loadTemplate);
+});
+</script>
+""".strip()
+    return "\n".join(
+        [
+            "<!doctype html>",
+            '<html lang="en">',
+            "<head>",
+            '<meta charset="utf-8">',
+            '<meta name="viewport" content="width=device-width, initial-scale=1">',
+            "<title>Critical Input Questionnaire</title>",
+            "<style>",
+            _critical_input_questionnaire_css(),
+            "</style>",
+            "</head>",
+            "<body>",
+            "<main>",
+            "<h1>Critical Input Questionnaire</h1>",
+            f"<p class=\"muted\">Generated: {_html_escape(questionnaire.get('generated_at'))}</p>",
+            _html_kpis(
+                [
+                    ("Questions", questionnaire.get("question_count", 0)),
+                    ("Answerable", questionnaire.get("answerable_question_count", 0)),
+                    ("High risk", questionnaire.get("high_risk_question_count", 0)),
+                    ("Supervised only", questionnaire.get("supervised_only_count", 0)),
+                ]
+            ),
+            "<section>",
+            "<h2>Command</h2>",
+            f"<pre>{_html_escape(questionnaire.get('workflow_command'))}</pre>",
+            "</section>",
+            "".join(cards),
+            "<section>",
+            "<h2>Compact JSON</h2>",
+            '<div class="actions"><button id="build-json" type="button">Build compact JSON</button><button id="load-template" type="button">Load blank template</button></div>',
+            '<textarea id="compact-json" rows="16" spellcheck="false"></textarea>',
+            f'<script type="application/json" id="template-json">{template_json}</script>',
+            "</section>",
+            "</main>",
+            script,
+            "</body>",
+            "</html>",
+        ]
+    )
+
+
+def _critical_input_questionnaire_css() -> str:
+    return """
+body { margin: 0; font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1f2933; background: #f6f8fa; }
+main { max-width: 980px; margin: 0 auto; padding: 32px 24px 56px; }
+h1 { margin: 0 0 4px; font-size: 28px; }
+h2 { margin: 0 0 10px; font-size: 18px; }
+section { background: white; border: 1px solid #d9e2ec; border-radius: 8px; padding: 16px; margin-top: 18px; }
+.muted { color: #5f6c7b; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 20px 0; }
+.kpi { background: white; border: 1px solid #d9e2ec; padding: 14px; border-radius: 8px; }
+.kpi .label { color: #52606d; font-size: 12px; text-transform: uppercase; letter-spacing: .02em; }
+.kpi .value { display: block; font-size: 24px; font-weight: 700; margin-top: 4px; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.meta span { background: #e6f6ff; border: 1px solid #b6e0fe; border-radius: 999px; color: #0b4f71; font-size: 12px; padding: 2px 8px; }
+textarea { box-sizing: border-box; width: 100%; border: 1px solid #bcccdc; border-radius: 6px; padding: 10px; font: inherit; }
+pre { white-space: pre-wrap; background: #102a43; color: white; border-radius: 6px; padding: 12px; overflow-x: auto; }
+code { background: #f0f4f8; border-radius: 4px; padding: 2px 4px; }
+button { border: 1px solid #0b4f71; background: #0b4f71; color: white; border-radius: 6px; padding: 8px 10px; font: inherit; cursor: pointer; }
+button + button { margin-left: 8px; background: white; color: #0b4f71; }
+.confirm { display: block; margin-top: 10px; font-weight: 600; }
+.actions { margin-bottom: 10px; }
+""".strip()
+
+
 def build_critical_input_answer_update(
     answers_payload: dict[str, Any],
     updates_payload: dict[str, Any] | list[Any],

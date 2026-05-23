@@ -420,6 +420,24 @@ Copy only truthful reviewed values into `critical_input_answers_latest.json`;
 high-risk legal, citizenship, work-permit, health, and recording-consent rows
 still require exact user confirmation.
 
+Generate a shorter fill-in questionnaire for the remaining critical inputs:
+
+```bash
+python3 -m job_apply_agent critical-inputs-questionnaire
+```
+
+This writes:
+
+```text
+job_apply_agent/outbox/critical_input_questionnaire_latest.json
+job_apply_agent/outbox/critical_input_questionnaire_latest.md
+job_apply_agent/outbox/critical_input_questionnaire_latest.html
+```
+
+The HTML file is an offline form that builds the compact updates JSON expected
+by `critical-inputs-workflow`; it does not submit applications or write profile
+data by itself.
+
 For faster intake, put the answers you confirm into a compact JSON map:
 
 ```json
