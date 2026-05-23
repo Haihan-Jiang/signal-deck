@@ -22065,6 +22065,10 @@ def build_final_answer_blocker_report(
         blocker_rows,
         ready_after_truthful_answer_reply=ready_after_truthful_answer_reply,
     )
+    post_answer_runbook = _final_answer_blocker_runbook_rows(
+        automation_after_answers,
+        action_pack,
+    )
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source": "final_answer_blocker_report",
@@ -22072,6 +22076,7 @@ def build_final_answer_blocker_report(
         "ready_after_truthful_answer_reply": ready_after_truthful_answer_reply,
         "summary": summary,
         "automation_after_answers": automation_after_answers,
+        "post_answer_runbook": post_answer_runbook,
         "action_pack": action_pack,
         "blockers": blocker_rows,
         "reply_template": "\n".join(reply_template_lines),
@@ -22128,7 +22133,7 @@ def write_final_answer_blocker_report(
         report["outputs"]["html"] = str(html_path)
     if xlsx_path:
         report["outputs"]["xlsx"] = str(xlsx_path)
-    json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    _atomic_write_json(json_path, report)
     markdown_path.write_text(render_final_answer_blocker_report_markdown(report), encoding="utf-8")
     if reply_template_path:
         reply_template_path.write_text(
@@ -22193,6 +22198,60 @@ def _final_answer_blocker_action_pack(
         "submits_real_applications": False,
         "final_submit_remains_supervised": True,
     }
+
+
+def _final_answer_blocker_runbook_rows(
+    automation_after_answers: dict[str, Any],
+    action_pack: dict[str, Any],
+) -> list[dict[str, Any]]:
+    direct_autopilot = str(automation_after_answers.get("next_autopilot_reply_text_command") or "")
+    open_command = (
+        "python3 -m job_apply_agent final-answer-autopilot "
+        "--reply-stdin --apply --live-check --include-values "
+        "--open-browser --open-limit 100 --fail-on-not-ready"
+    )
+    return [
+        {
+            "step": 1,
+            "name": "Validate filled reply",
+            "command": automation_after_answers.get("next_validate_command", ""),
+            "expected_result": "parse the six final-answer lines and list any missing, ambiguous, or unconfirmed high-risk answers",
+            "side_effects": "none; reads stdin and prints validation only",
+            "safety_gate": "does not write profile, answer memory, browser tabs, or real applications",
+        },
+        {
+            "step": 2,
+            "name": "Dry-run autopilot readiness",
+            "command": action_pack.get("autopilot_reply_text_command", "").replace(" --apply --live-check --include-values", " --dry-run"),
+            "expected_result": "write/readiness-check the autopilot report without running the post-answer pipeline",
+            "side_effects": "report-only",
+            "safety_gate": "does not apply answers, live-check pages, open browser, or submit",
+        },
+        {
+            "step": 3,
+            "name": "Apply truthful answers and rebuild 100-job packet",
+            "command": direct_autopilot,
+            "expected_result": "write confirmed answers locally, rerun live closed-posting checks, and rebuild the 100-position supervised autofill packet",
+            "side_effects": "updates local profile/answer memory and report artifacts; no real employer final submit",
+            "safety_gate": "keeps final submit supervised and blocks stale or closed postings before opening",
+        },
+        {
+            "step": 4,
+            "name": "Open live-verified pages for supervised autofill",
+            "command": open_command,
+            "expected_result": "open up to 100 live-verified application pages and run supervised autofill actions",
+            "side_effects": "opens browser pages; writes sparse review records",
+            "safety_gate": "stops before final submit on every real employer page",
+        },
+        {
+            "step": 5,
+            "name": "Manual final-submit review",
+            "command": "manual per-application confirmation only",
+            "expected_result": "user reviews each filled application and decides whether to submit",
+            "side_effects": "real submission occurs only if the user explicitly clicks submit",
+            "safety_gate": "unattended real employer submit remains disabled",
+        },
+    ]
 
 
 def attach_final_answer_blocker_notification_result(
@@ -22394,6 +22453,26 @@ def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
                 f"- final submit remains supervised: {str(bool(action_pack.get('final_submit_remains_supervised'))).lower()}",
             ]
         )
+    runbook_rows = report.get("post_answer_runbook") or []
+    lines.extend(["", "## Post-Answer Runbook", ""])
+    if runbook_rows:
+        lines.extend(
+            _simple_markdown_table(
+                ["Step", "Name", "Command", "Expected", "Safety Gate"],
+                [
+                    [
+                        row.get("step"),
+                        row.get("name"),
+                        f"`{row.get('command')}`",
+                        row.get("expected_result"),
+                        row.get("safety_gate"),
+                    ]
+                    for row in runbook_rows
+                ],
+            )
+        )
+    else:
+        lines.append("- None")
     minimal_reply_prompt = str(report.get("minimal_reply_prompt") or "").strip()
     lines.extend(["", "## Minimal Reply Prompt", ""])
     if minimal_reply_prompt:
@@ -22519,6 +22598,22 @@ def render_final_answer_blocker_report_html(report: dict[str, Any]) -> str:
             "</section>",
             "<section><h2>Observed Prompt Examples</h2>",
             _html_table(["Alias", "Platforms", "Example #", "Prompt"], observed_rows),
+            "</section>",
+            "<section><h2>Post-Answer Runbook</h2>",
+            _html_table(
+                ["Step", "Name", "Command", "Expected result", "Side effects", "Safety gate"],
+                [
+                    [
+                        row.get("step"),
+                        row.get("name"),
+                        row.get("command"),
+                        row.get("expected_result"),
+                        row.get("side_effects"),
+                        row.get("safety_gate"),
+                    ]
+                    for row in report.get("post_answer_runbook") or []
+                ],
+            ),
             "</section>",
             "<section><h2>Minimal Reply Prompt</h2>",
             (
@@ -29716,6 +29811,7 @@ def _write_final_answer_blocker_xlsx(report: dict[str, Any], path: Path) -> None
         ("Summary", _final_answer_blocker_summary_rows(report)),
         ("Answer Entry", _table_rows(answer_rows)),
         ("Observed Prompts", _table_rows(observed_rows)),
+        ("Post Answer Runbook", _table_rows(report.get("post_answer_runbook") or [])),
         ("Minimal Reply", _table_rows(minimal_rows)),
         ("Reply Template", _table_rows(reply_rows)),
         ("Next Commands", _table_rows(command_rows)),
