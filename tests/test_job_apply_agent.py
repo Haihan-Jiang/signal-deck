@@ -7279,6 +7279,41 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(reply_report["confirmed_high_risk_aliases"], ["health_requirement"])
         self.assertTrue(intake_report["ready_for_finalize"])
 
+    def test_final_answer_reply_template_placeholders_do_not_finalize(self) -> None:
+        unblockers = {
+            "unblockers": [
+                {
+                    "input_id": "profile_zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "high_risk": False,
+                    "required_count": 56,
+                },
+                {
+                    "input_id": "answer_memory_health_requirement_default_policy",
+                    "question": "What health requirement answer should automation use?",
+                    "high_risk": True,
+                    "required_count": 2,
+                },
+            ]
+        }
+        template = build_final_answer_intake_template(unblockers)
+        blocker_report = build_final_answer_blocker_report(template)
+        reply_text = render_final_answer_reply_template_text(blocker_report)
+
+        reply_report = build_final_answer_reply_intake(template, reply_text)
+        intake_report = build_final_answer_intake_update(unblockers, reply_report["intake_payload"])
+
+        self.assertEqual(reply_report["answer_count"], 2)
+        self.assertEqual(reply_report["unknown_key_count"], 0)
+        self.assertEqual(reply_report["confirmed_high_risk_aliases"], ["health_requirement"])
+        self.assertFalse(intake_report["ready_for_finalize"])
+        self.assertEqual(intake_report["summary"]["needs_more_specific_answer_count"], 2)
+        self.assertEqual(intake_report["compact_updates"], {})
+        self.assertEqual(
+            [field["status"] for field in intake_report["fields"]],
+            ["needs_more_specific_answer", "needs_more_specific_answer"],
+        )
+
     def test_final_answer_intake_server_post_answer_flags_are_guarded(self) -> None:
         base_args = {
             "run_post_answer_pipeline": False,

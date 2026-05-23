@@ -4958,6 +4958,10 @@ FINAL_ANSWER_INTAKE_SPECIFICITY_HINTS = {
 
 
 FINAL_ANSWER_INTAKE_PLACEHOLDER_ANSWERS = {
+    "<fill>",
+    "[fill]",
+    "{fill}",
+    "fill",
     "na",
     "n/a",
     "none",
@@ -4966,6 +4970,8 @@ FINAL_ANSWER_INTAKE_PLACEHOLDER_ANSWERS = {
     "tbd",
     "todo",
     "unknown",
+    "\u586b\u5199",
+    "\u5f85\u586b",
 }
 
 
@@ -5715,8 +5721,9 @@ function clientSpecificityReason(alias, text, highRisk) {
     return "";
   }
   const normalized = answer.toLowerCase().replace(/\\s+/g, " ").replace(/^[ .,!;:]+|[ .,!;:]+$/g, "");
-  const placeholders = new Set(["na", "n/a", "none", "null", "placeholder", "tbd", "todo", "unknown"]);
-  if (placeholders.has(normalized)) {
+  const placeholderKey = normalized.replace(/^[<[{(]+|[>\\]})]+$/g, "");
+  const placeholders = new Set(["fill", "na", "n/a", "none", "null", "placeholder", "tbd", "todo", "unknown", "填写", "待填"]);
+  if (placeholders.has(normalized) || placeholders.has(placeholderKey)) {
     return "placeholder answer";
   }
   if (normalized.includes("placeholder") || ["yes", "no", "ok", "okay"].includes(normalized)) {
@@ -6050,7 +6057,11 @@ def _final_answer_intake_answer_specificity(
     if not answer:
         return True, ""
     normalized = re.sub(r"\s+", " ", answer.lower()).strip(" .,!;:")
-    if normalized in FINAL_ANSWER_INTAKE_PLACEHOLDER_ANSWERS:
+    placeholder_key = re.sub(r"^[<\[\{(]+|[>\]\})]+$", "", normalized)
+    if (
+        normalized in FINAL_ANSWER_INTAKE_PLACEHOLDER_ANSWERS
+        or placeholder_key in FINAL_ANSWER_INTAKE_PLACEHOLDER_ANSWERS
+    ):
         return False, "placeholder answer"
     if "placeholder" in normalized or normalized in {"yes", "no", "ok", "okay"}:
         if alias == "zip_or_postal_code":
