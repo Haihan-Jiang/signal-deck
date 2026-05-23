@@ -1247,6 +1247,40 @@ class JobApplyAgentTests(unittest.TestCase):
             "this position is no longer available",
         )
         self.assertEqual(
+            closed_application_phrase({"page_text": "This job posting is no longer active."}),
+            "this job posting is no longer active",
+        )
+        self.assertEqual(
+            closed_application_phrase(
+                {"page_text": "The job requisition you are looking for is no longer posted."}
+            ),
+            "job is no longer available",
+        )
+        self.assertEqual(
+            closed_application_phrase({"page_text": "Sorry, this opening is no longer available."}),
+            "this opening is no longer available",
+        )
+        self.assertEqual(
+            closed_application_phrase({"page_text": "Candidates can no longer apply to this role."}),
+            "you can no longer apply to this job",
+        )
+        self.assertEqual(
+            closed_application_phrase({"page_text": "This requisition is no longer open."}),
+            "this requisition is no longer open",
+        )
+        self.assertEqual(
+            closed_application_phrase({"page_text": "This role is no longer open for applications."}),
+            "this role is no longer open",
+        )
+        self.assertEqual(
+            closed_application_phrase({"page_text": "We are no longer open for applications."}),
+            "no longer open for applications",
+        )
+        self.assertEqual(
+            closed_application_phrase({"page_text": "We are not currently accepting applications."}),
+            "not currently accepting applications",
+        )
+        self.assertEqual(
             closed_application_phrase(
                 {"rendered_text": "We're sorry, this role is no longer open."}
             ),

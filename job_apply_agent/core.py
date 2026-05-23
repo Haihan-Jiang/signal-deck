@@ -57,15 +57,29 @@ CLOSED_APPLICATION_PHRASES = [
     "this requisition has been closed",
     "this opening has been closed",
     "this job posting has expired",
+    "this job posting is no longer active",
     "this job post is no longer active",
+    "this posting is no longer active",
+    "this listing is no longer active",
     "job is no longer available",
     "this job is unavailable",
     "this posting is unavailable",
     "this job is no longer available",
     "this job is no longer posted",
+    "this job opening is no longer available",
+    "this job requisition is no longer available",
+    "this job requisition is no longer posted",
+    "this job requisition is no longer open",
     "this position is no longer available",
     "this role is no longer available",
     "this role is no longer open",
+    "this opening is no longer available",
+    "this requisition is no longer available",
+    "this requisition is no longer posted",
+    "this requisition is no longer open",
+    "you can no longer apply to this job",
+    "no longer open for applications",
+    "not currently accepting applications",
     "position has been filled",
     "this position has been filled",
     "job posting has been removed",
@@ -101,8 +115,18 @@ _CLOSED_APPLICATION_PATTERN_SPECS = [
     ),
     (
         "job is no longer available",
-        r"\b(?:job|posting|position|role|listing|opportunity|job post).{0,8}"
+        r"\b(?:this|the)? ?(?:job(?: posting| post| opening| requisition)?|posting|position|role|listing|"
+        r"opportunity|opening|requisition).{0,24}"
         r"no longer (?:available|active|open|posted)\b",
+    ),
+    (
+        "you can no longer apply to this job",
+        r"\b(?:you|candidates?|applicants?) (?:can|may) no longer apply "
+        r"(?:to|for) (?:this|the) (?:job|role|position|opening|requisition)\b",
+    ),
+    (
+        "no longer open for applications",
+        r"\b(?:no longer|not) (?:currently )?(?:open for|accepting) (?:job )?applications\b",
     ),
     (
         "job is unavailable",
