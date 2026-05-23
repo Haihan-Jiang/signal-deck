@@ -217,6 +217,7 @@ from job_apply_agent.core import (
     write_synthetic_browser_action_execution,
 )
 from job_apply_agent.__main__ import (
+    _post_answer_open_browser_safety_status,
     _post_answer_pipeline_summary,
     _validate_final_answer_intake_server_post_answer_args,
 )
@@ -1093,10 +1094,32 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertFalse(audit["safe"])
         self.assertGreaterEqual(audit["issue_count"], 1)
         self.assertIn("apply_queue_no_unattended_real_submit", [row["id"] for row in audit["issues"]])
+        self.assertEqual(
+            _post_answer_open_browser_safety_status(audit),
+            "blocked_by_submission_safety_audit",
+        )
         self.assertIn("apply_queue_final_submit_stop_coverage", [row["id"] for row in audit["issues"]])
         self.assertIn(
             "final_answer_reply_fake_markers_blocked_for_real_apply",
             [row["id"] for row in audit["issues"]],
+        )
+
+    def test_post_answer_open_browser_safety_status_requires_safe_audit(self) -> None:
+        self.assertEqual(
+            _post_answer_open_browser_safety_status(None),
+            "missing_submission_safety_audit",
+        )
+        self.assertEqual(
+            _post_answer_open_browser_safety_status({"safe": True, "issue_count": 0}),
+            "safe",
+        )
+        self.assertEqual(
+            _post_answer_open_browser_safety_status({"safe": True, "issue_count": 1}),
+            "blocked_by_submission_safety_audit",
+        )
+        self.assertEqual(
+            _post_answer_open_browser_safety_status({"safe": False, "issue_count": 0}),
+            "blocked_by_submission_safety_audit",
         )
 
     def test_open_browser_skips_closed_jobs(self) -> None:

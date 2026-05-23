@@ -4243,6 +4243,8 @@ def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
     live_check = None
     handoff = None
     packet = None
+    submission_safety_audit = None
+    submission_safety_blocked = False
     synthetic_queue_rehearsal = None
     opened_count = 0
     status = "waiting_for_confirmed_answers"
@@ -4368,8 +4370,43 @@ def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
                         },
                     }
                 )
+                submission_safety_audit = _write_post_answer_submission_safety_audit(
+                    args,
+                    status,
+                    steps,
+                    packet,
+                    synthetic_final_answers=synthetic_final_answers,
+                    synthetic_queue_rehearsal=synthetic_queue_rehearsal,
+                )
+                safety_status = _post_answer_open_browser_safety_status(submission_safety_audit)
+                submission_safety_blocked = safety_status == "blocked_by_submission_safety_audit"
+                steps.append(
+                    {
+                        "name": "submission_safety_audit",
+                        "status": safety_status,
+                        "details": {
+                            "audit_status": submission_safety_audit.get("status"),
+                            "safe": bool(submission_safety_audit.get("safe")),
+                            "issues": submission_safety_audit.get("issue_count", 0),
+                            "warnings": submission_safety_audit.get("warning_count", 0),
+                            "json": str(DEFAULT_SUBMISSION_SAFETY_AUDIT_JSON),
+                            "markdown": str(DEFAULT_SUBMISSION_SAFETY_AUDIT_MARKDOWN),
+                        },
+                    }
+                )
                 if args.open_browser:
-                    if not handoff.get("ready_for_supervised_open_batch"):
+                    if submission_safety_blocked:
+                        steps.append(
+                            {
+                                "name": "open_browser",
+                                "status": "skipped_submission_safety_audit",
+                                "details": {
+                                    "reason": "submission-safety-audit is unsafe",
+                                    "issues": submission_safety_audit.get("issue_count", 0),
+                                },
+                            }
+                        )
+                    elif not handoff.get("ready_for_supervised_open_batch"):
                         steps.append(
                             {
                                 "name": "open_browser",
@@ -4446,6 +4483,14 @@ def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
             "closed": (live_check or {}).get("closed_count", 0),
             "uncertain": (live_check or {}).get("uncertain_count", 0),
         },
+        "submission_safety_audit": {
+            "status": (submission_safety_audit or {}).get("status"),
+            "safe": bool((submission_safety_audit or {}).get("safe")),
+            "issue_count": (submission_safety_audit or {}).get("issue_count", 0),
+            "warning_count": (submission_safety_audit or {}).get("warning_count", 0),
+            "json": str(DEFAULT_SUBMISSION_SAFETY_AUDIT_JSON) if submission_safety_audit else "",
+            "markdown": str(DEFAULT_SUBMISSION_SAFETY_AUDIT_MARKDOWN) if submission_safety_audit else "",
+        },
         "handoff_status": (handoff or {}).get("status"),
         "handoff_open_ready": (handoff or {}).get("open_ready_count", 0),
         "autofill_packet_status": (packet or {}).get("status"),
@@ -4458,6 +4503,7 @@ def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
             "writes_profile_or_memory_requires_apply": True,
             "live_page_check_requires_live_check": True,
             "open_browser_requires_open_browser": True,
+            "open_browser_requires_submission_safety_audit": True,
             "final_submit_remains_supervised": True,
             "final_answer_intake_writes_profile_or_memory": False,
             "final_answer_intake_submits_real_applications": False,
@@ -4481,13 +4527,75 @@ def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
     print(f"Apply requested: {str(bool(args.apply)).lower()}")
     print(f"Live check requested: {str(bool(args.live_check)).lower()}")
     print(f"Open browser requested: {str(bool(args.open_browser)).lower()}")
+    if submission_safety_audit:
+        print(f"Submission safety: {submission_safety_audit.get('status')}")
+        print(f"Submission safety issues: {submission_safety_audit.get('issue_count', 0)}")
     autofill_packet_status = report.get("autofill_packet_status") or (
         synthetic_queue_rehearsal or {}
     ).get("autofill_packet_status")
     print(f"Autofill packet: {autofill_packet_status or 'not_built'}")
     if args.fail_on_not_ready and not report.get("ready_for_workflow"):
         return 2
+    if args.fail_on_not_ready and submission_safety_blocked:
+        return 2
     return 0
+
+
+def _write_post_answer_submission_safety_audit(
+    args: argparse.Namespace,
+    status: str,
+    steps: list[dict[str, object]],
+    packet: dict[str, object],
+    *,
+    synthetic_final_answers: bool,
+    synthetic_queue_rehearsal: dict[str, object] | None = None,
+) -> dict[str, object]:
+    post_answer_context = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "post_answer_pipeline_pre_open_safety_context",
+        "status": status,
+        "ready_for_workflow": True,
+        "apply_requested": bool(args.apply),
+        "live_check_requested": bool(args.live_check),
+        "open_browser_requested": bool(args.open_browser),
+        "include_values": bool(args.include_values),
+        "synthetic_final_answers": bool(synthetic_final_answers),
+        "synthetic_queue_rehearsal": synthetic_queue_rehearsal or {},
+        "steps": list(steps),
+        "policy": {
+            "submits_real_applications": False,
+            "writes_profile_or_memory_requires_apply": True,
+            "live_page_check_requires_live_check": True,
+            "open_browser_requires_open_browser": True,
+            "open_browser_requires_submission_safety_audit": True,
+            "final_submit_remains_supervised": True,
+            "final_answer_intake_writes_profile_or_memory": False,
+            "final_answer_intake_submits_real_applications": False,
+            "synthetic_answers_never_written_to_real_profile_or_memory": True,
+            "synthetic_answers_forbid_apply_live_check_and_open_browser": True,
+            "synthetic_queue_rehearsal_uses_fake_local_profile_and_memory": True,
+        },
+    }
+    return write_submission_safety_audit(
+        DEFAULT_SUBMISSION_SAFETY_AUDIT_JSON,
+        DEFAULT_SUBMISSION_SAFETY_AUDIT_MARKDOWN,
+        fake_position_rehearsal=_load_optional_json(str(DEFAULT_FAKE_POSITION_REHEARSAL_JSON)),
+        post_answer_pipeline=post_answer_context,
+        apply_queue_autofill_packet=packet,
+        browser_review_queue_audit=_load_optional_json(str(DEFAULT_REVIEW_QUEUE_AUDIT_JSON)),
+        pre_submit_review=_load_optional_json(str(DEFAULT_PRE_SUBMIT_REVIEW_JSON)),
+        goal_readiness_audit=_load_optional_json(str(DEFAULT_GOAL_AUDIT_JSON)),
+        final_answer_reply_intake=_load_optional_json(str(DEFAULT_FINAL_ANSWER_REPLY_JSON)),
+        synthetic_final_answer_reply_intake=_load_optional_json(str(DEFAULT_FINAL_ANSWER_REPLY_SYNTHETIC_JSON)),
+    )
+
+
+def _post_answer_open_browser_safety_status(audit: dict[str, object] | None) -> str:
+    if not audit:
+        return "missing_submission_safety_audit"
+    if bool(audit.get("safe")) and int(audit.get("issue_count") or 0) == 0:
+        return "safe"
+    return "blocked_by_submission_safety_audit"
 
 
 def _run_synthetic_post_answer_queue_rehearsal(
@@ -4765,9 +4873,34 @@ def _render_post_answer_pipeline_markdown(report: dict[str, object]) -> str:
         f"- unconfirmed high-risk answers: {final_summary.get('unconfirmed_high_risk_count', 0)}",
         f"- unknown compact updates: {final_summary.get('unknown_compact_update_count', 0)}",
         "",
-        "## Synthetic Queue Rehearsal",
+        "## Submission Safety Audit",
         "",
     ]
+    safety = (
+        report.get("submission_safety_audit")
+        if isinstance(report.get("submission_safety_audit"), dict)
+        else {}
+    )
+    if safety:
+        lines.extend(
+            [
+                f"- status: {safety.get('status') or 'missing'}",
+                f"- safe: {str(bool(safety.get('safe'))).lower()}",
+                f"- issues: {safety.get('issue_count', 0)}",
+                f"- warnings: {safety.get('warning_count', 0)}",
+                f"- json: {safety.get('json') or ''}",
+                f"- markdown: {safety.get('markdown') or ''}",
+            ]
+        )
+    else:
+        lines.append("- not built")
+    lines.extend(
+        [
+            "",
+            "## Synthetic Queue Rehearsal",
+            "",
+        ]
+    )
     synthetic_rehearsal = (
         report.get("synthetic_queue_rehearsal")
         if isinstance(report.get("synthetic_queue_rehearsal"), dict)
