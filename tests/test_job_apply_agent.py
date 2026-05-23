@@ -1506,6 +1506,59 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(plan["steps"][1]["status"], "missing_profile_value")
         self.assertEqual(plan["steps"][1]["value_source"], "profile.question_answers.google_scholar")
 
+    def test_optional_profile_links_from_question_lists_do_not_block_readiness(self) -> None:
+        profile = CandidateProfile(
+            name="Alan Jiang",
+            email="alan@example.com",
+            phone="555-0100",
+            location="Bellevue, WA",
+            target_titles=["Site Reliability Engineer"],
+            target_locations=["United States"],
+            remote_ok=True,
+            keywords=["sre"],
+            blocklist=[],
+            min_score=1,
+            resume_facts={},
+            question_answers={"linkedin_profile": "https://www.linkedin.com/in/example/"},
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            observed = Path(temp_dir) / "observed_candidates.jsonl"
+            row = {
+                "status": "OBSERVED_CANDIDATE",
+                "platform": "Greenhouse",
+                "company": "Example",
+                "title": "Site Reliability Engineer",
+                "apply_url": "https://job-boards.greenhouse.io/example/jobs/1",
+                "questions": [
+                    "First Name",
+                    "Last Name",
+                    "Email",
+                    "LinkedIn Profile",
+                    "Website",
+                    "If other, please specify",
+                    "Optional: link to a blog post or other public writing; leave blank if none.",
+                ],
+            }
+            observed.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            research = build_application_research(temp_dir, position_target=100)
+            required_by_label = {item["label"]: item["required"] for item in research["items"]}
+            self.assertFalse(required_by_label["Website"])
+            self.assertFalse(
+                required_by_label[
+                    "Optional: link to a blog post or other public writing; leave blank if none."
+                ]
+            )
+            gaps = build_answer_gap_report(research, profile=profile, answer_memory=None)
+            statuses = {item["label"]: item["coverage_status"] for item in gaps["prompt_statuses"]}
+            self.assertEqual(statuses["Website"], "optional_missing_profile")
+            self.assertEqual(statuses["If other, please specify"], "optional_missing_answer")
+
+            readiness = build_position_readiness_report(research, gaps)
+
+            self.assertEqual(readiness["readiness_counts"], {"autofill_ready": 1})
+            self.assertEqual(readiness["minimal_learning_task_count"], 0)
+
     def test_application_research_skips_linkedin_ai_advice_prompts(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             observed = Path(temp_dir) / "observed_candidates.jsonl"

@@ -1137,6 +1137,8 @@ def classify_application_prompt(
             "portfolio",
             "website",
             "personal site",
+            "other url",
+            "other website",
             "x profile",
             "profile url",
             "google scholar",
@@ -6407,7 +6409,7 @@ def _collect_job_question_research(
                 "question",
                 question,
                 classification,
-                required=True,
+                required=_question_list_prompt_required(question, classification),
             )
         )
 
@@ -6441,9 +6443,44 @@ def _collect_submission_question_research(
                 "question",
                 question,
                 classification,
-                required=True,
+                required=_question_list_prompt_required(question, classification),
             )
         )
+
+
+def _question_list_prompt_required(
+    label: str,
+    classification: ApplicationPromptClassification,
+) -> bool:
+    text = _normalize(label)
+    if any(
+        marker in text
+        for marker in [
+            "optional",
+            "if applicable",
+            "leave blank if none",
+            "if any",
+            "if other",
+            "if yes",
+            "if no",
+        ]
+    ):
+        return False
+    if "*" in str(label) or "required" in text:
+        return True
+    if classification.category in {
+        "profile_link",
+        "referral_contact",
+        "communication_consent",
+        "cover_letter",
+        "cover_letter_upload",
+    }:
+        return False
+    if classification.category == "profile_identity" and any(
+        term in text for term in ["website", "github", "portfolio", "other url"]
+    ):
+        return False
+    return True
 
 
 def _register_research_position(
@@ -6684,6 +6721,7 @@ def _answer_gap_status(
     label = str(prompt.get("label") or "")
     category = str(prompt.get("category") or "")
     action = str(prompt.get("automation_action") or "")
+    optional_prompt = int(prompt.get("required_count") or 0) == 0
 
     if category == "final_submit":
         return {
@@ -6734,6 +6772,12 @@ def _answer_gap_status(
                     "answer_source": "profile.resume_facts",
                     "next_action": "autofill from verified resume facts",
                 }
+        if optional_prompt:
+            return {
+                "coverage_status": "optional_missing_answer",
+                "coverage_reason": "optional_standard_question_without_answer",
+                "next_action": "skip optional field unless user provides a value",
+            }
         return {
             "coverage_status": "needs_answer_memory",
             "coverage_reason": "standard_question_without_approved_answer",
@@ -6748,6 +6792,12 @@ def _answer_gap_status(
                 "coverage_reason": profile_status["reason"],
                 "answer_source": profile_status["source"],
                 "next_action": "autofill from profile or local document path",
+            }
+        if int(prompt.get("required_count") or 0) == 0:
+            return {
+                "coverage_status": "optional_missing_profile",
+                "coverage_reason": profile_status["reason"],
+                "next_action": "skip optional field unless user provides a value",
             }
         return {
             "coverage_status": profile_status["missing_status"],
@@ -6784,12 +6834,24 @@ def _answer_gap_status(
                 "answer_source": "profile.question_answers",
                 "next_action": "preselect profile answer and keep human review gate",
             }
+        if optional_prompt:
+            return {
+                "coverage_status": "optional_missing_answer",
+                "coverage_reason": "optional_human_review_prompt_without_answer",
+                "next_action": "skip optional field unless user provides a value",
+            }
         return {
             "coverage_status": "needs_user_confirmation",
             "coverage_reason": "employer_specific_policy_or_unclear_prompt",
             "next_action": "ask user during supervised learning and save only if non-sensitive",
         }
 
+    if optional_prompt:
+        return {
+            "coverage_status": "optional_missing_answer",
+            "coverage_reason": "optional_unclassified_prompt_without_answer",
+            "next_action": "skip optional field unless user provides a value",
+        }
     return {
         "coverage_status": "needs_user_confirmation",
         "coverage_reason": "unknown_automation_action",
@@ -6949,10 +7011,12 @@ def _answer_status_sort_rank(status: str) -> int:
         "manual_security_step": 5,
         "final_submit_confirmation": 6,
         "sensitive_not_stored": 7,
-        "covered_auto_answer": 8,
-        "covered_profile": 9,
-        "covered_generation": 10,
-        "covered_requires_review": 11,
+        "optional_missing_profile": 8,
+        "optional_missing_answer": 9,
+        "covered_auto_answer": 10,
+        "covered_profile": 11,
+        "covered_generation": 12,
+        "covered_requires_review": 13,
     }
     return order.get(status, 99)
 
@@ -7199,6 +7263,7 @@ def _build_learning_queue(answer_gap_report: dict[str, Any]) -> list[dict[str, A
         _queue_prompt(item)
         for item in answer_gap_report.get("prompt_statuses", [])
         if item.get("coverage_status") in _LEARNING_BLOCKER_STATUSES
+        and int(item.get("required_count") or 0) > 0
     ]
     queue.sort(
         key=lambda item: (
