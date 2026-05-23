@@ -5365,6 +5365,7 @@ def render_final_answer_intake_template_html(
                         f'data-high-risk="{str(high_risk).lower()}" rows="4" '
                         f'placeholder="{_html_escape(format_hint)}">{_html_escape(answer_text)}</textarea>'
                     ),
+                    f'<p class="field-warning" data-specificity-status="{_html_escape(alias)}"></p>',
                     checkbox,
                     f"<pre>{_html_escape(labels)}</pre>",
                     "</section>",
@@ -5405,14 +5406,57 @@ function fieldStates() {
     const alias = field.getAttribute("data-answer");
     const text = field.value.trim();
     const confirm = document.querySelector('[data-confirm="' + alias + '"]');
+    const highRisk = field.getAttribute("data-high-risk") === "true";
+    const specificityReason = clientSpecificityReason(alias, text, highRisk);
     states.push({
       alias,
       text,
-      highRisk: field.getAttribute("data-high-risk") === "true",
-      confirmed: confirm ? Boolean(confirm.checked) : true
+      highRisk,
+      confirmed: confirm ? Boolean(confirm.checked) : true,
+      specificityReason
     });
   });
   return states;
+}
+function clientSpecificityReason(alias, text, highRisk) {
+  const answer = text.trim();
+  if (!answer) {
+    return "";
+  }
+  const normalized = answer.toLowerCase().replace(/\\s+/g, " ").replace(/^[ .,!;:]+|[ .,!;:]+$/g, "");
+  const placeholders = new Set(["na", "n/a", "none", "null", "placeholder", "tbd", "todo", "unknown"]);
+  if (placeholders.has(normalized)) {
+    return "placeholder answer";
+  }
+  if (normalized.includes("placeholder") || ["yes", "no", "ok", "okay"].includes(normalized)) {
+    return alias === "zip_or_postal_code" ? "not an exact postal code" : "too brief for reusable high-risk answer";
+  }
+  if (alias === "zip_or_postal_code") {
+    return /[A-Za-z0-9]/.test(answer) && answer.length >= 3 ? "" : "postal code is too short";
+  }
+  if (alias === "citizenship_status") {
+    return answer.length >= 12 && /\\b(citizen|citizenship|permanent|resident|green card|u\\.s\\.|us person|restricted|country|countries)\\b/.test(normalized)
+      ? ""
+      : "citizenship answer must mention citizenship/residency/restricted-country status";
+  }
+  if (alias === "background_or_export_control") {
+    return answer.length >= 20 ? "" : "answer must include default and exceptions";
+  }
+  if (alias === "country_work_permit") {
+    if (answer.length < 20) {
+      return "answer must include default and exceptions";
+    }
+    return /\\b(us|u\\.s\\.|united states|canada|uk|united kingdom|australia|singapore|china|taiwan|country|countries|permit|visa|work authorization)\\b/.test(normalized)
+      ? ""
+      : "country work permit answer must name country, permit, visa, or work authorization scope";
+  }
+  if (alias === "interview_recording_consent" || alias === "health_requirement") {
+    return answer.length >= 8 ? "" : "answer must be an explicit sentence, not a bare yes/no";
+  }
+  if (highRisk && answer.length < 8) {
+    return "high-risk answer is too brief";
+  }
+  return "";
 }
 function refreshOutput() {
   const payload = buildPayload();
@@ -5420,12 +5464,19 @@ function refreshOutput() {
   const states = fieldStates();
   const missing = states.filter((state) => !state.text).length;
   const unconfirmed = states.filter((state) => state.highRisk && state.text && !state.confirmed).length;
+  const needsSpecificity = states.filter((state) => state.text && state.specificityReason).length;
+  states.forEach((state) => {
+    const status = document.querySelector('[data-specificity-status="' + state.alias + '"]');
+    if (status) {
+      status.textContent = state.specificityReason ? "Needs more specificity: " + state.specificityReason : "";
+    }
+  });
   const summary = document.getElementById("readiness-summary");
-  if (missing === 0 && unconfirmed === 0) {
+  if (missing === 0 && unconfirmed === 0 && needsSpecificity === 0) {
     summary.textContent = "All answers and high-risk confirmations are present. Save to validate locally.";
     summary.className = "ready";
   } else {
-    summary.textContent = missing + " answer(s) missing; " + unconfirmed + " high-risk confirmation(s) missing.";
+    summary.textContent = missing + " answer(s) missing; " + unconfirmed + " high-risk confirmation(s) missing; " + needsSpecificity + " answer(s) need more specificity.";
     summary.className = "warning";
   }
 }
@@ -5559,6 +5610,11 @@ h2 {
 .ready {
   background: #ecfdf3;
   color: #166534;
+}
+.field-warning {
+  color: #9a3412;
+  font-weight: 700;
+  margin: 0 0 10px;
 }
 .answer-card, section {
   background: #ffffff;
