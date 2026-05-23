@@ -4179,6 +4179,15 @@ def build_critical_input_answer_template(
     for index, item in enumerate(approval_pack.get("critical_inputs", []), start=1):
         if not isinstance(item, dict):
             continue
+        draft_answer = str(item.get("draft_answer") or "").strip()
+        input_type = str(item.get("input_type") or "")
+        prefilled_answer = (
+            draft_answer
+            if draft_answer
+            and input_type
+            not in {"high_risk_exact_confirmation", "supervised_browser_review_only"}
+            else ""
+        )
         answers.append(
             {
                 "input_id": _critical_input_answer_id(item, index),
@@ -4186,8 +4195,9 @@ def build_critical_input_answer_template(
                 "group_key": item.get("group_key"),
                 "question": item.get("question"),
                 "approval_decision": "",
-                "user_answer": "",
+                "user_answer": prefilled_answer,
                 "required_user_response": item.get("required_user_response"),
+                "draft_answer": draft_answer,
                 "approval_risk": item.get("approval_risk"),
                 "storage_after_approval": item.get("storage_after_approval"),
                 "automation_after_answer": item.get("automation_after_answer"),
@@ -5709,8 +5719,10 @@ def build_critical_input_impact_report(
     profile_payload: dict[str, Any],
     answer_memory: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
+    individual_impact_limit: int | None = 50,
 ) -> dict[str, Any]:
     rows = _critical_input_answer_rows(answers_payload)
+    individual_rows = rows[: max(0, int(individual_impact_limit))] if individual_impact_limit else rows
     baseline_memory = json.loads(json.dumps(answer_memory or {"version": 1, "answers": []}))
     baseline_profile = CandidateProfile.from_mapping(json.loads(json.dumps(profile_payload)))
     baseline_gaps = build_answer_gap_report(
@@ -5730,6 +5742,9 @@ def build_critical_input_impact_report(
         update_entry = _critical_input_fake_update_for_impact(item, input_id)
         if update_entry is not None:
             combined_updates[input_id] = update_entry
+    for index, item in enumerate(individual_rows, start=1):
+        input_id = str(item.get("input_id") or _critical_input_answer_id(item, index))
+        update_entry = _critical_input_fake_update_for_impact(item, input_id)
         preflight = build_critical_input_preflight(
             approval_pack,
             answers_payload,
@@ -5794,7 +5809,7 @@ def build_critical_input_impact_report(
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source": "critical_input_impact_report",
-        "input_count": len(input_impacts),
+        "input_count": len(rows),
         "combined_answerable_input_count": len(combined_updates),
         "summary": {
             "baseline_data_blocking_prompts": (combined.get("summary") or {}).get(
@@ -5816,6 +5831,9 @@ def build_critical_input_impact_report(
             else 0,
         },
         "input_impacts": input_impacts,
+        "individual_impact_count": len(input_impacts),
+        "individual_impact_limit": individual_impact_limit,
+        "individual_impact_truncated": len(input_impacts) < len(rows),
         "combined_preflight_summary": combined.get("summary", {}),
         "combined_remaining_data_blocker_counts": combined.get("remaining_data_blocker_counts", {}),
         "combined_remaining_data_blockers": remaining_blockers,
@@ -5872,6 +5890,8 @@ def render_critical_input_impact_markdown(report: dict[str, Any]) -> str:
         "",
         f"Generated: {report.get('generated_at')}",
         f"Inputs: {report.get('input_count', 0)}",
+        f"Individual impact rows: {report.get('individual_impact_count', 0)}",
+        f"Individual impact truncated: {str(bool(report.get('individual_impact_truncated'))).lower()}",
         f"Answerable simulated inputs: {report.get('combined_answerable_input_count', 0)}",
         f"Baseline data blockers: {summary.get('baseline_data_blocking_prompts', 0)}",
         f"After all simulated answers: {summary.get('combined_data_blocking_prompts_after', 0)}",
@@ -5981,6 +6001,7 @@ def render_critical_input_impact_html(report: dict[str, Any]) -> str:
             _html_kpis(
                 [
                     ("Inputs", report.get("input_count", 0)),
+                    ("Individual impact rows", report.get("individual_impact_count", 0)),
                     ("Baseline blockers", summary.get("baseline_data_blocking_prompts", 0)),
                     ("After all simulated", summary.get("combined_data_blocking_prompts_after", 0)),
                     ("Blocker delta", summary.get("combined_data_blocking_prompts_delta", 0)),
@@ -6922,6 +6943,9 @@ def _critical_input_status_next_action(status: str) -> str:
 def _fake_critical_input_answer(item: dict[str, Any]) -> str:
     group_key = str(item.get("group_key") or "")
     input_type = str(item.get("input_type") or "")
+    draft_answer = str(item.get("draft_answer") or item.get("user_answer") or "").strip()
+    if draft_answer and input_type not in {"high_risk_exact_confirmation", "supervised_browser_review_only"}:
+        return draft_answer
     if group_key == "resume_facts:education_grading":
         return "Not applicable for synthetic candidate."
     if group_key == "profile:zip_or_postal_code":
@@ -9613,9 +9637,17 @@ def build_automation_handoff_report(
         "combined_data_blocking_prompts_delta": int(
             impact_summary.get("combined_data_blocking_prompts_delta") or 0
         ),
+        "combined_data_blocking_prompts_after": int(
+            impact_summary.get("combined_data_blocking_prompts_after") or 0
+        ),
+        "combined_remaining_data_blocker_count": int(
+            ((impact.get("combined_remaining_data_blocker_counts") or {}).get("total")) or 0
+        ),
         "combined_positions_ready_for_autofill_delta": int(
             impact_summary.get("combined_positions_ready_for_autofill_delta") or 0
         ),
+        "individual_impact_count": int(impact.get("individual_impact_count") or 0),
+        "individual_impact_truncated": bool(impact.get("individual_impact_truncated")),
         "top_input_id": impact_summary.get("top_input_id", ""),
         "autofill_selected_count": int(batch.get("selected_count") or 0),
         "autofill_allowed_count": int(batch.get("selected_autofill_allowed_count") or 0),
@@ -9723,6 +9755,9 @@ def render_automation_handoff_markdown(report: dict[str, Any]) -> str:
         f"- critical supervised-only inputs: {summary.get('critical_supervised_only_count', 0)}",
         f"- questionnaire answers: {summary.get('questionnaire_answerable_count', 0)} / {summary.get('questionnaire_question_count', 0)}",
         f"- impact if confirmed: {summary.get('combined_data_blocking_prompts_delta', 0)} data blockers, {summary.get('combined_positions_ready_for_autofill_delta', 0)} positions ready",
+        f"- data blockers after simulated confirmations: {summary.get('combined_data_blocking_prompts_after', 0)}",
+        f"- remaining simulated blocker prompts: {summary.get('combined_remaining_data_blocker_count', 0)}",
+        f"- individual impact rows: {summary.get('individual_impact_count', 0)}; truncated {str(bool(summary.get('individual_impact_truncated'))).lower()}",
         f"- autofill batch: {summary.get('autofill_allowed_count', 0)} / {summary.get('autofill_selected_count', 0)} selected, selector misses {summary.get('autofill_selector_miss_count', 0)}",
         f"- local synthetic submit proof: {summary.get('autofill_local_synthetic_submit_count', 0)} submits, achieved {str(bool(summary.get('autofill_local_synthetic_submit_achieved'))).lower()}, selector misses {summary.get('autofill_local_synthetic_submit_selector_miss_count', 0)}",
         "",
@@ -9834,6 +9869,8 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
                     ("Critical waiting", summary.get("critical_waiting_count", 0)),
                     ("Questionnaire", f"{summary.get('questionnaire_answerable_count', 0)} / {summary.get('questionnaire_question_count', 0)}"),
                     ("Impact blockers", summary.get("combined_data_blocking_prompts_delta", 0)),
+                    ("After simulated", summary.get("combined_data_blocking_prompts_after", 0)),
+                    ("Remaining simulated", summary.get("combined_remaining_data_blocker_count", 0)),
                     ("Impact positions", summary.get("combined_positions_ready_for_autofill_delta", 0)),
                     ("Autofill selected", summary.get("autofill_selected_count", 0)),
                     ("Selector misses", summary.get("autofill_selector_miss_count", 0)),
@@ -16129,9 +16166,6 @@ def _learning_approval_critical_input_rows(task_rows: list[dict[str, Any]]) -> l
             continue
         bucket = str(task.get("bucket") or "")
         draft_answer = str(task.get("draft_answer") or "").strip()
-        approval_risk = str(task.get("approval_risk") or "")
-        if draft_answer and bucket not in {"exact_user_confirmation", "supervised_only"} and approval_risk != "high":
-            continue
         input_type = _learning_approval_critical_input_type(task)
         rows.append(
             {
@@ -16169,6 +16203,10 @@ def _learning_approval_critical_input_rows(task_rows: list[dict[str, Any]]) -> l
 
 def _learning_approval_critical_input_type(task: dict[str, Any]) -> str:
     bucket = str(task.get("bucket") or "")
+    if bucket == "default_policy_review":
+        return "default_policy_review"
+    if bucket == "approve_existing_suggestion":
+        return "suggested_answer_review"
     if bucket == "profile_or_resume_fact":
         return "profile_or_resume_fact"
     if bucket == "exact_prompt_answer":
@@ -16181,6 +16219,10 @@ def _learning_approval_critical_input_type(task: dict[str, Any]) -> str:
 
 
 def _learning_approval_required_user_response(input_type: str) -> str:
+    if input_type == "default_policy_review":
+        return "Review the default policy, edit if needed, and approve only if it is truthful and reusable."
+    if input_type == "suggested_answer_review":
+        return "Review the suggested answer, edit if needed, and approve only if it is truthful and reusable."
     if input_type == "profile_or_resume_fact":
         return "Provide the exact stable profile/resume value, or mark unavailable if there is no truthful value."
     if input_type == "exact_prompt_answer":

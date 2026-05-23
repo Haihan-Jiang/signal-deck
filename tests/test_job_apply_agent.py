@@ -3123,8 +3123,8 @@ class JobApplyAgentTests(unittest.TestCase):
         buckets = {row["bucket"]: row for row in pack["buckets"]}
 
         self.assertEqual(pack["summary"]["task_count"], 4)
-        self.assertEqual(pack["summary"]["critical_input_count"], 3)
-        self.assertEqual(pack["summary"]["critical_persistable_input_count"], 2)
+        self.assertEqual(pack["summary"]["critical_input_count"], 4)
+        self.assertEqual(pack["summary"]["critical_persistable_input_count"], 3)
         self.assertEqual(pack["summary"]["critical_supervised_only_count"], 1)
         self.assertEqual(pack["summary"]["draft_answer_count"], 1)
         self.assertEqual(pack["summary"]["missing_user_answer_count"], 3)
@@ -3133,11 +3133,13 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(
             [row["input_type"] for row in pack["critical_inputs"]],
             [
+                "default_policy_review",
                 "profile_or_resume_fact",
                 "high_risk_exact_confirmation",
                 "supervised_browser_review_only",
             ],
         )
+        self.assertEqual(pack["critical_inputs"][0]["draft_answer"], "No unless an exception is confirmed.")
         self.assertEqual(buckets["default_policy_review"]["task_count"], 1)
         self.assertEqual(buckets["profile_or_resume_fact"]["task_count"], 1)
         self.assertEqual(buckets["exact_user_confirmation"]["task_count"], 1)
@@ -6754,9 +6756,13 @@ class JobApplyAgentTests(unittest.TestCase):
         critical_input_impact = {
             "summary": {
                 "combined_data_blocking_prompts_delta": -66,
+                "combined_data_blocking_prompts_after": 12,
                 "combined_positions_ready_for_autofill_delta": 171,
                 "top_input_id": "answer_memory_citizenship_status_default_policy",
             },
+            "individual_impact_count": 50,
+            "individual_impact_truncated": True,
+            "combined_remaining_data_blocker_counts": {"total": 12},
             "input_impacts": [],
         }
         autofill_batch = {
@@ -6821,12 +6827,16 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["summary"]["autofill_selected_count"], 100)
         self.assertEqual(report["summary"]["autofill_local_synthetic_submit_count"], 100)
         self.assertTrue(report["summary"]["autofill_local_synthetic_submit_achieved"])
+        self.assertEqual(report["summary"]["combined_data_blocking_prompts_after"], 12)
+        self.assertEqual(report["summary"]["combined_remaining_data_blocker_count"], 12)
+        self.assertTrue(report["summary"]["individual_impact_truncated"])
         self.assertEqual(report["summary"]["closed_registry_count"], 1)
         self.assertEqual(report["answer_impact_queue"][0]["input_id"], "answer_memory_citizenship_status_default_policy")
         self.assertEqual(report["answer_impact_queue"][0]["handoff_action"], "confirm_truthful_answer_before_persisting")
         self.assertEqual(report["selected_stop_action_summary"][0]["status"], "final_submit_confirmation")
         self.assertEqual(report["missing_profile_inputs"][0]["label"], "Website")
         self.assertIn("Application Automation Handoff", markdown)
+        self.assertIn("data blockers after simulated confirmations: 12", markdown)
         self.assertIn("local synthetic submit proof: 100 submits", markdown)
         self.assertIn("100-Position Stop Actions", markdown)
         self.assertIn("GitHub URL", html)
