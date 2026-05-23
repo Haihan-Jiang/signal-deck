@@ -217,6 +217,7 @@ from job_apply_agent.core import (
     write_synthetic_apply_execution,
     write_synthetic_application_simulation,
     write_synthetic_browser_action_execution,
+    _atomic_write_json,
 )
 from job_apply_agent.__main__ import (
     _post_answer_open_browser_safety_status,
@@ -232,6 +233,16 @@ class JobApplyAgentTests(unittest.TestCase):
     def setUp(self) -> None:
         self.profile = load_profile(ROOT / "job_apply_agent" / "sample_profile.json")
         self.jobs = load_jobs(ROOT / "job_apply_agent" / "sample_jobs.json")
+
+    def test_atomic_write_json_replaces_existing_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "report.json"
+            path.write_text("{", encoding="utf-8")
+
+            _atomic_write_json(path, {"status": "ok", "count": 2})
+
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {"status": "ok", "count": 2})
+            self.assertEqual(list(Path(temp_dir).glob("*.tmp")), [])
 
     def test_scores_matching_job_above_blocked_job(self) -> None:
         matching = score_job(self.profile, self.jobs[0])

@@ -93,6 +93,40 @@ CLOSED_APPLICATION_PHRASES = [
     "posting has expired",
     "listing has expired",
 ]
+
+
+def _atomic_write_text(path: Path, text: str, *, encoding: str = "utf-8") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_name = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding=encoding,
+            dir=str(path.parent),
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temp_file:
+            temp_name = temp_file.name
+            temp_file.write(text)
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+        os.replace(temp_name, path)
+    finally:
+        if temp_name:
+            try:
+                Path(temp_name).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def _atomic_write_json(path: Path, payload: Any, *, trailing_newline: bool = True) -> None:
+    text = json.dumps(payload, ensure_ascii=True, indent=2)
+    if trailing_newline:
+        text += "\n"
+    _atomic_write_text(path, text, encoding="utf-8")
+
+
 _CLOSED_APPLICATION_PATTERN_SPECS = [
     (
         "no longer accepting applications",
@@ -11425,11 +11459,8 @@ def write_apply_queue_handoff(
     open_jobs_path = Path(open_ready_jobs_output)
     for path in [json_path, markdown_path, html_path, open_jobs_path]:
         path.parent.mkdir(parents=True, exist_ok=True)
-    open_jobs_path.write_text(
-        json.dumps(report.get("open_ready_jobs_payload", {"jobs": []}), ensure_ascii=True, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    _atomic_write_json(open_jobs_path, report.get("open_ready_jobs_payload", {"jobs": []}))
+    _atomic_write_json(json_path, report)
     markdown_path.write_text(render_apply_queue_handoff_markdown(report), encoding="utf-8")
     html_path.write_text(render_apply_queue_handoff_html(report), encoding="utf-8")
     return report
@@ -11792,7 +11823,7 @@ def write_apply_queue_autofill_packet(
     html_path = Path(html_output)
     for path in [json_path, markdown_path, html_path]:
         path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    _atomic_write_json(json_path, report)
     markdown_path.write_text(render_apply_queue_autofill_packet_markdown(report), encoding="utf-8")
     html_path.write_text(render_apply_queue_autofill_packet_html(report), encoding="utf-8")
     return report
@@ -12116,7 +12147,7 @@ def write_position_execution_audit(
     html_path = Path(html_output)
     for path in [json_path, markdown_path, html_path]:
         path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    _atomic_write_json(json_path, report)
     markdown_path.write_text(render_position_execution_audit_markdown(report), encoding="utf-8")
     html_path.write_text(render_position_execution_audit_html(report), encoding="utf-8")
     return report
@@ -15448,7 +15479,7 @@ def write_goal_readiness_audit(
     markdown_path = Path(markdown_output)
     json_path.parent.mkdir(parents=True, exist_ok=True)
     markdown_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(audit, ensure_ascii=True, indent=2), encoding="utf-8")
+    _atomic_write_json(json_path, audit, trailing_newline=False)
     markdown_path.write_text(render_goal_readiness_audit_markdown(audit), encoding="utf-8")
     return audit
 
@@ -16221,7 +16252,7 @@ def write_automation_handoff_report(
     html_path = Path(html_output)
     for path in [json_path, markdown_path, html_path]:
         path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    _atomic_write_json(json_path, report)
     markdown_path.write_text(render_automation_handoff_markdown(report), encoding="utf-8")
     html_path.write_text(render_automation_handoff_html(report), encoding="utf-8")
     return report
@@ -22861,7 +22892,7 @@ def write_browser_review_queue_audit(
     markdown_path = Path(markdown_output)
     for output_path in [json_path, markdown_path]:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(audit, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    _atomic_write_json(json_path, audit)
     markdown_path.write_text(render_browser_review_queue_audit_markdown(audit), encoding="utf-8")
     return audit
 
@@ -23383,7 +23414,7 @@ def write_submission_safety_audit(
     markdown_path = Path(markdown_output)
     json_path.parent.mkdir(parents=True, exist_ok=True)
     markdown_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(audit, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    _atomic_write_json(json_path, audit)
     markdown_path.write_text(render_submission_safety_audit_markdown(audit), encoding="utf-8")
     return audit
 
