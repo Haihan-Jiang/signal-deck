@@ -7337,8 +7337,19 @@ class JobApplyAgentTests(unittest.TestCase):
             "goal_complete": False,
             "blocker_summary": {
                 "final_answer_waiting_count_after_drafts": 1,
-                "position_execution_remaining_user_answers": 1,
+                "position_execution_remaining_user_answers": 0,
+                "position_execution_global_remaining_user_answers": 1,
+                "selected_queue_supervised_autofill_ready": True,
                 "post_answer_synthetic_queue_rehearsal_ready": True,
+                "post_answer_text_reply_rehearsal_ready": True,
+                "post_answer_intake_answer_count": 6,
+                "post_answer_intake_missing_unblocker_count": 0,
+                "post_answer_intake_unconfirmed_high_risk_count": 0,
+                "post_answer_intake_needs_more_specific_answer_count": 0,
+                "post_answer_intake_unknown_answer_count": 0,
+                "post_answer_synthetic_autofill_selected_count": 100,
+                "post_answer_synthetic_selector_miss_count": 0,
+                "post_answer_synthetic_final_submit_stop_count": 100,
             },
         }
         report = build_final_answer_blocker_report(template, goal_audit=goal_audit)
@@ -7346,9 +7357,14 @@ class JobApplyAgentTests(unittest.TestCase):
         alert = build_telegram_final_answer_blocker_alert(report)
 
         self.assertFalse(report["ready_for_post_answer_pipeline"])
+        self.assertTrue(report["ready_after_truthful_answer_reply"])
         self.assertEqual(report["summary"]["blocker_count"], 1)
         self.assertEqual(report["summary"]["missing_answer_count"], 0)
         self.assertEqual(report["summary"]["unconfirmed_high_risk_count"], 1)
+        self.assertTrue(report["summary"]["ready_after_truthful_answer_reply"])
+        self.assertTrue(report["automation_after_answers"]["text_reply_rehearsal_ready"])
+        self.assertEqual(report["automation_after_answers"]["synthetic_selected_count"], 100)
+        self.assertEqual(report["automation_after_answers"]["intake_validation"]["answer_count"], 6)
         self.assertEqual(report["blockers"][0]["alias"], "citizenship_status")
         self.assertIn("answer_example_shape", report["blockers"][0])
         self.assertEqual(report["blockers"][0]["observed_prompt_count"], 2)
@@ -7370,6 +7386,10 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Why Not Inferred", markdown)
         self.assertIn("Observed Prompt Examples", markdown)
         self.assertIn("Are you a U.S. Citizen?", markdown)
+        self.assertIn("Ready after truthful answer reply: true", markdown)
+        self.assertIn("## Automation After Answers", markdown)
+        self.assertIn("text reply rehearsal ready: true", markdown)
+        self.assertIn("synthetic packet: selected 100, selector misses 0, final-submit stops 100", markdown)
         self.assertIn("## Reply Template", markdown)
         self.assertIn("citizenship_status\uff1a<fill>", markdown)
         self.assertIn("\u786e\u8ba4", markdown)
@@ -7379,6 +7399,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("citizenship_status seen prompt:", reply_template_text)
         self.assertIn("Final answer reply template", reply_template_text)
         self.assertIn("Job automation needs final answers", alert)
+        self.assertIn("After-answer path ready: yes", alert)
         self.assertIn("citizenship_status", alert)
         self.assertIn("Shape:", alert)
         self.assertIn("Reply format:", alert)
