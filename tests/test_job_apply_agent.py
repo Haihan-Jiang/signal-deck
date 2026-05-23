@@ -11,6 +11,7 @@ from pathlib import Path
 from job_apply_agent.core import (
     CandidateProfile,
     DEFAULT_QUESTIONS,
+    add_synthetic_answers_for_blockers,
     apply_critical_input_answers,
     apply_learning_task_answers,
     build_answer_gap_report,
@@ -52,6 +53,7 @@ from job_apply_agent.core import (
     build_position_readiness_report,
     build_research_coverage_gate,
     build_telegram_job_alert,
+    build_synthetic_learning_state,
     build_synthetic_unblocker_compact_updates,
     classify_application_prompt,
     closed_application_match,
@@ -7172,6 +7174,27 @@ class JobApplyAgentTests(unittest.TestCase):
         )
         self.assertIn("Fake Learning Probe", render_fake_learning_probe_markdown(report))
 
+        synthetic_state = build_synthetic_learning_state(learning_tasks)
+        self.assertFalse(synthetic_state["policy"]["writes_real_profile_or_memory"])
+        self.assertIn("profile", synthetic_state)
+        self.assertIn("answer_memory", synthetic_state)
+        self.assertGreaterEqual(len(synthetic_state["answer_memory"]["answers"]), 2)
+        self.assertIn("resume_path", synthetic_state["profile"]["question_answers"])
+
+        blocker_patch = add_synthetic_answers_for_blockers(
+            synthetic_state["answer_memory"],
+            [
+                {
+                    "label": "Do you have reliability engineering experience related to ClickHouse?",
+                    "category": "domain_experience",
+                }
+            ],
+            source="unit_test_synthetic_rehearsal",
+        )
+        self.assertEqual(blocker_patch["added_count"], 1)
+        self.assertIn("ClickHouse", blocker_patch["added_rows"][0]["label"])
+        self.assertFalse(any("real_platform" in row for row in blocker_patch["added_rows"]))
+
     def test_write_fake_learning_probe_outputs_reports(self) -> None:
         research = {
             "generated_at": "2026-05-22T00:00:00+00:00",
@@ -7987,7 +8010,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertTrue(report["summary"]["synthetic_unblocker_proof_complete"])
         self.assertEqual(report["summary"]["synthetic_final_unblocker_update_count"], 6)
         self.assertEqual(report["confirmed_answer_runbook"][0]["status"], "waiting_for_user")
-        self.assertIn("post-answer-pipeline --synthetic-final-answers", report["next_commands"][0])
+        self.assertIn("post-answer-pipeline --synthetic-final-answers --synthetic-rehearse-queue", report["next_commands"][0])
         self.assertIn("post-answer-pipeline --fail-on-not-ready", report["next_commands"][1])
         self.assertIn("post-answer-pipeline --apply --live-check", report["next_commands"][2])
         self.assertIn("critical-input-unblockers-finalize", report["next_commands"][3])

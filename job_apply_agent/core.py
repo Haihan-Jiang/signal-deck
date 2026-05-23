@@ -11326,6 +11326,126 @@ def build_synthetic_candidate_profile() -> CandidateProfile:
     )
 
 
+def candidate_profile_to_payload(profile: CandidateProfile) -> dict[str, Any]:
+    return {
+        "candidate": {
+            "name": profile.name,
+            "email": profile.email,
+            "phone": profile.phone,
+            "location": profile.location,
+        },
+        "preferences": {
+            "target_titles": profile.target_titles,
+            "target_locations": profile.target_locations,
+            "remote_ok": profile.remote_ok,
+            "keywords": profile.keywords,
+            "blocklist": profile.blocklist,
+            "min_score": profile.min_score,
+        },
+        "resume_facts": dict(profile.resume_facts),
+        "question_answers": dict(profile.question_answers),
+    }
+
+
+def build_synthetic_learning_state(learning_tasks: dict[str, Any]) -> dict[str, Any]:
+    profile, profile_updates = _fake_profile_for_learning_tasks(learning_tasks)
+    memory, memory_summary = _fake_answer_memory_for_learning_tasks(learning_tasks)
+    return {
+        "profile": candidate_profile_to_payload(profile),
+        "answer_memory": memory,
+        "summary": {
+            "profile_update_count": len(profile_updates),
+            "profile_updates": profile_updates,
+            **memory_summary,
+        },
+        "policy": {
+            "uses_fake_candidate_data": True,
+            "submits_real_applications": False,
+            "writes_real_profile_or_memory": False,
+        },
+    }
+
+
+def add_synthetic_answers_for_blockers(
+    answer_memory: dict[str, Any],
+    blockers: list[dict[str, Any]],
+    source: str = "synthetic_blocker_rehearsal",
+) -> dict[str, Any]:
+    memory = {
+        "version": int((answer_memory or {}).get("version") or 1),
+        "answers": [dict(entry) for entry in (answer_memory or {}).get("answers", []) if isinstance(entry, dict)],
+    }
+    existing = {
+        str(entry.get("normalized_question") or "")
+        for entry in memory.get("answers", [])
+        if str(entry.get("normalized_question") or "")
+    }
+    now = datetime.now(timezone.utc).isoformat()
+    added_rows: list[dict[str, Any]] = []
+    for blocker in blockers:
+        if not isinstance(blocker, dict):
+            continue
+        label = str(blocker.get("label") or blocker.get("question") or "").strip()
+        if not label:
+            continue
+        normalized = _normalize_question(label)
+        if not normalized or normalized in existing:
+            continue
+        category = str(blocker.get("category") or "")
+        answer = _synthetic_answer_for_blocker_category(category, label)
+        entry = {
+            "normalized_question": normalized,
+            "sample_question": label,
+            "answer": answer,
+            "approved_count": 1,
+            "source": source,
+            "first_seen_at": now,
+            "last_seen_at": now,
+            "example_job": {
+                "platform": "synthetic",
+                "company": "Synthetic Rehearsal",
+                "title": "Local blocker clearance",
+                "job_id": source,
+            },
+        }
+        memory.setdefault("answers", []).append(entry)
+        existing.add(normalized)
+        added_rows.append(
+            {
+                "label": label,
+                "category": category,
+                "answer": answer,
+                "normalized_question": normalized,
+            }
+        )
+    return {
+        "answer_memory": memory,
+        "added_count": len(added_rows),
+        "added_rows": added_rows,
+        "source": source,
+    }
+
+
+def _synthetic_answer_for_blocker_category(category: str, label: str) -> str:
+    normalized = _normalize(" ".join([category, label]))
+    if "domain experience" in normalized or "experience" in normalized:
+        return (
+            "Synthetic rehearsal answer: yes, the fake candidate has relevant "
+            "hands-on experience for this requirement."
+        )
+    if "database" in normalized or "clickhouse" in normalized or "sql" in normalized:
+        return (
+            "Synthetic rehearsal answer: yes, the fake candidate has production "
+            "database performance and reliability experience."
+        )
+    if "ci cd" in normalized or "pipeline" in normalized:
+        return (
+            "Synthetic rehearsal answer: yes, the fake candidate has built and "
+            "maintained CI/CD delivery pipelines."
+        )
+    return "Synthetic rehearsal answer for local blocker clearance only."
+
+
 def run_synthetic_application_simulation(
     count: int = 100,
     include_values: bool = False,
@@ -12949,8 +13069,8 @@ def _automation_handoff_confirmed_answer_runbook(summary: dict[str, Any]) -> lis
             "step": 2,
             "name": "Run synthetic local rehearsal",
             "status": "ready",
-            "action": "python3 -m job_apply_agent post-answer-pipeline --synthetic-final-answers --fail-on-not-ready",
-            "expected_result": "Fake local answers prove the final-answer gate without writing real profile or answer memory.",
+            "action": "python3 -m job_apply_agent post-answer-pipeline --synthetic-final-answers --synthetic-rehearse-queue --fail-on-not-ready",
+            "expected_result": "Fake local answers prove the final-answer gate and 100-position autofill queue without writing real profile or answer memory.",
         },
         {
             "step": 3,
@@ -13013,7 +13133,7 @@ def _automation_handoff_confirmed_answer_runbook(summary: dict[str, Any]) -> lis
 
 def _automation_handoff_next_commands(summary: dict[str, Any]) -> list[str]:
     commands = [
-        "python3 -m job_apply_agent post-answer-pipeline --synthetic-final-answers --fail-on-not-ready",
+        "python3 -m job_apply_agent post-answer-pipeline --synthetic-final-answers --synthetic-rehearse-queue --fail-on-not-ready",
         "python3 -m job_apply_agent post-answer-pipeline --fail-on-not-ready",
         "python3 -m job_apply_agent post-answer-pipeline --apply --live-check --include-values",
         "python3 -m job_apply_agent critical-input-unblockers-finalize --fail-on-not-ready",

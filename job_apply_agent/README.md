@@ -786,6 +786,13 @@ python3 -m job_apply_agent post-answer-pipeline --synthetic-final-answers --fail
 This writes only `post_answer_pipeline_synthetic_*` outbox artifacts. It cannot
 be combined with `--apply`, `--live-check`, or `--open-browser`.
 
+To also prove the post-answer 100-position queue and supervised autofill packet
+with fake local data, add `--synthetic-rehearse-queue`:
+
+```bash
+python3 -m job_apply_agent post-answer-pipeline --synthetic-final-answers --synthetic-rehearse-queue --fail-on-not-ready
+```
+
 When that reports ready, the same pipeline can apply the approved answers,
 refresh the 100-position queue, run live closed-posting checks, and build the
 value-bearing supervised autofill packet:

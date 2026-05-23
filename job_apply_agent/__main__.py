@@ -6,12 +6,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .core import (
+    add_synthetic_answers_for_blockers,
     apply_critical_input_answers,
     apply_learning_task_answers,
     build_answer_gap_report,
     build_application_draft,
     build_application_research,
     build_position_readiness_report,
+    build_synthetic_learning_state,
     import_candidate_observations,
     load_candidate_rows,
     learn_answers,
@@ -184,6 +186,75 @@ DEFAULT_POST_ANSWER_SYNTHETIC_CONFIRMED_UPDATES_REPORT_JSON = (
 )
 DEFAULT_POST_ANSWER_SYNTHETIC_CONFIRMED_UPDATES_REPORT_MARKDOWN = (
     Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_confirmed_updates_report_latest.md"
+)
+DEFAULT_POST_ANSWER_SYNTHETIC_ANSWERS_JSON = (
+    Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_critical_input_answers_latest.json"
+)
+DEFAULT_POST_ANSWER_SYNTHETIC_ANSWERS_MARKDOWN = (
+    Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_critical_input_answers_latest.md"
+)
+DEFAULT_POST_ANSWER_SYNTHETIC_PROFILE_JSON = (
+    Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_profile_latest.json"
+)
+DEFAULT_POST_ANSWER_SYNTHETIC_MEMORY_JSON = (
+    Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_answer_memory_latest.json"
+)
+DEFAULT_POST_ANSWER_SYNTHETIC_WORKFLOW_JSON = (
+    Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_workflow_latest.json"
+)
+DEFAULT_POST_ANSWER_SYNTHETIC_WORKFLOW_MARKDOWN = (
+    Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_workflow_latest.md"
+)
+DEFAULT_POST_ANSWER_SYNTHETIC_UPDATE_JSON = (
+    Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_update_latest.json"
+)
+DEFAULT_POST_ANSWER_SYNTHETIC_UPDATE_MARKDOWN = (
+    Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_update_latest.md"
+)
+DEFAULT_POST_ANSWER_SYNTHETIC_STATUS_JSON = (
+    Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_status_latest.json"
+)
+DEFAULT_POST_ANSWER_SYNTHETIC_STATUS_MARKDOWN = (
+    Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_status_latest.md"
+)
+DEFAULT_POST_ANSWER_SYNTHETIC_UPDATES_READINESS_JSON = (
+    Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_updates_readiness_latest.json"
+)
+DEFAULT_POST_ANSWER_SYNTHETIC_UPDATES_READINESS_MARKDOWN = (
+    Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_updates_readiness_latest.md"
+)
+DEFAULT_POST_ANSWER_SYNTHETIC_APPLY_QUEUE_JSON = (
+    Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_apply_queue_latest.json"
+)
+DEFAULT_POST_ANSWER_SYNTHETIC_APPLY_QUEUE_MARKDOWN = (
+    Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_apply_queue_latest.md"
+)
+DEFAULT_POST_ANSWER_SYNTHETIC_APPLY_QUEUE_HTML = (
+    Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_apply_queue_latest.html"
+)
+DEFAULT_POST_ANSWER_SYNTHETIC_APPLY_QUEUE_LIVE_CHECK_JOBS = (
+    Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_apply_queue_live_check_jobs_latest.json"
+)
+DEFAULT_POST_ANSWER_SYNTHETIC_HANDOFF_JSON = (
+    Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_handoff_latest.json"
+)
+DEFAULT_POST_ANSWER_SYNTHETIC_HANDOFF_MARKDOWN = (
+    Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_handoff_latest.md"
+)
+DEFAULT_POST_ANSWER_SYNTHETIC_HANDOFF_HTML = (
+    Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_handoff_latest.html"
+)
+DEFAULT_POST_ANSWER_SYNTHETIC_OPEN_READY_JOBS = (
+    Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_open_ready_jobs_latest.json"
+)
+DEFAULT_POST_ANSWER_SYNTHETIC_AUTOFILL_PACKET_JSON = (
+    Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_autofill_packet_latest.json"
+)
+DEFAULT_POST_ANSWER_SYNTHETIC_AUTOFILL_PACKET_MARKDOWN = (
+    Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_autofill_packet_latest.md"
+)
+DEFAULT_POST_ANSWER_SYNTHETIC_AUTOFILL_PACKET_HTML = (
+    Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_autofill_packet_latest.html"
 )
 DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_JSON = Path(__file__).with_name("outbox") / "synthetic_unblocker_proof_latest.json"
 DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_MARKDOWN = (
@@ -733,6 +804,14 @@ def main() -> int:
         help=(
             "use fake final answers for local rehearsal only; cannot be combined "
             "with --apply, --live-check, or --open-browser"
+        ),
+    )
+    post_answer_pipeline_parser.add_argument(
+        "--synthetic-rehearse-queue",
+        action="store_true",
+        help=(
+            "with --synthetic-final-answers, run the post-answer 100-job queue and "
+            "autofill packet rehearsal using fake local data only"
         ),
     )
     post_answer_pipeline_parser.add_argument(
@@ -2793,6 +2872,8 @@ def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
     synthetic_final_answers = bool(args.synthetic_final_answers)
     if synthetic_final_answers and (args.apply or args.live_check or args.open_browser):
         raise ValueError("synthetic final answers cannot be combined with --apply, --live-check, or --open-browser")
+    if args.synthetic_rehearse_queue and not synthetic_final_answers:
+        raise ValueError("synthetic queue rehearsal requires --synthetic-final-answers")
 
     required_paths = [
         ("full updates template", args.full_template),
@@ -2852,6 +2933,7 @@ def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
     live_check = None
     handoff = None
     packet = None
+    synthetic_queue_rehearsal = None
     opened_count = 0
     status = "waiting_for_confirmed_answers"
     if final_report.get("ready_for_workflow"):
@@ -3005,6 +3087,16 @@ def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
                             }
                         )
             status = "ready_for_supervised_autofill" if (packet or {}).get("ready_for_supervised_browser_autofill") else "applied_refresh_complete"
+        elif args.synthetic_rehearse_queue:
+            synthetic_queue_rehearsal = _run_synthetic_post_answer_queue_rehearsal(
+                confirmed_updates_output,
+                steps,
+            )
+            status = (
+                "synthetic_queue_rehearsal_ready"
+                if synthetic_queue_rehearsal.get("ready_for_supervised_browser_autofill")
+                else "synthetic_queue_rehearsal_not_ready"
+            )
 
     report = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -3016,6 +3108,7 @@ def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
         "open_browser_requested": bool(args.open_browser),
         "include_values": bool(args.include_values),
         "synthetic_final_answers": synthetic_final_answers,
+        "synthetic_queue_rehearsal_requested": bool(args.synthetic_rehearse_queue),
         "synthetic_compact_updates_output": synthetic_compact_updates_output,
         "confirmed_updates_output": str(confirmed_updates_output),
         "final_update_report_outputs": {
@@ -3037,6 +3130,7 @@ def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
         "handoff_open_ready": (handoff or {}).get("open_ready_count", 0),
         "autofill_packet_status": (packet or {}).get("status"),
         "autofill_packet_selected": (packet or {}).get("selected_count", 0),
+        "synthetic_queue_rehearsal": synthetic_queue_rehearsal or {},
         "opened_count": opened_count,
         "steps": steps,
         "policy": {
@@ -3047,6 +3141,7 @@ def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
             "final_submit_remains_supervised": True,
             "synthetic_answers_never_written_to_real_profile_or_memory": True,
             "synthetic_answers_forbid_apply_live_check_and_open_browser": True,
+            "synthetic_queue_rehearsal_uses_fake_local_profile_and_memory": True,
         },
     }
     _write_post_answer_pipeline_report(report, args.json_output, args.markdown_output)
@@ -3055,6 +3150,7 @@ def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
     print(f"Status: {report.get('status')}")
     print(f"Ready for workflow: {str(bool(report.get('ready_for_workflow'))).lower()}")
     print(f"Synthetic final answers: {str(synthetic_final_answers).lower()}")
+    print(f"Synthetic queue rehearsal: {(synthetic_queue_rehearsal or {}).get('status') or 'not_built'}")
     print(f"Apply requested: {str(bool(args.apply)).lower()}")
     print(f"Live check requested: {str(bool(args.live_check)).lower()}")
     print(f"Open browser requested: {str(bool(args.open_browser)).lower()}")
@@ -3062,6 +3158,227 @@ def _run_post_answer_pipeline(args: argparse.Namespace) -> int:
     if args.fail_on_not_ready and not report.get("ready_for_workflow"):
         return 2
     return 0
+
+
+def _run_synthetic_post_answer_queue_rehearsal(
+    confirmed_updates_output: str | Path,
+    steps: list[dict[str, object]],
+) -> dict[str, object]:
+    learning_tasks = json.loads(DEFAULT_LEARNING_TASKS_JSON.read_text(encoding="utf-8"))
+    synthetic_state = build_synthetic_learning_state(learning_tasks)
+    profile_payload = synthetic_state.get("profile") or {}
+    memory_payload = synthetic_state.get("answer_memory") or {"version": 1, "answers": []}
+    DEFAULT_POST_ANSWER_SYNTHETIC_PROFILE_JSON.parent.mkdir(parents=True, exist_ok=True)
+    DEFAULT_POST_ANSWER_SYNTHETIC_PROFILE_JSON.write_text(
+        json.dumps(profile_payload, ensure_ascii=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    DEFAULT_POST_ANSWER_SYNTHETIC_MEMORY_JSON.write_text(
+        json.dumps(memory_payload, ensure_ascii=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    answers_payload = json.loads(DEFAULT_CRITICAL_INPUT_ANSWERS_JSON.read_text(encoding="utf-8"))
+    DEFAULT_POST_ANSWER_SYNTHETIC_ANSWERS_JSON.write_text(
+        json.dumps(answers_payload, ensure_ascii=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    confirmed_updates = json.loads(Path(confirmed_updates_output).read_text(encoding="utf-8"))
+    workflow = write_critical_input_answer_workflow(
+        DEFAULT_LEARNING_APPROVAL_PACK_JSON,
+        DEFAULT_POST_ANSWER_SYNTHETIC_ANSWERS_JSON,
+        confirmed_updates,
+        DEFAULT_POST_ANSWER_SYNTHETIC_PROFILE_JSON,
+        DEFAULT_POST_ANSWER_SYNTHETIC_MEMORY_JSON,
+        DEFAULT_POST_ANSWER_SYNTHETIC_WORKFLOW_JSON,
+        DEFAULT_POST_ANSWER_SYNTHETIC_WORKFLOW_MARKDOWN,
+        DEFAULT_POST_ANSWER_SYNTHETIC_UPDATE_JSON,
+        DEFAULT_POST_ANSWER_SYNTHETIC_UPDATE_MARKDOWN,
+        DEFAULT_POST_ANSWER_SYNTHETIC_STATUS_JSON,
+        DEFAULT_POST_ANSWER_SYNTHETIC_STATUS_MARKDOWN,
+        answers_markdown_output=DEFAULT_POST_ANSWER_SYNTHETIC_ANSWERS_MARKDOWN,
+        approve=True,
+        approve_high_risk=True,
+        apply_confirmed=True,
+        allow_partial_apply=False,
+        source="post_answer_pipeline_synthetic_rehearsal",
+    )
+    workflow_summary = workflow.get("summary") or {}
+    synthetic_state_summary = synthetic_state.get("summary") or {}
+    steps.append(
+        {
+            "name": "synthetic_apply_confirmed_answers",
+            "status": "applied_to_fake_local_profile",
+            "details": {
+                "fake_memory_entries": len((memory_payload or {}).get("answers", [])),
+                "fake_profile_updates": synthetic_state_summary.get("profile_update_count", 0),
+                "matched_updates": workflow_summary.get("matched_updates", 0),
+                "applied_profile_updates": workflow_summary.get("applied_profile_updates", 0),
+                "applied_answer_memory_updates": workflow_summary.get("applied_answer_memory_updates", 0),
+            },
+        }
+    )
+    readiness = write_critical_input_updates_readiness(
+        DEFAULT_LEARNING_APPROVAL_PACK_JSON,
+        DEFAULT_POST_ANSWER_SYNTHETIC_ANSWERS_JSON,
+        confirmed_updates_output,
+        DEFAULT_RESEARCH_JSON,
+        DEFAULT_POST_ANSWER_SYNTHETIC_PROFILE_JSON,
+        DEFAULT_POST_ANSWER_SYNTHETIC_MEMORY_JSON,
+        DEFAULT_POST_ANSWER_SYNTHETIC_UPDATES_READINESS_JSON,
+        DEFAULT_POST_ANSWER_SYNTHETIC_UPDATES_READINESS_MARKDOWN,
+        closed_jobs=_load_optional_json(str(DEFAULT_CLOSED_JOBS)),
+    )
+    readiness_summary = readiness.get("summary") or {}
+    if not readiness.get("ready_for_apply") and readiness.get("remaining_data_blockers"):
+        current_memory = json.loads(DEFAULT_POST_ANSWER_SYNTHETIC_MEMORY_JSON.read_text(encoding="utf-8"))
+        blocker_patch = add_synthetic_answers_for_blockers(
+            current_memory,
+            readiness.get("remaining_data_blockers") or [],
+            source="post_answer_pipeline_synthetic_rehearsal",
+        )
+        DEFAULT_POST_ANSWER_SYNTHETIC_MEMORY_JSON.write_text(
+            json.dumps(blocker_patch.get("answer_memory") or {}, ensure_ascii=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        steps.append(
+            {
+                "name": "synthetic_fill_remaining_data_blockers",
+                "status": "added_fake_memory_answers",
+                "details": {
+                    "added": blocker_patch.get("added_count", 0),
+                    "remaining_before": readiness_summary.get("data_blocking_prompts_after", 0),
+                },
+            }
+        )
+        readiness = write_critical_input_updates_readiness(
+            DEFAULT_LEARNING_APPROVAL_PACK_JSON,
+            DEFAULT_POST_ANSWER_SYNTHETIC_ANSWERS_JSON,
+            confirmed_updates_output,
+            DEFAULT_RESEARCH_JSON,
+            DEFAULT_POST_ANSWER_SYNTHETIC_PROFILE_JSON,
+            DEFAULT_POST_ANSWER_SYNTHETIC_MEMORY_JSON,
+            DEFAULT_POST_ANSWER_SYNTHETIC_UPDATES_READINESS_JSON,
+            DEFAULT_POST_ANSWER_SYNTHETIC_UPDATES_READINESS_MARKDOWN,
+            closed_jobs=_load_optional_json(str(DEFAULT_CLOSED_JOBS)),
+        )
+        readiness_summary = readiness.get("summary") or {}
+    steps.append(
+        {
+            "name": "synthetic_critical_updates_readiness",
+            "status": "ready" if readiness.get("ready_for_apply") else "not_ready",
+            "details": {
+                "waiting_after_update": readiness_summary.get("waiting_after_update_count", 0),
+                "data_blockers_after": readiness_summary.get("data_blocking_prompts_after", 0),
+                "unknown_updates": readiness_summary.get("unknown_updates", 0),
+            },
+        }
+    )
+    apply_queue = write_apply_queue_readiness(
+        DEFAULT_AUTOFILL_BATCH_JSON,
+        DEFAULT_POST_ANSWER_SYNTHETIC_UPDATES_READINESS_JSON,
+        DEFAULT_GOAL_AUDIT_JSON,
+        DEFAULT_CLOSED_JOBS,
+        DEFAULT_POST_ANSWER_SYNTHETIC_APPLY_QUEUE_JSON,
+        DEFAULT_POST_ANSWER_SYNTHETIC_APPLY_QUEUE_MARKDOWN,
+        DEFAULT_POST_ANSWER_SYNTHETIC_APPLY_QUEUE_HTML,
+        DEFAULT_POST_ANSWER_SYNTHETIC_APPLY_QUEUE_LIVE_CHECK_JOBS,
+    )
+    steps.append(
+        {
+            "name": "synthetic_apply_queue",
+            "status": apply_queue.get("status"),
+            "details": {
+                "positions": apply_queue.get("position_count", 0),
+                "live_check_jobs": apply_queue.get("live_check_job_count", 0),
+                "ready_for_supervised_autofill": bool(apply_queue.get("ready_for_supervised_autofill")),
+            },
+        }
+    )
+    handoff = None
+    packet = None
+    if DEFAULT_CLOSED_PREFLIGHT_JSON.exists():
+        supplemental_preflights = (
+            [DEFAULT_APPLY_QUEUE_MANUAL_LIVE_CHECK_JSON]
+            if DEFAULT_APPLY_QUEUE_MANUAL_LIVE_CHECK_JSON.exists()
+            else []
+        )
+        handoff = write_apply_queue_handoff(
+            DEFAULT_POST_ANSWER_SYNTHETIC_APPLY_QUEUE_JSON,
+            DEFAULT_CLOSED_PREFLIGHT_JSON,
+            DEFAULT_POST_ANSWER_SYNTHETIC_HANDOFF_JSON,
+            DEFAULT_POST_ANSWER_SYNTHETIC_HANDOFF_MARKDOWN,
+            DEFAULT_POST_ANSWER_SYNTHETIC_HANDOFF_HTML,
+            DEFAULT_POST_ANSWER_SYNTHETIC_OPEN_READY_JOBS,
+            supplemental_preflight_paths=supplemental_preflights,
+        )
+        steps.append(
+            {
+                "name": "synthetic_apply_queue_handoff",
+                "status": handoff.get("status"),
+                "details": {
+                    "open_ready": handoff.get("open_ready_count", 0),
+                    "manual_live_checks": handoff.get("manual_live_check_count", 0),
+                    "closed_or_skipped": handoff.get("closed_or_skipped_count", 0),
+                },
+            }
+        )
+        packet = write_apply_queue_autofill_packet(
+            DEFAULT_RESEARCH_JSON,
+            DEFAULT_POST_ANSWER_SYNTHETIC_HANDOFF_JSON,
+            DEFAULT_POST_ANSWER_SYNTHETIC_PROFILE_JSON,
+            DEFAULT_POST_ANSWER_SYNTHETIC_MEMORY_JSON,
+            DEFAULT_CLOSED_JOBS,
+            DEFAULT_POST_ANSWER_SYNTHETIC_AUTOFILL_PACKET_JSON,
+            DEFAULT_POST_ANSWER_SYNTHETIC_AUTOFILL_PACKET_MARKDOWN,
+            DEFAULT_POST_ANSWER_SYNTHETIC_AUTOFILL_PACKET_HTML,
+            limit=100,
+            target_count=100,
+            include_values=False,
+        )
+        packet_summary = packet.get("summary") or {}
+        steps.append(
+            {
+                "name": "synthetic_supervised_autofill_packet",
+                "status": packet.get("status"),
+                "details": {
+                    "selected": packet.get("selected_count", 0),
+                    "browser_actions": packet_summary.get("browser_action_count", 0),
+                    "selector_misses": packet_summary.get("selector_miss_count", 0),
+                    "final_submit_stops": packet_summary.get("final_submit_stop_count", 0),
+                },
+            }
+        )
+    packet_summary = (packet or {}).get("summary") or {}
+    final_synthetic_memory = json.loads(DEFAULT_POST_ANSWER_SYNTHETIC_MEMORY_JSON.read_text(encoding="utf-8"))
+    ready = bool((packet or {}).get("ready_for_supervised_browser_autofill"))
+    return {
+        "status": "ready_for_supervised_browser_autofill" if ready else "not_ready",
+        "ready_for_supervised_browser_autofill": ready,
+        "writes_real_profile_or_memory": False,
+        "submits_real_applications": False,
+        "opens_browser": False,
+        "runs_live_check": False,
+        "fake_learning_answer_memory_entries": len((final_synthetic_memory or {}).get("answers", [])),
+        "critical_updates_ready": bool(readiness.get("ready_for_apply")),
+        "apply_queue_status": apply_queue.get("status"),
+        "apply_queue_ready_for_supervised_autofill": bool(apply_queue.get("ready_for_supervised_autofill")),
+        "handoff_status": (handoff or {}).get("status"),
+        "handoff_open_ready": (handoff or {}).get("open_ready_count", 0),
+        "autofill_packet_status": (packet or {}).get("status"),
+        "autofill_packet_selected": (packet or {}).get("selected_count", 0),
+        "autofill_packet_browser_actions": packet_summary.get("browser_action_count", 0),
+        "autofill_packet_selector_misses": packet_summary.get("selector_miss_count", 0),
+        "autofill_packet_final_submit_stops": packet_summary.get("final_submit_stop_count", 0),
+        "outputs": {
+            "profile": str(DEFAULT_POST_ANSWER_SYNTHETIC_PROFILE_JSON),
+            "memory": str(DEFAULT_POST_ANSWER_SYNTHETIC_MEMORY_JSON),
+            "workflow": str(DEFAULT_POST_ANSWER_SYNTHETIC_WORKFLOW_JSON),
+            "updates_readiness": str(DEFAULT_POST_ANSWER_SYNTHETIC_UPDATES_READINESS_JSON),
+            "apply_queue": str(DEFAULT_POST_ANSWER_SYNTHETIC_APPLY_QUEUE_JSON),
+            "handoff": str(DEFAULT_POST_ANSWER_SYNTHETIC_HANDOFF_JSON),
+            "autofill_packet": str(DEFAULT_POST_ANSWER_SYNTHETIC_AUTOFILL_PACKET_JSON),
+        },
+    }
 
 
 def _write_post_answer_pipeline_report(
@@ -3088,6 +3405,7 @@ def _render_post_answer_pipeline_markdown(report: dict[str, object]) -> str:
         f"Status: {report.get('status')}",
         f"Ready for workflow: {str(bool(report.get('ready_for_workflow'))).lower()}",
         f"Synthetic final answers: {str(bool(report.get('synthetic_final_answers'))).lower()}",
+        f"Synthetic queue rehearsal: {str(bool(report.get('synthetic_queue_rehearsal_requested'))).lower()}",
         f"Apply requested: {str(bool(report.get('apply_requested'))).lower()}",
         f"Live check requested: {str(bool(report.get('live_check_requested'))).lower()}",
         f"Open browser requested: {str(bool(report.get('open_browser_requested'))).lower()}",
@@ -3100,11 +3418,38 @@ def _render_post_answer_pipeline_markdown(report: dict[str, object]) -> str:
         f"- unconfirmed high-risk answers: {final_summary.get('unconfirmed_high_risk_count', 0)}",
         f"- unknown compact updates: {final_summary.get('unknown_compact_update_count', 0)}",
         "",
-        "## Steps",
+        "## Synthetic Queue Rehearsal",
         "",
-        "| Step | Status | Details |",
-        "| --- | --- | --- |",
     ]
+    synthetic_rehearsal = (
+        report.get("synthetic_queue_rehearsal")
+        if isinstance(report.get("synthetic_queue_rehearsal"), dict)
+        else {}
+    )
+    if synthetic_rehearsal:
+        lines.extend(
+            [
+                f"- status: {synthetic_rehearsal.get('status')}",
+                f"- ready for supervised browser autofill: {str(bool(synthetic_rehearsal.get('ready_for_supervised_browser_autofill'))).lower()}",
+                f"- apply queue status: {synthetic_rehearsal.get('apply_queue_status')}",
+                f"- handoff open ready: {synthetic_rehearsal.get('handoff_open_ready', 0)}",
+                f"- autofill packet: {synthetic_rehearsal.get('autofill_packet_status')}",
+                f"- selected: {synthetic_rehearsal.get('autofill_packet_selected', 0)}",
+                f"- selector misses: {synthetic_rehearsal.get('autofill_packet_selector_misses', 0)}",
+                f"- final-submit stops: {synthetic_rehearsal.get('autofill_packet_final_submit_stops', 0)}",
+            ]
+        )
+    else:
+        lines.append("- not built")
+    lines.extend(
+        [
+            "",
+            "## Steps",
+            "",
+            "| Step | Status | Details |",
+            "| --- | --- | --- |",
+        ]
+    )
     for step in report.get("steps") or []:
         if not isinstance(step, dict):
             continue
@@ -3121,6 +3466,7 @@ def _render_post_answer_pipeline_markdown(report: dict[str, object]) -> str:
             "- Live page checks require `--live-check`.",
             "- Browser opening requires `--open-browser` and still stops before final submit.",
             "- Synthetic final answers cannot be applied, live-checked, or opened in browser.",
+            "- Synthetic queue rehearsal uses fake local profile and memory artifacts.",
         ]
     )
     return "\n".join(lines) + "\n"
