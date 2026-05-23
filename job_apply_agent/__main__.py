@@ -92,6 +92,9 @@ DEFAULT_APPLY_QUEUE_HANDOFF_JSON = Path(__file__).with_name("outbox") / "apply_q
 DEFAULT_APPLY_QUEUE_HANDOFF_MARKDOWN = Path(__file__).with_name("outbox") / "apply_queue_handoff_latest.md"
 DEFAULT_APPLY_QUEUE_HANDOFF_HTML = Path(__file__).with_name("outbox") / "apply_queue_handoff_latest.html"
 DEFAULT_APPLY_QUEUE_OPEN_READY_JOBS = Path(__file__).with_name("outbox") / "apply_queue_open_ready_jobs_latest.json"
+DEFAULT_APPLY_QUEUE_MANUAL_LIVE_CHECK_JSON = (
+    Path(__file__).with_name("outbox") / "apply_queue_manual_live_check_latest.json"
+)
 DEFAULT_AUTOMATION_HANDOFF_JSON = Path(__file__).with_name("outbox") / "automation_handoff_latest.json"
 DEFAULT_AUTOMATION_HANDOFF_MARKDOWN = Path(__file__).with_name("outbox") / "automation_handoff_latest.md"
 DEFAULT_AUTOMATION_HANDOFF_HTML = Path(__file__).with_name("outbox") / "automation_handoff_latest.html"
@@ -388,6 +391,17 @@ def main() -> int:
     apply_queue_handoff_parser.add_argument(
         "--open-ready-jobs-output",
         default=str(DEFAULT_APPLY_QUEUE_OPEN_READY_JOBS),
+    )
+    apply_queue_handoff_parser.add_argument(
+        "--supplemental-closed-preflight-json",
+        action="append",
+        default=[],
+        help="additional closed-preflight JSON to merge, with open/closed checks overriding earlier uncertainty",
+    )
+    apply_queue_handoff_parser.add_argument(
+        "--skip-default-supplemental-preflight",
+        action="store_true",
+        help="do not auto-merge apply_queue_manual_live_check_latest.json when present",
     )
     apply_queue_handoff_parser.add_argument("--open-browser", action="store_true")
     apply_queue_handoff_parser.add_argument("--open-limit", type=int, default=5)
@@ -1502,6 +1516,13 @@ def main() -> int:
         ]:
             if not Path(path_value).exists():
                 raise FileNotFoundError(f"{label} not found: {path_value}")
+        supplemental_preflights = list(args.supplemental_closed_preflight_json or [])
+        if (
+            not args.skip_default_supplemental_preflight
+            and DEFAULT_APPLY_QUEUE_MANUAL_LIVE_CHECK_JSON.exists()
+            and str(DEFAULT_APPLY_QUEUE_MANUAL_LIVE_CHECK_JSON) not in supplemental_preflights
+        ):
+            supplemental_preflights.append(str(DEFAULT_APPLY_QUEUE_MANUAL_LIVE_CHECK_JSON))
         report = write_apply_queue_handoff(
             args.apply_queue_json,
             args.closed_preflight_json,
@@ -1509,6 +1530,7 @@ def main() -> int:
             args.markdown_output,
             args.html_output,
             args.open_ready_jobs_output,
+            supplemental_preflight_paths=supplemental_preflights,
         )
         print(f"Wrote apply queue handoff JSON to {args.json_output}")
         print(f"Wrote apply queue handoff Markdown to {args.markdown_output}")
@@ -1518,6 +1540,8 @@ def main() -> int:
         print(f"Open ready now: {report.get('open_ready_count', 0)}")
         print(f"Open after answers: {report.get('open_after_answers_count', 0)}")
         print(f"Manual live checks: {report.get('manual_live_check_count', 0)}")
+        if supplemental_preflights:
+            print(f"Supplemental preflights: {len(supplemental_preflights)}")
         if args.open_browser:
             if not report.get("ready_for_supervised_open_batch"):
                 print("Open skipped: apply queue handoff is not ready for supervised open batch")
@@ -2649,6 +2673,11 @@ def _refresh_application_automation_reports() -> dict[str, object]:
     )
     apply_queue_handoff = None
     if DEFAULT_CLOSED_PREFLIGHT_JSON.exists():
+        supplemental_preflights = (
+            [DEFAULT_APPLY_QUEUE_MANUAL_LIVE_CHECK_JSON]
+            if DEFAULT_APPLY_QUEUE_MANUAL_LIVE_CHECK_JSON.exists()
+            else []
+        )
         apply_queue_handoff = write_apply_queue_handoff(
             DEFAULT_APPLY_QUEUE_JSON,
             DEFAULT_CLOSED_PREFLIGHT_JSON,
@@ -2656,6 +2685,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             DEFAULT_APPLY_QUEUE_HANDOFF_MARKDOWN,
             DEFAULT_APPLY_QUEUE_HANDOFF_HTML,
             DEFAULT_APPLY_QUEUE_OPEN_READY_JOBS,
+            supplemental_preflight_paths=supplemental_preflights,
         )
     automation_handoff = write_automation_handoff_report(
         goal,

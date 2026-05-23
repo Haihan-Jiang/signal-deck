@@ -282,6 +282,17 @@ keeps uncertain pages out of the open list and can later open only the verified
 jobs with `--open-browser`, recording non-sensitive review rows in
 `browser_review_queue.jsonl`.
 
+If a live check times out, rerun `closed-preflight` for the uncertain rows and
+save the result as:
+
+```text
+job_apply_agent/outbox/apply_queue_manual_live_check_latest.json
+```
+
+`apply-queue-handoff` automatically merges that supplemental report when it
+exists, so a later successful retry can turn an uncertain row into an eligible
+open row without hand-editing the primary preflight report.
+
 To make the 100-position target machine-checkable across real observations and
 synthetic execution evidence:
 

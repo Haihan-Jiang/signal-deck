@@ -9135,6 +9135,7 @@ def write_apply_queue_readiness(
 def build_apply_queue_handoff(
     apply_queue: dict[str, Any],
     closed_preflight: dict[str, Any],
+    supplemental_preflights: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if not isinstance(apply_queue, dict):
         raise ValueError("apply queue must be a JSON object")
@@ -9143,7 +9144,10 @@ def build_apply_queue_handoff(
     positions = [
         position for position in apply_queue.get("positions", []) if isinstance(position, dict)
     ]
-    check_index = _closed_preflight_check_index(closed_preflight)
+    supplemental_preflights = [
+        report for report in (supplemental_preflights or []) if isinstance(report, dict)
+    ]
+    check_index = _closed_preflight_check_index([closed_preflight, *supplemental_preflights])
     rows: list[dict[str, Any]] = []
     open_ready_jobs: list[dict[str, Any]] = []
     open_after_answers_jobs: list[dict[str, Any]] = []
@@ -9190,6 +9194,27 @@ def build_apply_queue_handoff(
         blockers.append("handoff_position_count_below_100")
     if apply_queue_ready and open_ready_count < 100:
         blockers.append("open_ready_count_below_100")
+    preflight_summary = {
+        "source_report_count": 1 + len(supplemental_preflights),
+        "candidate_count": closed_preflight.get("candidate_count", 0),
+        "supplemental_candidate_count": sum(
+            int(report.get("candidate_count") or 0) for report in supplemental_preflights
+        ),
+        "live_checked_count": sum(1 for row in rows if row.get("live_status") != "not_live_checked"),
+        "open_eligible_count": sum(1 for row in rows if row.get("live_open_eligible")),
+        "closed_count": sum(1 for row in rows if row.get("live_closed")),
+        "uncertain_count": sum(
+            1
+            for row in rows
+            if row.get("live_status") != "not_live_checked"
+            and not row.get("live_open_eligible")
+            and not row.get("live_closed")
+        ),
+        "missing_check_count": sum(1 for row in rows if row.get("live_status") == "not_live_checked"),
+        "error_count": sum(1 for row in rows if row.get("live_error")),
+        "status_counts": _count_by(rows, "live_status"),
+        "primary_status_counts": closed_preflight.get("status_counts") or {},
+    }
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source": "apply_queue_handoff",
@@ -9203,15 +9228,7 @@ def build_apply_queue_handoff(
         "open_after_answers_count": len(open_after_answers_jobs),
         "manual_live_check_count": len(manual_live_check_jobs),
         "closed_or_skipped_count": closed_or_skipped_count,
-        "preflight": {
-            "candidate_count": closed_preflight.get("candidate_count", 0),
-            "live_checked_count": closed_preflight.get("live_checked_count", 0),
-            "open_eligible_count": closed_preflight.get("open_eligible_count", 0),
-            "closed_count": closed_preflight.get("closed_count", 0),
-            "uncertain_count": closed_preflight.get("uncertain_count", 0),
-            "error_count": closed_preflight.get("error_count", 0),
-            "status_counts": closed_preflight.get("status_counts") or {},
-        },
+        "preflight": preflight_summary,
         "summary": {
             "apply_queue_status": apply_queue.get("status"),
             "apply_queue_ready_for_supervised_autofill": apply_queue_ready,
@@ -9250,13 +9267,23 @@ def write_apply_queue_handoff(
     markdown_output: str | Path,
     html_output: str | Path,
     open_ready_jobs_output: str | Path,
+    supplemental_preflight_paths: list[str | Path] | None = None,
 ) -> dict[str, Any]:
     apply_queue = _read_json_file(Path(apply_queue_path))
     closed_preflight = _read_json_file(Path(closed_preflight_path))
-    report = build_apply_queue_handoff(apply_queue, closed_preflight)
+    supplemental_preflights = [
+        _read_json_file(Path(path)) for path in (supplemental_preflight_paths or [])
+    ]
+    supplemental_preflights = [report for report in supplemental_preflights if isinstance(report, dict)]
+    report = build_apply_queue_handoff(
+        apply_queue,
+        closed_preflight,
+        supplemental_preflights=supplemental_preflights,
+    )
     report["source_paths"] = {
         "apply_queue": str(apply_queue_path),
         "closed_preflight": str(closed_preflight_path),
+        "supplemental_preflights": [str(path) for path in (supplemental_preflight_paths or [])],
     }
     report["outputs"] = {
         "json": str(json_output),
@@ -9695,24 +9722,43 @@ def _apply_queue_next_commands(ready_for_supervised_autofill: bool, live_check_j
     return commands
 
 
-def _closed_preflight_check_index(closed_preflight: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def _closed_preflight_check_index(
+    closed_preflights: dict[str, Any] | list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    reports = closed_preflights if isinstance(closed_preflights, list) else [closed_preflights]
     index: dict[str, dict[str, Any]] = {}
-    for check in closed_preflight.get("checks") or []:
-        if not isinstance(check, dict):
+    for report in reports:
+        if not isinstance(report, dict):
             continue
-        keys = {
-            str(check.get("key") or ""),
-            str(check.get("job_id") or ""),
-            str(check.get("url") or ""),
-        }
-        url = str(check.get("url") or "")
-        if url:
-            keys.add(f"url:{shorten_apply_url(url, check)}")
-            keys.add(shorten_apply_url(url, check))
-        for key in keys:
-            if key:
-                index.setdefault(key, check)
+        for check in report.get("checks") or []:
+            if not isinstance(check, dict):
+                continue
+            keys = {
+                str(check.get("key") or ""),
+                str(check.get("job_id") or ""),
+                str(check.get("url") or ""),
+            }
+            url = str(check.get("url") or "")
+            if url:
+                keys.add(f"url:{shorten_apply_url(url, check)}")
+                keys.add(shorten_apply_url(url, check))
+            for key in keys:
+                if not key:
+                    continue
+                existing = index.get(key)
+                if existing is None or _closed_preflight_check_rank(check) >= _closed_preflight_check_rank(existing):
+                    index[key] = check
     return index
+
+
+def _closed_preflight_check_rank(check: dict[str, Any]) -> int:
+    if check.get("closed"):
+        return 4
+    if check.get("open_eligible"):
+        return 3
+    if check.get("status") == "check_error":
+        return 1
+    return 2
 
 
 def _apply_queue_handoff_row(

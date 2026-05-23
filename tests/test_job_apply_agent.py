@@ -8220,6 +8220,94 @@ class JobApplyAgentTests(unittest.TestCase):
             jobs_payload = json.loads(jobs_output.read_text(encoding="utf-8"))
             self.assertEqual(len(jobs_payload["jobs"]), 100)
 
+    def test_apply_queue_handoff_supplemental_preflight_overrides_timeout(self) -> None:
+        url = "https://jobs.lever.co/example/retry"
+        apply_queue = {
+            "status": "waiting_for_confirmed_answers",
+            "ready_for_supervised_autofill": False,
+            "position_count": 1,
+            "live_check_job_count": 1,
+            "positions": [
+                {
+                    "index": 1,
+                    "queue_status": "waiting_for_confirmed_answers",
+                    "position_key": f"url:{url}",
+                    "platform": "Lever",
+                    "company": "RetryCo",
+                    "title": "SRE",
+                    "role_family": "SRE",
+                    "apply_url": url,
+                    "final_submit_supervised": True,
+                    "blockers": ["critical_answers_not_ready"],
+                }
+            ],
+        }
+        primary_preflight = {
+            "candidate_count": 1,
+            "live_checked_count": 1,
+            "open_eligible_count": 0,
+            "uncertain_count": 1,
+            "status_counts": {"check_error": 1},
+            "checks": [
+                {
+                    "key": f"url:{url}",
+                    "url": url,
+                    "status": "check_error",
+                    "open_eligible": False,
+                    "closed": False,
+                    "error": "timed out",
+                }
+            ],
+        }
+        retry_preflight = {
+            "candidate_count": 1,
+            "live_checked_count": 1,
+            "open_eligible_count": 1,
+            "uncertain_count": 0,
+            "status_counts": {"open_live_checked": 1},
+            "checks": [
+                {
+                    "key": f"url:{url}",
+                    "url": url,
+                    "status": "open_live_checked",
+                    "open_eligible": True,
+                    "closed": False,
+                }
+            ],
+        }
+
+        report = build_apply_queue_handoff(
+            apply_queue,
+            primary_preflight,
+            supplemental_preflights=[retry_preflight],
+        )
+
+        self.assertEqual(report["open_after_answers_count"], 1)
+        self.assertEqual(report["manual_live_check_count"], 0)
+        self.assertEqual(report["preflight"]["source_report_count"], 2)
+        self.assertEqual(report["preflight"]["open_eligible_count"], 1)
+        self.assertEqual(report["preflight"]["uncertain_count"], 0)
+        self.assertEqual(report["positions"][0]["live_status"], "open_live_checked")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            queue_path = Path(temp_dir) / "queue.json"
+            primary_path = Path(temp_dir) / "primary.json"
+            retry_path = Path(temp_dir) / "retry.json"
+            queue_path.write_text(json.dumps(apply_queue), encoding="utf-8")
+            primary_path.write_text(json.dumps(primary_preflight), encoding="utf-8")
+            retry_path.write_text(json.dumps(retry_preflight), encoding="utf-8")
+            written = write_apply_queue_handoff(
+                queue_path,
+                primary_path,
+                Path(temp_dir) / "handoff.json",
+                Path(temp_dir) / "handoff.md",
+                Path(temp_dir) / "handoff.html",
+                Path(temp_dir) / "open_ready.json",
+                supplemental_preflight_paths=[retry_path],
+            )
+            self.assertEqual(written["preflight"]["open_eligible_count"], 1)
+            self.assertEqual(written["source_paths"]["supplemental_preflights"], [str(retry_path)])
+
     def test_collection_plan_turns_coverage_shortfalls_into_search_tasks(self) -> None:
         gate = {
             "position_target": 100,
