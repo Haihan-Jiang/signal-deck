@@ -8721,7 +8721,24 @@ class JobApplyAgentTests(unittest.TestCase):
                 "unknown_updates": 0,
                 "high_risk_unconfirmed_count": 0,
             },
-            "waiting_rows": [{"input_id": "zip"}, {"input_id": "citizenship"}],
+            "waiting_rows": [
+                {
+                    "input_id": "profile_zip_or_postal_code",
+                    "status": "waiting_for_answer",
+                    "question": "What ZIP/postal code should automation use?",
+                    "input_type": "profile_or_resume_fact",
+                    "approval_risk": "needs_review",
+                    "next_action": "fill user_answer and approve only if truthful and reusable",
+                },
+                {
+                    "input_id": "answer_memory_citizenship_status_default_policy",
+                    "status": "approved_missing_answer",
+                    "question": "What citizenship answers should automation use?",
+                    "input_type": "high_risk_exact_confirmation",
+                    "approval_risk": "high",
+                    "next_action": "fill user_answer before applying",
+                },
+            ],
         }
         fake_critical = {
             "ready_to_apply_count": 10,
@@ -8834,6 +8851,11 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(audit["blocker_summary"]["data_blocking_prompt_count"], 3)
         self.assertEqual(audit["blocker_summary"]["draft_data_blocking_prompt_count_after_updates"], 1)
         self.assertEqual(audit["blocker_summary"]["final_answer_waiting_count_after_drafts"], 2)
+        self.assertEqual(audit["blocker_summary"]["final_answer_waiting_high_risk_count_after_drafts"], 1)
+        self.assertEqual(audit["final_answer_waiting_rows"][0]["alias"], "zip_or_postal_code")
+        self.assertFalse(audit["final_answer_waiting_rows"][0]["high_risk"])
+        self.assertEqual(audit["final_answer_waiting_rows"][1]["alias"], "citizenship_status")
+        self.assertTrue(audit["final_answer_waiting_rows"][1]["high_risk"])
         self.assertEqual(audit["blocker_summary"]["critical_update_entry_count"], 12)
         self.assertEqual(audit["blocker_summary"]["policy_gate_prompt_count"], 4)
         self.assertTrue(audit["blocker_summary"]["real_platform_target_achieved"])
@@ -8891,6 +8913,10 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("real platform submission false", markdown)
         self.assertIn("100-batch local synthetic submits: 100", markdown)
         self.assertIn("final answer blanks after prepared drafts: 2", markdown)
+        self.assertIn("final answer high-risk blanks after prepared drafts: 1", markdown)
+        self.assertIn("Final Answer Blanks", markdown)
+        self.assertIn("zip_or_postal_code", markdown)
+        self.assertIn("citizenship_status", markdown)
         self.assertIn("synthetic final unblocker proof complete: true", markdown)
         self.assertIn("post-answer synthetic queue ready: true", markdown)
         self.assertIn("post-answer synthetic selected: 100, selector misses 0, final-submit stops 100", markdown)

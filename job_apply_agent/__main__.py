@@ -2254,6 +2254,17 @@ def main() -> int:
         summary = audit.get("blocker_summary") or {}
         print(f"Final answer blanks after drafts: {summary.get('final_answer_waiting_count_after_drafts', 0)}")
         print(
+            "Final answer high-risk blanks: "
+            f"{summary.get('final_answer_waiting_high_risk_count_after_drafts', 0)}"
+        )
+        missing_aliases = [
+            str(row.get("alias") or row.get("input_id") or "").strip()
+            for row in audit.get("final_answer_waiting_rows") or []
+            if str(row.get("alias") or row.get("input_id") or "").strip()
+        ]
+        if missing_aliases:
+            print(f"Missing final answer aliases: {', '.join(missing_aliases[:12])}")
+        print(
             "Draft data blockers after updates: "
             f"{summary.get('draft_data_blocking_prompt_count_after_updates', 0)}"
         )

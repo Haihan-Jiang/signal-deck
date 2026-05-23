@@ -14156,6 +14156,12 @@ def build_goal_readiness_audit(
         or len(update_readiness.get("waiting_rows") or [])
         or 0
     )
+    final_answer_waiting_rows = _goal_final_answer_waiting_rows(
+        update_readiness.get("waiting_rows") or []
+    )
+    final_answer_waiting_high_risk_count = sum(
+        1 for row in final_answer_waiting_rows if row.get("high_risk")
+    )
     final_answer_ready_count = int(update_readiness_summary.get("ready_after_update_count") or 0)
     draft_update_entry_count = int(update_readiness_summary.get("update_entry_count") or 0)
     draft_unknown_update_count = int(update_readiness_summary.get("unknown_updates") or 0)
@@ -14496,6 +14502,7 @@ def build_goal_readiness_audit(
             "policy_gate_prompt_count": policy_gate_prompt_count,
             "critical_waiting_count": critical_waiting_count,
             "final_answer_waiting_count_after_drafts": final_answer_waiting_count,
+            "final_answer_waiting_high_risk_count_after_drafts": final_answer_waiting_high_risk_count,
             "critical_update_entry_count": draft_update_entry_count,
             "critical_updates_ready_after_count": final_answer_ready_count,
             "critical_updates_unknown_count": draft_unknown_update_count,
@@ -14573,6 +14580,7 @@ def build_goal_readiness_audit(
         "data_blockers": _goal_coverage_status_rows(coverage_counts, GOAL_DATA_BLOCKER_STATUSES),
         "optional_gaps": _goal_coverage_status_rows(coverage_counts, GOAL_OPTIONAL_GAP_STATUSES),
         "policy_gates": _goal_coverage_status_rows(coverage_counts, GOAL_POLICY_GATE_STATUSES),
+        "final_answer_waiting_rows": final_answer_waiting_rows,
         "top_blocking_prompts": _goal_top_blocking_prompts(gaps),
         "top_data_blocking_prompts": _goal_top_blocking_prompts(
             gaps,
@@ -14675,6 +14683,7 @@ def render_goal_readiness_audit_markdown(audit: dict[str, Any]) -> str:
             f"- policy/manual prompt gates: {summary.get('policy_gate_prompt_count', 0)}",
             f"- critical inputs waiting: {summary.get('critical_waiting_count', 0)}",
             f"- final answer blanks after prepared drafts: {summary.get('final_answer_waiting_count_after_drafts', 0)}",
+            f"- final answer high-risk blanks after prepared drafts: {summary.get('final_answer_waiting_high_risk_count_after_drafts', 0)}",
             f"- critical input draft updates: {summary.get('critical_update_entry_count', 0)}",
             f"- critical supervised-only inputs: {summary.get('critical_supervised_only_count', 0)}",
             f"- manual gates: {summary.get('manual_gate_count', 0)}",
@@ -14732,6 +14741,8 @@ def render_goal_readiness_audit_markdown(audit: dict[str, Any]) -> str:
         ]
     )
     lines.extend(_goal_status_table_lines(audit.get("data_blockers") or []))
+    lines.extend(["", "## Final Answer Blanks", ""])
+    lines.extend(_goal_final_answer_table_lines(audit.get("final_answer_waiting_rows") or []))
     lines.extend(["", "## Top Data-Blocking Prompts", ""])
     lines.extend(_goal_prompt_table_lines(audit.get("top_data_blocking_prompts") or []))
     lines.extend(["", "## Policy Gates", ""])
@@ -14764,6 +14775,63 @@ def _goal_prompt_table_lines(blockers: list[dict[str, Any]]) -> list[str]:
             )
     else:
         lines = ["- None"]
+    return lines
+
+
+def _goal_final_answer_waiting_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    waiting_rows: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        input_id = str(row.get("input_id") or "").strip()
+        question = str(row.get("question") or "").strip()
+        if not input_id and not question:
+            continue
+        input_type = str(row.get("input_type") or "").strip()
+        approval_risk = str(row.get("approval_risk") or "").strip()
+        high_risk = approval_risk.lower() == "high" or input_type.startswith("high_risk")
+        waiting_rows.append(
+            {
+                "alias": _goal_final_answer_alias(input_id),
+                "input_id": input_id,
+                "status": row.get("status") or "waiting_for_answer",
+                "high_risk": high_risk,
+                "approval_risk": approval_risk,
+                "input_type": input_type,
+                "question": question,
+                "next_action": row.get("next_action") or "fill truthful reusable answer",
+            }
+        )
+    return waiting_rows
+
+
+def _goal_final_answer_alias(input_id: str) -> str:
+    if input_id == "profile_zip_or_postal_code":
+        return "zip_or_postal_code"
+    prefix = "answer_memory_"
+    suffix = "_default_policy"
+    if input_id.startswith(prefix) and input_id.endswith(suffix):
+        return input_id[len(prefix) : -len(suffix)]
+    return input_id
+
+
+def _goal_final_answer_table_lines(rows: list[dict[str, Any]]) -> list[str]:
+    if not rows:
+        return ["- None"]
+    lines = [
+        "| Alias | Status | High risk | Question | Next action |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for row in rows:
+        lines.append(
+            "| {alias} | {status} | {high_risk} | {question} | {next_action} |".format(
+                alias=_markdown_cell(row.get("alias")),
+                status=_markdown_cell(row.get("status")),
+                high_risk=str(bool(row.get("high_risk"))).lower(),
+                question=_markdown_cell(row.get("question")),
+                next_action=_markdown_cell(row.get("next_action")),
+            )
+        )
     return lines
 
 
