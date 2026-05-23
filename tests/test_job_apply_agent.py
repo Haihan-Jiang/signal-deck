@@ -10647,6 +10647,43 @@ class JobApplyAgentTests(unittest.TestCase):
                 "remaining_user_answer_count": 2,
             },
         }
+        selected_answer_dependencies = {
+            "status": "waiting_for_truthful_answers_global_gate",
+            "summary": {
+                "target_count": 100,
+                "selected_position_count": 100,
+                "known_unresolved_alias_count": 2,
+                "known_unresolved_aliases": ["zip_or_postal_code", "citizenship_status"],
+                "positions_with_final_answer_dependencies": 0,
+                "direct_dependency_prompt_count": 0,
+                "ready_after_truthful_answers_count": 100,
+                "all_selected_dependencies_accounted_for": True,
+                "unknown_dependency_aliases": [],
+                "global_blockers_not_seen_in_selected_positions": [
+                    "zip_or_postal_code",
+                    "citizenship_status",
+                ],
+            },
+        }
+        submission_safety_audit = {
+            "status": "safe",
+            "safe": True,
+            "issue_count": 0,
+            "warning_count": 1,
+            "summary": {
+                "post_answer_synthetic_queue_ready": True,
+                "post_answer_synthetic_autofill_selected_count": 100,
+                "post_answer_synthetic_selector_miss_count": 0,
+                "post_answer_synthetic_final_submit_stop_count": 100,
+                "apply_packet_selected_count": 100,
+                "apply_packet_final_submit_stop_count": 100,
+            },
+            "checks": [
+                {"id": "post_answer_synthetic_rehearsal_100_ready", "status": "pass"},
+                {"id": "apply_queue_final_submit_stop_coverage", "status": "pass"},
+                {"id": "apply_queue_no_unattended_real_submit", "status": "pass"},
+            ],
+        }
 
         audit = build_goal_readiness_audit(
             coverage_gate,
@@ -10664,6 +10701,8 @@ class JobApplyAgentTests(unittest.TestCase):
             closed_jobs=closed_jobs,
             platform_question_playbook=platform_question_playbook,
             position_execution_audit=position_execution_audit,
+            selected_answer_dependencies=selected_answer_dependencies,
+            submission_safety_audit=submission_safety_audit,
         )
         markdown = render_goal_readiness_audit_markdown(audit)
 
@@ -10680,11 +10719,11 @@ class JobApplyAgentTests(unittest.TestCase):
             audit["completion_verdict"]["blocking_final_answer_aliases"],
             ["zip_or_postal_code", "citizenship_status"],
         )
-        self.assertEqual(audit["completion_verdict"]["satisfied_requirement_count"], 11)
+        self.assertEqual(audit["completion_verdict"]["satisfied_requirement_count"], 13)
         self.assertEqual(audit["completion_verdict"]["blocking_requirement_count"], 1)
         self.assertFalse(audit["completion_verdict"]["real_employer_unattended_submit_allowed"])
         self.assertIn("--reply-stdin", audit["completion_verdict"]["direct_autopilot_command"])
-        self.assertEqual(len(audit["completion_checklist"]), 12)
+        self.assertEqual(len(audit["completion_checklist"]), 14)
         self.assertTrue(audit["completion_checklist"][0]["counts_as_complete"])
         blocking_checklist = [row for row in audit["completion_checklist"] if row["blocking"]]
         self.assertEqual([row["id"] for row in blocking_checklist], ["real_user_answer_learning"])
@@ -10738,6 +10777,20 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(audit["blocker_summary"]["position_execution_target_platform_count"], 2)
         self.assertEqual(audit["blocker_summary"]["position_execution_selected_target_platform_count"], 2)
         self.assertEqual(audit["blocker_summary"]["position_execution_missing_target_platform_count"], 0)
+        self.assertTrue(audit["blocker_summary"]["selected_answer_dependency_ready"])
+        self.assertEqual(audit["blocker_summary"]["selected_answer_dependency_selected_count"], 100)
+        self.assertEqual(audit["blocker_summary"]["selected_answer_dependency_known_alias_count"], 2)
+        self.assertEqual(audit["blocker_summary"]["selected_answer_dependency_unknown_alias_count"], 0)
+        self.assertTrue(audit["blocker_summary"]["selected_answer_dependency_all_accounted_for"])
+        self.assertTrue(audit["blocker_summary"]["submission_safety_ready"])
+        self.assertTrue(audit["blocker_summary"]["submission_safety_safe"])
+        self.assertEqual(audit["blocker_summary"]["submission_safety_issue_count"], 0)
+        self.assertTrue(audit["blocker_summary"]["submission_safety_post_answer_synthetic_rehearsal_100_ready"])
+        self.assertEqual(audit["blocker_summary"]["submission_safety_post_answer_synthetic_selected_count"], 100)
+        self.assertEqual(audit["blocker_summary"]["submission_safety_post_answer_synthetic_selector_miss_count"], 0)
+        self.assertEqual(audit["blocker_summary"]["submission_safety_post_answer_synthetic_final_submit_stop_count"], 100)
+        self.assertTrue(audit["blocker_summary"]["submission_safety_final_submit_stop_coverage"])
+        self.assertTrue(audit["blocker_summary"]["submission_safety_no_unattended_real_submit"])
         self.assertEqual(audit["requirements"][0]["status"], "achieved")
         self.assertEqual(audit["requirements"][0]["evidence"]["latest_preflight_open_eligible"], 100)
         self.assertEqual(audit["requirements"][0]["evidence"]["latest_preflight_uncertain"], 0)
@@ -10771,6 +10824,8 @@ class JobApplyAgentTests(unittest.TestCase):
             closed_jobs=closed_jobs,
             platform_question_playbook=platform_question_playbook,
             position_execution_audit=position_execution_audit,
+            selected_answer_dependencies=selected_answer_dependencies,
+            submission_safety_audit=submission_safety_audit,
         )
         identity_requirement = next(
             item for item in identity_mismatch_audit["requirements"] if item["id"] == "closed_posting_filter"
@@ -10798,6 +10853,8 @@ class JobApplyAgentTests(unittest.TestCase):
             closed_jobs=closed_jobs,
             platform_question_playbook=platform_question_playbook,
             position_execution_audit=position_execution_audit,
+            selected_answer_dependencies=selected_answer_dependencies,
+            submission_safety_audit=submission_safety_audit,
         )
         stale_closed_requirement = next(
             item for item in stale_audit["requirements"] if item["id"] == "closed_posting_filter"
@@ -10827,6 +10884,18 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(position_requirement["evidence"]["target_platform_count"], 2)
         self.assertEqual(position_requirement["evidence"]["selected_target_platform_count"], 2)
         self.assertEqual(position_requirement["evidence"]["missing_target_platform_count"], 0)
+        dependency_requirement = next(
+            item for item in audit["requirements"] if item["id"] == "selected_answer_dependency_map"
+        )
+        self.assertEqual(dependency_requirement["status"], "achieved")
+        self.assertEqual(dependency_requirement["evidence"]["selected_position_count"], 100)
+        self.assertEqual(dependency_requirement["evidence"]["ready_after_truthful_answers_count"], 100)
+        self.assertEqual(dependency_requirement["evidence"]["unknown_dependency_aliases"], [])
+        safety_requirement = next(item for item in audit["requirements"] if item["id"] == "submission_safety_gate")
+        self.assertEqual(safety_requirement["status"], "achieved")
+        self.assertTrue(safety_requirement["evidence"]["post_answer_synthetic_rehearsal_100_ready"])
+        self.assertTrue(safety_requirement["evidence"]["apply_queue_final_submit_stop_coverage"])
+        self.assertTrue(safety_requirement["evidence"]["apply_queue_no_unattended_real_submit"])
         ready_position_execution_audit = json.loads(json.dumps(position_execution_audit))
         ready_position_execution_audit["status"] = "ready_for_supervised_autofill"
         ready_position_execution_audit["summary"]["remaining_user_answer_count"] = 0
@@ -10848,6 +10917,8 @@ class JobApplyAgentTests(unittest.TestCase):
             closed_jobs=closed_jobs,
             platform_question_playbook=platform_question_playbook,
             position_execution_audit=ready_position_execution_audit,
+            selected_answer_dependencies=selected_answer_dependencies,
+            submission_safety_audit=submission_safety_audit,
         )
         self.assertEqual(selected_ready_audit["status"], "selected_100_supervised_autofill_ready")
         self.assertTrue(selected_ready_audit["selected_queue_supervised_autofill_ready"])
@@ -10898,6 +10969,10 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("platform playbook targets at 100: 2/2", markdown)
         self.assertIn("position execution audit ready: true", markdown)
         self.assertIn("position execution audited: 100 / 100", markdown)
+        self.assertIn("selected answer dependency map ready: true", markdown)
+        self.assertIn("selected answer dependency map: waiting_for_truthful_answers_global_gate", markdown)
+        self.assertIn("submission safety ready: true", markdown)
+        self.assertIn("submission safety: safe", markdown)
         self.assertIn("latest live preflight: 100 open / 100 candidates", markdown)
         self.assertIn("identity unverified 0", markdown)
         self.assertIn("Top Data-Blocking Prompts", markdown)
@@ -10926,6 +11001,8 @@ class JobApplyAgentTests(unittest.TestCase):
                 closed_jobs=closed_jobs,
                 platform_question_playbook=platform_question_playbook,
                 position_execution_audit=position_execution_audit,
+                selected_answer_dependencies=selected_answer_dependencies,
+                submission_safety_audit=submission_safety_audit,
             )
 
             self.assertEqual(written["missing_requirement_count"], 1)

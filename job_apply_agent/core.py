@@ -15538,6 +15538,8 @@ def build_goal_readiness_audit(
     closed_jobs: dict[str, Any] | None = None,
     platform_question_playbook: dict[str, Any] | None = None,
     position_execution_audit: dict[str, Any] | None = None,
+    selected_answer_dependencies: dict[str, Any] | None = None,
+    submission_safety_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     coverage_counts = gaps.get("coverage_counts") or {}
     critical_summary = (critical_input_status or {}).get("summary") or {}
@@ -15559,6 +15561,10 @@ def build_goal_readiness_audit(
     playbook_summary = playbook.get("summary") or {}
     position_audit = position_execution_audit or {}
     position_audit_summary = position_audit.get("summary") or {}
+    dependency_report = selected_answer_dependencies or {}
+    dependency_summary = dependency_report.get("summary") or {}
+    safety_audit = submission_safety_audit or {}
+    safety_summary = safety_audit.get("summary") or {}
     synthetic = coverage_gate.get("synthetic") or {}
     readiness_counts = readiness.get("readiness_counts") or {}
     closed_count = _closed_registry_count(closed_jobs)
@@ -15810,12 +15816,59 @@ def build_goal_readiness_audit(
         and position_audit_final_submit_stops >= position_audit_target
         and position_audit_platform_coverage_ready
     )
+    dependency_selected_count = int(dependency_summary.get("selected_position_count") or 0)
+    dependency_known_alias_count = int(dependency_summary.get("known_unresolved_alias_count") or 0)
+    dependency_direct_position_count = int(
+        dependency_summary.get("positions_with_final_answer_dependencies") or 0
+    )
+    dependency_ready_after_answers_count = int(
+        dependency_summary.get("ready_after_truthful_answers_count") or 0
+    )
+    dependency_unknown_aliases = _string_list(dependency_summary.get("unknown_dependency_aliases"))
+    dependency_all_accounted = bool(dependency_summary.get("all_selected_dependencies_accounted_for"))
+    dependency_ready = bool(
+        dependency_report
+        and dependency_selected_count >= 100
+        and dependency_ready_after_answers_count >= 100
+        and not dependency_unknown_aliases
+        and dependency_all_accounted
+    )
+    safety_checks = {
+        str(check.get("id") or ""): str(check.get("status") or "")
+        for check in safety_audit.get("checks") or []
+        if isinstance(check, dict)
+    }
+    safety_issue_count = int(safety_audit.get("issue_count") or 0)
+    safety_warning_count = int(safety_audit.get("warning_count") or 0)
+    safety_safe = bool(safety_audit.get("safe")) and safety_issue_count == 0
+    safety_post_answer_synthetic_selected = int(
+        safety_summary.get("post_answer_synthetic_autofill_selected_count") or 0
+    )
+    safety_post_answer_synthetic_selector_misses = int(
+        safety_summary.get("post_answer_synthetic_selector_miss_count") or 0
+    )
+    safety_post_answer_synthetic_final_submit_stops = int(
+        safety_summary.get("post_answer_synthetic_final_submit_stop_count") or 0
+    )
+    safety_synthetic_rehearsal_ready = safety_checks.get(
+        "post_answer_synthetic_rehearsal_100_ready"
+    ) == "pass"
+    safety_final_submit_stop_ready = safety_checks.get("apply_queue_final_submit_stop_coverage") == "pass"
+    safety_real_submit_blocked = safety_checks.get("apply_queue_no_unattended_real_submit") == "pass"
+    safety_ready = bool(
+        safety_safe
+        and safety_synthetic_rehearsal_ready
+        and safety_final_submit_stop_ready
+        and safety_real_submit_blocked
+    )
     user_answers_ready = data_blocker_count == 0 and critical_waiting_count == 0
     selected_queue_supervised_autofill_ready = bool(
         research_ready
         and synthetic_ready
         and autofill_batch_ready
         and position_audit_ready
+        and dependency_ready
+        and safety_ready
         and position_audit_remaining_answers == 0
         and preflight_ready
         and playbook_ready
@@ -15827,6 +15880,8 @@ def build_goal_readiness_audit(
         and autofill_batch_ready
         and user_answers_ready
         and position_audit_ready
+        and dependency_ready
+        and safety_ready
         and synthetic_selector_misses == 0
     )
     requirements = [
@@ -16010,6 +16065,37 @@ def build_goal_readiness_audit(
             },
         },
         {
+            "id": "selected_answer_dependency_map",
+            "requirement": "Map unresolved final-answer aliases against the selected 100-position queue before resuming real autofill.",
+            "status": "achieved" if dependency_ready else "missing_or_incomplete_report",
+            "evidence": {
+                "status": dependency_report.get("status", ""),
+                "selected_position_count": dependency_selected_count,
+                "known_unresolved_alias_count": dependency_known_alias_count,
+                "positions_with_direct_dependencies": dependency_direct_position_count,
+                "ready_after_truthful_answers_count": dependency_ready_after_answers_count,
+                "unknown_dependency_aliases": dependency_unknown_aliases,
+                "all_selected_dependencies_accounted_for": dependency_all_accounted,
+            },
+        },
+        {
+            "id": "submission_safety_gate",
+            "requirement": "Prove fake rehearsals, post-answer recovery, browser review records, and final-submit stops are safe before any browser opening.",
+            "status": "achieved" if safety_ready else "unsafe_or_missing_safety_audit",
+            "evidence": {
+                "status": safety_audit.get("status", ""),
+                "safe": safety_safe,
+                "issue_count": safety_issue_count,
+                "warning_count": safety_warning_count,
+                "post_answer_synthetic_rehearsal_100_ready": safety_synthetic_rehearsal_ready,
+                "apply_queue_final_submit_stop_coverage": safety_final_submit_stop_ready,
+                "apply_queue_no_unattended_real_submit": safety_real_submit_blocked,
+                "post_answer_synthetic_selected": safety_post_answer_synthetic_selected,
+                "post_answer_synthetic_selector_misses": safety_post_answer_synthetic_selector_misses,
+                "post_answer_synthetic_final_submit_stops": safety_post_answer_synthetic_final_submit_stops,
+            },
+        },
+        {
             "id": "real_user_answer_learning",
             "requirement": "Learn the remaining truthful user answers before real autofill can run unattended through fields.",
             "status": "achieved" if user_answers_ready else "needs_user_answers",
@@ -16176,6 +16262,26 @@ def build_goal_readiness_audit(
             "position_execution_missing_target_platforms": position_audit_summary.get("missing_target_platforms") or [],
             "position_execution_remaining_user_answers": position_audit_remaining_answers,
             "position_execution_global_remaining_user_answers": position_audit_global_remaining_answers,
+            "selected_answer_dependency_ready": dependency_ready,
+            "selected_answer_dependency_status": dependency_report.get("status", ""),
+            "selected_answer_dependency_selected_count": dependency_selected_count,
+            "selected_answer_dependency_known_alias_count": dependency_known_alias_count,
+            "selected_answer_dependency_direct_position_count": dependency_direct_position_count,
+            "selected_answer_dependency_ready_after_truthful_answers_count": dependency_ready_after_answers_count,
+            "selected_answer_dependency_unknown_alias_count": len(dependency_unknown_aliases),
+            "selected_answer_dependency_unknown_aliases": dependency_unknown_aliases,
+            "selected_answer_dependency_all_accounted_for": dependency_all_accounted,
+            "submission_safety_ready": safety_ready,
+            "submission_safety_status": safety_audit.get("status", ""),
+            "submission_safety_safe": safety_safe,
+            "submission_safety_issue_count": safety_issue_count,
+            "submission_safety_warning_count": safety_warning_count,
+            "submission_safety_post_answer_synthetic_rehearsal_100_ready": safety_synthetic_rehearsal_ready,
+            "submission_safety_post_answer_synthetic_selected_count": safety_post_answer_synthetic_selected,
+            "submission_safety_post_answer_synthetic_selector_miss_count": safety_post_answer_synthetic_selector_misses,
+            "submission_safety_post_answer_synthetic_final_submit_stop_count": safety_post_answer_synthetic_final_submit_stops,
+            "submission_safety_final_submit_stop_coverage": safety_final_submit_stop_ready,
+            "submission_safety_no_unattended_real_submit": safety_real_submit_blocked,
             "selected_queue_supervised_autofill_ready": selected_queue_supervised_autofill_ready,
             "supervised_autofill_ready_after_user_answers": supervised_autofill_ready_after_user_answers,
         },
@@ -16223,6 +16329,8 @@ def write_goal_readiness_audit(
     closed_jobs: dict[str, Any] | None = None,
     platform_question_playbook: dict[str, Any] | None = None,
     position_execution_audit: dict[str, Any] | None = None,
+    selected_answer_dependencies: dict[str, Any] | None = None,
+    submission_safety_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     audit = build_goal_readiness_audit(
         coverage_gate,
@@ -16240,6 +16348,8 @@ def write_goal_readiness_audit(
         closed_jobs=closed_jobs,
         platform_question_playbook=platform_question_playbook,
         position_execution_audit=position_execution_audit,
+        selected_answer_dependencies=selected_answer_dependencies,
+        submission_safety_audit=submission_safety_audit,
     )
     json_path = Path(json_output)
     markdown_path = Path(markdown_output)
@@ -16398,6 +16508,27 @@ def render_goal_readiness_audit_markdown(audit: dict[str, Any]) -> str:
             f"final-submit stops {summary.get('position_execution_final_submit_stop_positions', 0)}",
             f"- position execution selected-queue remaining answers: {summary.get('position_execution_remaining_user_answers', 0)}",
             f"- position execution global remaining answers: {summary.get('position_execution_global_remaining_user_answers', 0)}",
+            f"- selected answer dependency map ready: {str(bool(summary.get('selected_answer_dependency_ready'))).lower()}",
+            "- selected answer dependency map: "
+            f"{summary.get('selected_answer_dependency_status', '')}, "
+            f"selected {summary.get('selected_answer_dependency_selected_count', 0)}, "
+            f"known aliases {summary.get('selected_answer_dependency_known_alias_count', 0)}, "
+            f"direct positions {summary.get('selected_answer_dependency_direct_position_count', 0)}, "
+            f"ready after answers {summary.get('selected_answer_dependency_ready_after_truthful_answers_count', 0)}, "
+            f"unknown aliases {summary.get('selected_answer_dependency_unknown_alias_count', 0)}, "
+            f"accounted {str(bool(summary.get('selected_answer_dependency_all_accounted_for'))).lower()}",
+            f"- submission safety ready: {str(bool(summary.get('submission_safety_ready'))).lower()}",
+            "- submission safety: "
+            f"{summary.get('submission_safety_status', '')}, "
+            f"safe {str(bool(summary.get('submission_safety_safe'))).lower()}, "
+            f"issues {summary.get('submission_safety_issue_count', 0)}, "
+            f"warnings {summary.get('submission_safety_warning_count', 0)}, "
+            f"synthetic 100 ready {str(bool(summary.get('submission_safety_post_answer_synthetic_rehearsal_100_ready'))).lower()}, "
+            f"synthetic selected {summary.get('submission_safety_post_answer_synthetic_selected_count', 0)}, "
+            f"selector misses {summary.get('submission_safety_post_answer_synthetic_selector_miss_count', 0)}, "
+            f"final-submit stops {summary.get('submission_safety_post_answer_synthetic_final_submit_stop_count', 0)}, "
+            f"final stops {str(bool(summary.get('submission_safety_final_submit_stop_coverage'))).lower()}, "
+            f"no unattended real submit {str(bool(summary.get('submission_safety_no_unattended_real_submit'))).lower()}",
             "",
             "## Data Blockers",
             "",
