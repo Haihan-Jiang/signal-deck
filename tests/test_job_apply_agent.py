@@ -8529,6 +8529,19 @@ class JobApplyAgentTests(unittest.TestCase):
                     "platform": "Greenhouse",
                     "source_file": "example.json",
                 },
+                {
+                    "label": "Do you have reliability engineering experience related to ClickHouse or another SQL database in production?",
+                    "normalized_label": (
+                        "do you have reliability engineering experience related to clickhouse "
+                        "or another sql database in production"
+                    ),
+                    "category": "domain_experience",
+                    "automation_action": "human_review_required",
+                    "sensitivity": "resume_fact",
+                    "required": True,
+                    "platform": "Greenhouse",
+                    "source_file": "example.json",
+                },
             ],
         }
         learning_tasks = {
@@ -8564,9 +8577,14 @@ class JobApplyAgentTests(unittest.TestCase):
 
         self.assertFalse(report["real_platform_submission"])
         self.assertEqual(report["fake_answered_task_count"], 2)
+        self.assertEqual(report["synthetic_blocker_clearance_added_count"], 1)
         self.assertEqual(report["remaining_learning_blocker_count"], 0)
         self.assertTrue(report["learning_blockers_cleared"])
         self.assertEqual(report["remaining_manual_gate_count"], 1)
+        self.assertIn(
+            "database performance",
+            report["synthetic_blocker_clearance_added_rows"][0]["answer"],
+        )
         self.assertEqual(
             report["after_fake_learning"]["coverage_counts"]["final_submit_confirmation"],
             1,
@@ -8592,6 +8610,7 @@ class JobApplyAgentTests(unittest.TestCase):
         )
         self.assertEqual(blocker_patch["added_count"], 1)
         self.assertIn("ClickHouse", blocker_patch["added_rows"][0]["label"])
+        self.assertIn("database performance", blocker_patch["added_rows"][0]["answer"])
         self.assertFalse(any("real_platform" in row for row in blocker_patch["added_rows"]))
 
     def test_write_fake_learning_probe_outputs_reports(self) -> None:
@@ -9211,6 +9230,18 @@ class JobApplyAgentTests(unittest.TestCase):
                 "autofill_packet_final_submit_stops": 100,
             },
         }
+        fake_learning_probe = {
+            "fake_answered_task_count": 87,
+            "synthetic_blocker_clearance_added_count": 4,
+            "remaining_learning_blocker_count": 0,
+            "remaining_manual_gate_count": 132,
+            "learning_blockers_cleared": True,
+            "real_platform_submission": False,
+            "policy": {
+                "writes_real_profile_or_memory": False,
+                "submits_real_applications": False,
+            },
+        }
         closed_jobs = {"jobs": [{"key": "linkedin:1", "reason": "No longer accepting applications"}]}
         closed_preflight = {
             "candidate_count": 100,
@@ -9256,6 +9287,7 @@ class JobApplyAgentTests(unittest.TestCase):
             readiness,
             critical_input_status=critical_status,
             critical_input_updates_readiness=critical_updates_readiness,
+            fake_learning_probe=fake_learning_probe,
             fake_critical_input_probe=fake_critical,
             fake_position_rehearsal=fake_rehearsal,
             autofill_batch_plan=autofill_batch,
@@ -9302,6 +9334,12 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(audit["blocker_summary"]["post_answer_synthetic_selector_miss_count"], 0)
         self.assertEqual(audit["blocker_summary"]["post_answer_synthetic_final_submit_stop_count"], 100)
         self.assertFalse(audit["blocker_summary"]["post_answer_synthetic_submits_real_applications"])
+        self.assertTrue(audit["blocker_summary"]["fake_learning_blockers_cleared"])
+        self.assertEqual(audit["blocker_summary"]["fake_learning_remaining_blockers"], 0)
+        self.assertEqual(
+            audit["blocker_summary"]["fake_learning_synthetic_blocker_clearance_added_count"],
+            4,
+        )
         self.assertTrue(audit["blocker_summary"]["platform_playbook_ready"])
         self.assertEqual(audit["blocker_summary"]["platform_playbook_target_platforms_at_100"], "2/2")
         self.assertEqual(audit["blocker_summary"]["platform_playbook_selected_position_count"], 100)
@@ -9317,6 +9355,9 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertGreaterEqual(audit["requirements"][0]["evidence"]["closed_regex_count"], 7)
         fake_requirement = next(item for item in audit["requirements"] if item["id"] == "fake_candidate_100_position_rehearsal")
         self.assertTrue(fake_requirement["evidence"]["post_answer_synthetic_queue_rehearsal_ready"])
+        fake_learning_requirement = next(item for item in audit["requirements"] if item["id"] == "fake_learning_blocker_clearance")
+        self.assertEqual(fake_learning_requirement["status"], "achieved")
+        self.assertEqual(fake_learning_requirement["evidence"]["synthetic_blocker_clearance_added_count"], 4)
         playbook_requirement = next(item for item in audit["requirements"] if item["id"] == "platform_question_playbook")
         self.assertEqual(playbook_requirement["status"], "achieved")
         self.assertEqual(playbook_requirement["evidence"]["target_platforms_at_100"], "2/2")
@@ -9336,6 +9377,7 @@ class JobApplyAgentTests(unittest.TestCase):
             readiness,
             critical_input_status=critical_status,
             critical_input_updates_readiness=critical_updates_readiness,
+            fake_learning_probe=fake_learning_probe,
             fake_critical_input_probe=fake_critical,
             fake_position_rehearsal=fake_rehearsal,
             autofill_batch_plan=autofill_batch,
@@ -9376,6 +9418,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("synthetic final unblocker proof complete: true", markdown)
         self.assertIn("post-answer synthetic queue ready: true", markdown)
         self.assertIn("post-answer synthetic selected: 100, selector misses 0, final-submit stops 100", markdown)
+        self.assertIn("fake learning blockers cleared: true", markdown)
+        self.assertIn("fake learning remaining: 0 learnable, 132 manual gates, synthetic additions 4", markdown)
         self.assertIn("platform playbook ready: true", markdown)
         self.assertIn("platform playbook targets at 100: 2/2", markdown)
         self.assertIn("position execution audit ready: true", markdown)
@@ -9396,6 +9440,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 markdown_output,
                 critical_input_status=critical_status,
                 critical_input_updates_readiness=critical_updates_readiness,
+                fake_learning_probe=fake_learning_probe,
                 fake_critical_input_probe=fake_critical,
                 fake_position_rehearsal=fake_rehearsal,
                 autofill_batch_plan=autofill_batch,

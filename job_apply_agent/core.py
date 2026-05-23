@@ -9864,22 +9864,41 @@ def build_fake_learning_probe(
 ) -> dict[str, Any]:
     fake_profile, profile_updates = _fake_profile_for_learning_tasks(learning_tasks)
     fake_memory, answer_summary = _fake_answer_memory_for_learning_tasks(learning_tasks)
-    fake_gaps = build_answer_gap_report(
-        research,
-        profile=fake_profile,
-        answer_memory=fake_memory,
-    )
-    fake_readiness = build_position_readiness_report(research, fake_gaps)
-    remaining_learning = [
-        _fake_probe_prompt_row(item)
-        for item in fake_gaps.get("blocking_prompts", [])
-        if item.get("coverage_status") in _LEARNING_BLOCKER_STATUSES
-    ]
-    remaining_manual = [
-        _fake_probe_prompt_row(item)
-        for item in fake_gaps.get("blocking_prompts", [])
-        if item.get("coverage_status") in _MANUAL_GATE_STATUSES
-    ]
+
+    def compute_probe_state() -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+        gaps = build_answer_gap_report(
+            research,
+            profile=fake_profile,
+            answer_memory=fake_memory,
+        )
+        readiness = build_position_readiness_report(research, gaps)
+        learning_blockers = [
+            _fake_probe_prompt_row(item)
+            for item in gaps.get("blocking_prompts", [])
+            if item.get("coverage_status") in _LEARNING_BLOCKER_STATUSES
+        ]
+        manual_gates = [
+            _fake_probe_prompt_row(item)
+            for item in gaps.get("blocking_prompts", [])
+            if item.get("coverage_status") in _MANUAL_GATE_STATUSES
+        ]
+        return gaps, readiness, learning_blockers, manual_gates
+
+    fake_gaps, fake_readiness, remaining_learning, remaining_manual = compute_probe_state()
+    synthetic_blocker_patch = {
+        "added_count": 0,
+        "added_rows": [],
+        "source": "fake_learning_probe_remaining_blockers",
+    }
+    if remaining_learning:
+        synthetic_blocker_patch = add_synthetic_answers_for_blockers(
+            fake_memory,
+            remaining_learning,
+            source="fake_learning_probe_remaining_blockers",
+        )
+        if synthetic_blocker_patch.get("added_count"):
+            fake_memory = synthetic_blocker_patch["answer_memory"]
+            fake_gaps, fake_readiness, remaining_learning, remaining_manual = compute_probe_state()
     baseline_blocking = int((baseline_gaps or {}).get("blocking_prompt_count") or 0)
     fake_blocking = int(fake_gaps.get("blocking_prompt_count") or 0)
     return {
@@ -9895,6 +9914,11 @@ def build_fake_learning_probe(
         "fake_answered_task_count": answer_summary["answered_task_count"],
         "fake_answer_memory_entry_count": len(fake_memory.get("answers", [])),
         "fake_category_policy_count": answer_summary["category_policy_count"],
+        "synthetic_blocker_clearance_added_count": int(
+            synthetic_blocker_patch.get("added_count") or 0
+        ),
+        "synthetic_blocker_clearance_added_rows": synthetic_blocker_patch.get("added_rows", [])[:100],
+        "synthetic_blocker_clearance_source": synthetic_blocker_patch.get("source", ""),
         "fake_profile_updates": profile_updates,
         "fake_answer_scope_counts": answer_summary["answer_scope_counts"],
         "baseline": {
@@ -13713,20 +13737,30 @@ def add_synthetic_answers_for_blockers(
 
 def _synthetic_answer_for_blocker_category(category: str, label: str) -> str:
     normalized = _normalize(" ".join([category, label]))
-    if "domain experience" in normalized or "experience" in normalized:
-        return (
-            "Synthetic rehearsal answer: yes, the fake candidate has relevant "
-            "hands-on experience for this requirement."
-        )
     if "database" in normalized or "clickhouse" in normalized or "sql" in normalized:
         return (
             "Synthetic rehearsal answer: yes, the fake candidate has production "
             "database performance and reliability experience."
         )
-    if "ci cd" in normalized or "pipeline" in normalized:
+    if (
+        "ci cd" in normalized
+        or "pipeline" in normalized
+        or "model delivery" in normalized
+        or "delivery pipeline" in normalized
+    ):
         return (
             "Synthetic rehearsal answer: yes, the fake candidate has built and "
             "maintained CI/CD delivery pipelines."
+        )
+    if "profiler" in normalized or "profiling" in normalized or "performance tuning" in normalized:
+        return (
+            "Synthetic rehearsal answer: yes, the fake candidate has systems "
+            "performance tuning and profiling experience."
+        )
+    if "domain experience" in normalized or "experience" in normalized:
+        return (
+            "Synthetic rehearsal answer: yes, the fake candidate has relevant "
+            "hands-on experience for this requirement."
         )
     return "Synthetic rehearsal answer for local blocker clearance only."
 
@@ -14306,6 +14340,7 @@ def build_goal_readiness_audit(
     readiness: dict[str, Any],
     critical_input_status: dict[str, Any] | None = None,
     critical_input_updates_readiness: dict[str, Any] | None = None,
+    fake_learning_probe: dict[str, Any] | None = None,
     fake_critical_input_probe: dict[str, Any] | None = None,
     fake_position_rehearsal: dict[str, Any] | None = None,
     autofill_batch_plan: dict[str, Any] | None = None,
@@ -14320,6 +14355,7 @@ def build_goal_readiness_audit(
     critical_summary = (critical_input_status or {}).get("summary") or {}
     update_readiness = critical_input_updates_readiness or {}
     update_readiness_summary = update_readiness.get("summary") or {}
+    fake_learning = fake_learning_probe or {}
     fake_critical = fake_critical_input_probe or {}
     fake_rehearsal = fake_position_rehearsal or {}
     autofill_batch = autofill_batch_plan or {}
@@ -14391,6 +14427,23 @@ def build_goal_readiness_audit(
         or (fake_rehearsal.get("policy") or {}).get("real_platform_submission")
     )
     fake_rehearsal_selector_misses = int(fake_rehearsal.get("selector_miss_count") or 0)
+    fake_learning_remaining_blockers = int(fake_learning.get("remaining_learning_blocker_count") or 0)
+    fake_learning_manual_gates = int(fake_learning.get("remaining_manual_gate_count") or 0)
+    fake_learning_synthetic_added = int(fake_learning.get("synthetic_blocker_clearance_added_count") or 0)
+    fake_learning_real_submit = bool(
+        fake_learning.get("real_platform_submission")
+        or (fake_learning.get("policy") or {}).get("submits_real_applications")
+    )
+    fake_learning_writes_real = bool(
+        (fake_learning.get("policy") or {}).get("writes_real_profile_or_memory")
+    )
+    fake_learning_cleared = bool(
+        fake_learning
+        and fake_learning.get("learning_blockers_cleared")
+        and fake_learning_remaining_blockers == 0
+        and not fake_learning_real_submit
+        and not fake_learning_writes_real
+    )
     synthetic_selector_misses = int(synthetic.get("selector_miss_count") or 0)
     batch_selected = int(autofill_batch.get("selected_count") or 0)
     batch_allowed = int(autofill_batch.get("selected_autofill_allowed_count") or 0)
@@ -14591,6 +14644,20 @@ def build_goal_readiness_audit(
             },
         },
         {
+            "id": "fake_learning_blocker_clearance",
+            "requirement": "Use fake candidate answer memory to prove learnable long-tail blockers can be cleared locally.",
+            "status": "achieved" if fake_learning_cleared else "needs_fake_learning_probe",
+            "evidence": {
+                "fake_answered_task_count": int(fake_learning.get("fake_answered_task_count") or 0),
+                "synthetic_blocker_clearance_added_count": fake_learning_synthetic_added,
+                "remaining_learning_blocker_count": fake_learning_remaining_blockers,
+                "remaining_manual_gate_count": fake_learning_manual_gates,
+                "learning_blockers_cleared": fake_learning_cleared,
+                "real_platform_submission": fake_learning_real_submit,
+                "writes_real_profile_or_memory": fake_learning_writes_real,
+            },
+        },
+        {
             "id": "real_profile_100_position_autofill_batch",
             "requirement": "Build a 100-position queue whose browser-action manifests are ready for supervised autofill.",
             "status": "achieved" if autofill_batch_ready else "needs_autofill_batch",
@@ -14781,6 +14848,12 @@ def build_goal_readiness_audit(
             "post_answer_synthetic_selector_miss_count": post_answer_synthetic_selector_misses,
             "post_answer_synthetic_final_submit_stop_count": post_answer_synthetic_final_submit_stops,
             "post_answer_synthetic_submits_real_applications": post_answer_synthetic_submits_real,
+            "fake_learning_blockers_cleared": fake_learning_cleared,
+            "fake_learning_remaining_blockers": fake_learning_remaining_blockers,
+            "fake_learning_manual_gates": fake_learning_manual_gates,
+            "fake_learning_synthetic_blocker_clearance_added_count": fake_learning_synthetic_added,
+            "fake_learning_real_platform_submission": fake_learning_real_submit,
+            "fake_learning_writes_real_profile_or_memory": fake_learning_writes_real,
             "platform_playbook_ready": playbook_ready,
             "platform_playbook_target_platforms_at_100": f"{playbook_target_met_count}/{playbook_target_count}",
             "platform_playbook_question_item_count": playbook_question_item_count,
@@ -14839,6 +14912,7 @@ def write_goal_readiness_audit(
     markdown_output: str | Path,
     critical_input_status: dict[str, Any] | None = None,
     critical_input_updates_readiness: dict[str, Any] | None = None,
+    fake_learning_probe: dict[str, Any] | None = None,
     fake_critical_input_probe: dict[str, Any] | None = None,
     fake_position_rehearsal: dict[str, Any] | None = None,
     autofill_batch_plan: dict[str, Any] | None = None,
@@ -14855,6 +14929,7 @@ def write_goal_readiness_audit(
         readiness,
         critical_input_status=critical_input_status,
         critical_input_updates_readiness=critical_input_updates_readiness,
+        fake_learning_probe=fake_learning_probe,
         fake_critical_input_probe=fake_critical_input_probe,
         fake_position_rehearsal=fake_position_rehearsal,
         autofill_batch_plan=autofill_batch_plan,
@@ -14950,6 +15025,11 @@ def render_goal_readiness_audit_markdown(audit: dict[str, Any]) -> str:
             f"{summary.get('post_answer_synthetic_autofill_selected_count', 0)}, "
             f"selector misses {summary.get('post_answer_synthetic_selector_miss_count', 0)}, "
             f"final-submit stops {summary.get('post_answer_synthetic_final_submit_stop_count', 0)}",
+            f"- fake learning blockers cleared: {str(bool(summary.get('fake_learning_blockers_cleared'))).lower()}",
+            "- fake learning remaining: "
+            f"{summary.get('fake_learning_remaining_blockers', 0)} learnable, "
+            f"{summary.get('fake_learning_manual_gates', 0)} manual gates, "
+            f"synthetic additions {summary.get('fake_learning_synthetic_blocker_clearance_added_count', 0)}",
             f"- platform playbook ready: {str(bool(summary.get('platform_playbook_ready'))).lower()}",
             f"- platform playbook targets at 100: {summary.get('platform_playbook_target_platforms_at_100', '0/0')}",
             f"- platform playbook question items: {summary.get('platform_playbook_question_item_count', 0)}",
