@@ -701,6 +701,7 @@ def main() -> int:
         "--apply-queue-autofill-packet-json",
         default=str(DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_JSON),
     )
+    automation_handoff_parser.add_argument("--apply-queue-refresh-json", default=str(DEFAULT_APPLY_QUEUE_REFRESH_JSON))
     automation_handoff_parser.add_argument(
         "--position-execution-audit-json",
         default=str(DEFAULT_POSITION_EXECUTION_AUDIT_JSON),
@@ -1793,6 +1794,11 @@ def main() -> int:
         "--apply-queue-autofill-packet-html",
         default=str(DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_HTML),
     )
+    export_questions_parser.add_argument("--apply-queue-refresh-json", default=str(DEFAULT_APPLY_QUEUE_REFRESH_JSON))
+    export_questions_parser.add_argument(
+        "--apply-queue-refresh-markdown",
+        default=str(DEFAULT_APPLY_QUEUE_REFRESH_MARKDOWN),
+    )
     export_questions_parser.add_argument(
         "--position-execution-audit-json",
         default=str(DEFAULT_POSITION_EXECUTION_AUDIT_JSON),
@@ -2126,6 +2132,8 @@ def main() -> int:
                     "Apply queue open-ready jobs": args.apply_queue_open_ready_jobs_json,
                     "Apply queue autofill packet": args.apply_queue_autofill_packet_json,
                     "Apply queue autofill packet HTML": args.apply_queue_autofill_packet_html,
+                    "Apply queue refresh": args.apply_queue_refresh_json,
+                    "Apply queue refresh Markdown": args.apply_queue_refresh_markdown,
                     "Position execution audit": args.position_execution_audit_json,
                     "Position execution audit HTML": args.position_execution_audit_html,
                     "Critical input suggestions": args.critical_input_suggestions_json,
@@ -2161,6 +2169,7 @@ def main() -> int:
             post_answer_pipeline=_load_optional_json(args.post_answer_pipeline_json),
             autofill_batch=_load_optional_json(args.autofill_batch_json),
             apply_queue_handoff=_load_optional_json(args.apply_queue_handoff_json),
+            apply_queue_refresh=_load_optional_json(args.apply_queue_refresh_json),
             automation_handoff=_load_optional_json(args.automation_handoff_json),
             learning_approval_pack=_load_optional_json(args.learning_approval_pack_json),
             answer_memory=_load_optional_json(args.answer_memory_json),
@@ -2523,6 +2532,7 @@ def main() -> int:
             final_answer_intake_update=_load_optional_json(args.final_answer_intake_report_json),
             apply_queue_handoff=_load_optional_json(args.apply_queue_handoff_json),
             apply_queue_autofill_packet=_load_optional_json(args.apply_queue_autofill_packet_json),
+            apply_queue_refresh=_load_optional_json(args.apply_queue_refresh_json),
             position_execution_audit=_load_optional_json(args.position_execution_audit_json),
             source_artifacts=_question_export_source_artifacts(
                 {
@@ -2540,6 +2550,7 @@ def main() -> int:
                     "Final answer blockers Markdown": args.final_answer_blockers_markdown,
                     "Apply queue handoff": args.apply_queue_handoff_json,
                     "Apply queue autofill packet": args.apply_queue_autofill_packet_json,
+                    "Apply queue refresh": args.apply_queue_refresh_json,
                     "Position execution audit": args.position_execution_audit_json,
                     "Position execution audit HTML": args.position_execution_audit_html,
                     "Browser review queue audit": args.review_queue_audit_json,
@@ -2558,6 +2569,8 @@ def main() -> int:
         print(f"Critical waiting: {summary.get('critical_waiting_count', 0)}")
         print(f"Final answer blanks: {summary.get('updates_waiting_after_update_count', 0)}")
         print(f"Open after answers: {summary.get('apply_queue_open_after_answers_count', 0)}")
+        print(f"Queue refresh: {summary.get('apply_queue_refresh_status') or 'missing'}")
+        print(f"Refresh top-up required: {summary.get('apply_queue_refresh_top_up_required_count', 0)}")
         print(f"Autofill packet: {summary.get('autofill_packet_status') or 'missing'}")
         print(f"Autofill selected: {summary.get('autofill_selected_count', 0)}")
         print(f"Position execution audit: {summary.get('position_execution_status') or 'missing'}")
@@ -5378,6 +5391,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
         final_answer_intake_update=_load_optional_json(str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_JSON)),
         apply_queue_handoff=apply_queue_handoff,
         apply_queue_autofill_packet=apply_queue_autofill_packet,
+        apply_queue_refresh=_load_optional_json(str(DEFAULT_APPLY_QUEUE_REFRESH_JSON)),
         position_execution_audit=position_execution_audit,
         source_artifacts=_question_export_source_artifacts(
             {
@@ -5406,6 +5420,8 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                 "Apply queue open-ready jobs": str(DEFAULT_APPLY_QUEUE_OPEN_READY_JOBS),
                 "Apply queue autofill packet": str(DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_JSON),
                 "Apply queue autofill packet HTML": str(DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_HTML),
+                "Apply queue refresh": str(DEFAULT_APPLY_QUEUE_REFRESH_JSON),
+                "Apply queue refresh Markdown": str(DEFAULT_APPLY_QUEUE_REFRESH_MARKDOWN),
                 "Position execution audit": str(DEFAULT_POSITION_EXECUTION_AUDIT_JSON),
                 "Position execution audit HTML": str(DEFAULT_POSITION_EXECUTION_AUDIT_HTML),
                 "Browser review queue audit": str(DEFAULT_REVIEW_QUEUE_AUDIT_JSON),
@@ -5452,6 +5468,8 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                     "Apply queue open-ready jobs": str(DEFAULT_APPLY_QUEUE_OPEN_READY_JOBS),
                     "Apply queue autofill packet": str(DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_JSON),
                     "Apply queue autofill packet HTML": str(DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_HTML),
+                    "Apply queue refresh": str(DEFAULT_APPLY_QUEUE_REFRESH_JSON),
+                    "Apply queue refresh Markdown": str(DEFAULT_APPLY_QUEUE_REFRESH_MARKDOWN),
                     "Position execution audit": str(DEFAULT_POSITION_EXECUTION_AUDIT_JSON),
                     "Position execution audit HTML": str(DEFAULT_POSITION_EXECUTION_AUDIT_HTML),
                     "Browser review queue audit": str(DEFAULT_REVIEW_QUEUE_AUDIT_JSON),
@@ -5490,6 +5508,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             final_answer_intake_update=_load_optional_json(str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_JSON)),
             autofill_batch=_load_optional_json(str(DEFAULT_AUTOFILL_BATCH_JSON)),
             apply_queue_handoff=apply_queue_handoff,
+            apply_queue_refresh=_load_optional_json(str(DEFAULT_APPLY_QUEUE_REFRESH_JSON)),
             automation_handoff=automation_handoff,
             learning_approval_pack=approval_pack,
             answer_memory=_load_optional_json(str(DEFAULT_MEMORY)),

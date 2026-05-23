@@ -14896,6 +14896,7 @@ def build_automation_handoff_report(
     source_artifacts: list[dict[str, Any]] | None = None,
     apply_queue_handoff: dict[str, Any] | None = None,
     apply_queue_autofill_packet: dict[str, Any] | None = None,
+    apply_queue_refresh: dict[str, Any] | None = None,
     position_execution_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     goal = goal_readiness_audit or {}
@@ -14907,6 +14908,8 @@ def build_automation_handoff_report(
     queue_handoff = apply_queue_handoff or {}
     autofill_packet = apply_queue_autofill_packet or {}
     packet_summary = autofill_packet.get("summary") or {}
+    queue_refresh = apply_queue_refresh or {}
+    queue_refresh_final = queue_refresh.get("final") or {}
     execution_audit = position_execution_audit or {}
     execution_summary = execution_audit.get("summary") or {}
     final_intake_update = final_answer_intake_update or {}
@@ -15020,6 +15023,20 @@ def build_automation_handoff_report(
         "apply_queue_open_after_answers_count": int(queue_handoff.get("open_after_answers_count") or 0),
         "apply_queue_manual_live_check_count": int(queue_handoff.get("manual_live_check_count") or 0),
         "apply_queue_closed_or_skipped_count": int(queue_handoff.get("closed_or_skipped_count") or 0),
+        "apply_queue_refresh_status": queue_refresh.get("status", ""),
+        "apply_queue_refresh_round_count": len(queue_refresh.get("rounds") or []),
+        "apply_queue_refresh_live_open_after_answers_count": int(
+            queue_refresh_final.get("live_open_after_answers_count") or 0
+        ),
+        "apply_queue_refresh_top_up_required_count": int(
+            queue_refresh_final.get("top_up_required_count") or 0
+        ),
+        "apply_queue_refresh_manual_live_check_count": int(
+            queue_refresh_final.get("manual_live_check_count") or 0
+        ),
+        "apply_queue_refresh_closed_or_skipped_count": int(
+            queue_refresh_final.get("closed_or_skipped_count") or 0
+        ),
         "autofill_packet_status": autofill_packet.get("status", ""),
         "autofill_packet_ready_now": bool(autofill_packet.get("ready_for_supervised_browser_autofill")),
         "autofill_packet_ready_after_answers": bool(autofill_packet.get("ready_after_confirmed_answers")),
@@ -15111,6 +15128,7 @@ def write_automation_handoff_report(
     source_artifacts: list[dict[str, Any]] | None = None,
     apply_queue_handoff: dict[str, Any] | None = None,
     apply_queue_autofill_packet: dict[str, Any] | None = None,
+    apply_queue_refresh: dict[str, Any] | None = None,
     position_execution_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     report = build_automation_handoff_report(
@@ -15126,6 +15144,7 @@ def write_automation_handoff_report(
         source_artifacts=source_artifacts,
         apply_queue_handoff=apply_queue_handoff,
         apply_queue_autofill_packet=apply_queue_autofill_packet,
+        apply_queue_refresh=apply_queue_refresh,
         position_execution_audit=position_execution_audit,
     )
     json_path = Path(json_output)
@@ -15167,6 +15186,7 @@ def render_automation_handoff_markdown(report: dict[str, Any]) -> str:
         f"- final-answer intake: {summary.get('final_answer_intake_count', 0)} answers, {summary.get('final_answer_intake_high_risk_count', 0)} high-risk, ready for finalize {str(bool(summary.get('final_answer_intake_ready_for_finalize'))).lower()}",
         f"- final-answer blockers: missing {summary.get('final_answer_intake_missing_count', 0)}, unconfirmed high-risk {summary.get('final_answer_intake_unconfirmed_high_risk_count', 0)}, needs specificity {summary.get('final_answer_intake_needs_more_specific_count', 0)}",
         f"- apply queue handoff: {summary.get('apply_queue_handoff_status') or 'missing'}, open ready {summary.get('apply_queue_open_ready_count', 0)}, open after answers {summary.get('apply_queue_open_after_answers_count', 0)}, manual live checks {summary.get('apply_queue_manual_live_check_count', 0)}",
+        f"- apply queue refresh: {summary.get('apply_queue_refresh_status') or 'missing'}, rounds {summary.get('apply_queue_refresh_round_count', 0)}, live open after answers {summary.get('apply_queue_refresh_live_open_after_answers_count', 0)}, top-up required {summary.get('apply_queue_refresh_top_up_required_count', 0)}",
         f"- autofill packet: {summary.get('autofill_packet_status') or 'missing'}, selected {summary.get('autofill_packet_selected_count', 0)}, browser actions {summary.get('autofill_packet_browser_action_count', 0)}, final-submit stops {summary.get('autofill_packet_final_submit_stop_count', 0)}, selector misses {summary.get('autofill_packet_selector_miss_count', 0)}",
         f"- position execution audit: {summary.get('position_execution_status') or 'missing'}, audited {summary.get('position_execution_audited_count', 0)} / {summary.get('position_execution_target_count', 0)}, ready after answers {summary.get('position_execution_ready_after_answers_count', 0)}, selector misses {summary.get('position_execution_selector_miss_count', 0)}",
         "",
@@ -15355,6 +15375,9 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
                     ("Intake specificity", summary.get("final_answer_intake_needs_more_specific_count", 0)),
                     ("Queue handoff", summary.get("apply_queue_handoff_status") or "missing"),
                     ("Open after answers", summary.get("apply_queue_open_after_answers_count", 0)),
+                    ("Queue refresh", summary.get("apply_queue_refresh_status") or "missing"),
+                    ("Refresh open", summary.get("apply_queue_refresh_live_open_after_answers_count", 0)),
+                    ("Top-up required", summary.get("apply_queue_refresh_top_up_required_count", 0)),
                     ("Packet status", summary.get("autofill_packet_status") or "missing"),
                     ("Packet actions", summary.get("autofill_packet_browser_action_count", 0)),
                     ("Final submit stops", summary.get("autofill_packet_final_submit_stop_count", 0)),
@@ -16575,6 +16598,7 @@ def write_question_export(
     post_answer_pipeline: dict[str, Any] | None = None,
     autofill_batch: dict[str, Any] | None = None,
     apply_queue_handoff: dict[str, Any] | None = None,
+    apply_queue_refresh: dict[str, Any] | None = None,
     automation_handoff: dict[str, Any] | None = None,
     learning_approval_pack: dict[str, Any] | None = None,
     answer_memory: dict[str, Any] | None = None,
@@ -16603,6 +16627,7 @@ def write_question_export(
         post_answer_pipeline=post_answer_pipeline,
         autofill_batch=autofill_batch,
         apply_queue_handoff=apply_queue_handoff,
+        apply_queue_refresh=apply_queue_refresh,
         automation_handoff=automation_handoff,
         learning_approval_pack=learning_approval_pack,
         answer_memory=answer_memory,
@@ -17206,6 +17231,7 @@ def build_question_export(
     post_answer_pipeline: dict[str, Any] | None = None,
     autofill_batch: dict[str, Any] | None = None,
     apply_queue_handoff: dict[str, Any] | None = None,
+    apply_queue_refresh: dict[str, Any] | None = None,
     automation_handoff: dict[str, Any] | None = None,
     learning_approval_pack: dict[str, Any] | None = None,
     answer_memory: dict[str, Any] | None = None,
@@ -17260,6 +17286,7 @@ def build_question_export(
     autofill_batch_position_rows = _autofill_batch_position_export_rows(autofill_batch)
     autofill_batch_stop_rows = _autofill_batch_stop_action_export_rows(autofill_batch)
     apply_queue_handoff_rows = _apply_queue_handoff_export_rows(apply_queue_handoff)
+    apply_queue_refresh_rows = _apply_queue_refresh_export_rows(apply_queue_refresh)
     apply_queue_handoff_position_rows = _table_dict_subset_rows(
         (apply_queue_handoff or {}).get("positions") or [],
         [
@@ -17519,6 +17546,17 @@ def build_question_export(
         "apply_queue_handoff_manual_live_check_count": int(
             (apply_queue_handoff or {}).get("manual_live_check_count") or 0
         ),
+        "apply_queue_refresh_status": (apply_queue_refresh or {}).get("status", ""),
+        "apply_queue_refresh_round_count": len((apply_queue_refresh or {}).get("rounds") or []),
+        "apply_queue_refresh_live_open_after_answers_count": int(
+            (((apply_queue_refresh or {}).get("final") or {}).get("live_open_after_answers_count")) or 0
+        ),
+        "apply_queue_refresh_top_up_required_count": int(
+            (((apply_queue_refresh or {}).get("final") or {}).get("top_up_required_count")) or 0
+        ),
+        "apply_queue_refresh_manual_live_check_count": int(
+            (((apply_queue_refresh or {}).get("final") or {}).get("manual_live_check_count")) or 0
+        ),
         "automation_handoff_status": (automation_handoff or {}).get("status", ""),
         "automation_handoff_answer_queue_count": len(automation_handoff_answer_rows),
         "automation_handoff_missing_profile_input_count": len(automation_handoff_profile_rows),
@@ -17552,6 +17590,7 @@ def build_question_export(
         "autofill_batch_positions": autofill_batch_position_rows,
         "autofill_batch_stop_actions": autofill_batch_stop_rows,
         "apply_queue_handoff": apply_queue_handoff_rows,
+        "apply_queue_refresh": apply_queue_refresh_rows,
         "apply_queue_handoff_positions": apply_queue_handoff_position_rows,
         "automation_handoff": automation_handoff_rows,
         "automation_handoff_requirements": automation_handoff_requirement_rows,
@@ -17753,6 +17792,14 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                     summary.get("autofill_batch_selector_miss_count", 0),
                 ],
                 [
+                    "Apply queue refresh",
+                    "{status}; live-open {open}; top-up {topup}".format(
+                        status=summary.get("apply_queue_refresh_status") or "missing",
+                        open=summary.get("apply_queue_refresh_live_open_after_answers_count", 0),
+                        topup=summary.get("apply_queue_refresh_top_up_required_count", 0),
+                    ),
+                ],
+                [
                     "Fake observed-position submit count",
                     "{count} / {target}".format(
                         count=summary.get("fake_position_rehearsal_submit_count", 0),
@@ -17787,6 +17834,13 @@ def render_question_export_html(export: dict[str, Any]) -> str:
             [
                 [row.get("section"), row.get("metric"), row.get("value")]
                 for row in export.get("automation_handoff", [])
+            ],
+        ),
+        _html_table(
+            ["Section", "Metric", "Value"],
+            [
+                [row.get("section"), row.get("metric"), row.get("value")]
+                for row in export.get("apply_queue_refresh", [])
             ],
         ),
         _html_table(
@@ -26690,6 +26744,30 @@ def _apply_queue_handoff_export_rows(
     return rows
 
 
+def _apply_queue_refresh_export_rows(
+    apply_queue_refresh: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if not apply_queue_refresh:
+        return []
+    final = apply_queue_refresh.get("final") or {}
+    rows = [
+        {"section": "summary", "metric": "status", "value": apply_queue_refresh.get("status")},
+        {"section": "summary", "metric": "skip_live_check", "value": apply_queue_refresh.get("skip_live_check")},
+        {"section": "summary", "metric": "max_rounds", "value": apply_queue_refresh.get("max_rounds")},
+    ]
+    for key, value in sorted(final.items()):
+        rows.append({"section": "final", "metric": key, "value": value})
+    for round_row in apply_queue_refresh.get("rounds") or []:
+        if not isinstance(round_row, dict):
+            continue
+        round_index = round_row.get("round")
+        for key, value in sorted(round_row.items()):
+            rows.append({"section": f"round_{round_index}", "metric": key, "value": value})
+    for key, value in sorted((apply_queue_refresh.get("policy") or {}).items()):
+        rows.append({"section": "policy", "metric": key, "value": value})
+    return rows
+
+
 def _automation_handoff_export_rows(
     automation_handoff: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
@@ -27163,6 +27241,7 @@ def _write_question_export_xlsx(export: dict[str, Any], path: Path) -> None:
         ("Autofill Batch Positions", _table_rows(export.get("autofill_batch_positions", []))),
         ("Autofill Batch Stops", _table_rows(export.get("autofill_batch_stop_actions", []))),
         ("Apply Queue Handoff", _table_rows(export.get("apply_queue_handoff", []))),
+        ("Apply Queue Refresh", _table_rows(export.get("apply_queue_refresh", []))),
         ("Apply Queue Handoff Positions", _table_rows(export.get("apply_queue_handoff_positions", []))),
         ("Automation Handoff", _table_rows(export.get("automation_handoff", []))),
         ("Handoff Requirements", _table_rows(export.get("automation_handoff_requirements", []))),

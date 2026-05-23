@@ -9069,6 +9069,16 @@ class JobApplyAgentTests(unittest.TestCase):
                 "local_synthetic_submit_count": 100,
             },
         }
+        apply_queue_refresh = {
+            "status": "queue_refreshed",
+            "rounds": [{"round": 1, "live_check_status": "checked", "top_up_required": 0}],
+            "final": {
+                "live_open_after_answers_count": 100,
+                "top_up_required_count": 0,
+                "manual_live_check_count": 0,
+                "closed_or_skipped_count": 0,
+            },
+        }
         position_execution_audit = {
             "status": "ready_after_confirmed_answers",
             "summary": {
@@ -9140,6 +9150,7 @@ class JobApplyAgentTests(unittest.TestCase):
             closed_jobs=closed_jobs,
             apply_queue_handoff=apply_queue_handoff,
             apply_queue_autofill_packet=apply_queue_autofill_packet,
+            apply_queue_refresh=apply_queue_refresh,
             position_execution_audit=position_execution_audit,
         )
         markdown = render_automation_handoff_markdown(report)
@@ -9154,6 +9165,9 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertTrue(report["summary"]["individual_impact_truncated"])
         self.assertEqual(report["summary"]["closed_registry_count"], 1)
         self.assertEqual(report["summary"]["apply_queue_open_after_answers_count"], 100)
+        self.assertEqual(report["summary"]["apply_queue_refresh_status"], "queue_refreshed")
+        self.assertEqual(report["summary"]["apply_queue_refresh_live_open_after_answers_count"], 100)
+        self.assertEqual(report["summary"]["apply_queue_refresh_top_up_required_count"], 0)
         self.assertEqual(report["summary"]["autofill_packet_browser_action_count"], 101)
         self.assertEqual(report["summary"]["autofill_packet_final_submit_stop_count"], 100)
         self.assertEqual(report["summary"]["position_execution_audited_count"], 100)
@@ -9196,6 +9210,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("data blockers after simulated confirmations: 12", markdown)
         self.assertIn("local synthetic submit proof: 100 submits", markdown)
         self.assertIn("synthetic final unblocker proof: true", markdown)
+        self.assertIn("apply queue refresh: queue_refreshed", markdown)
         self.assertIn("autofill packet: waiting_for_confirmed_answers", markdown)
         self.assertIn("Confirmed-Answer Runbook", markdown)
         self.assertIn("One-Command Resume", markdown)
@@ -9208,6 +9223,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("position execution audit: ready_after_confirmed_answers", markdown)
         self.assertIn("100-Position Execution Audit", markdown)
         self.assertIn("GitHub URL", html)
+        self.assertIn("Queue refresh", html)
         self.assertIn("Confirmed-Answer Runbook", html)
         self.assertIn("One-Command Resume", html)
         self.assertIn("Final-Answer Intake", html)
@@ -9231,6 +9247,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 closed_jobs=closed_jobs,
                 apply_queue_handoff=apply_queue_handoff,
                 apply_queue_autofill_packet=apply_queue_autofill_packet,
+                apply_queue_refresh=apply_queue_refresh,
                 position_execution_audit=position_execution_audit,
             )
             self.assertEqual(written["status"], "waiting_for_confirmed_answers")
@@ -11956,6 +11973,26 @@ class JobApplyAgentTests(unittest.TestCase):
                 }
             ],
         }
+        apply_queue_refresh = {
+            "status": "queue_refreshed",
+            "skip_live_check": False,
+            "max_rounds": 3,
+            "rounds": [
+                {
+                    "round": 1,
+                    "live_check_status": "checked",
+                    "live_open_after_answers_count": 1,
+                    "top_up_required": 0,
+                }
+            ],
+            "final": {
+                "live_open_after_answers_count": 1,
+                "top_up_required_count": 0,
+                "manual_live_check_count": 0,
+                "closed_or_skipped_count": 0,
+            },
+            "policy": {"skip_closed_jobs": True},
+        }
 
         export = build_question_export(
             gaps,
@@ -11978,6 +12015,7 @@ class JobApplyAgentTests(unittest.TestCase):
             post_answer_pipeline=post_answer_pipeline,
             autofill_batch=autofill_batch,
             apply_queue_handoff=apply_queue_handoff,
+            apply_queue_refresh=apply_queue_refresh,
             automation_handoff=automation_handoff,
             answer_memory=answer_memory,
             closed_jobs=closed_jobs,
@@ -12007,6 +12045,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("waiting_for_answers", html)
         self.assertIn("Autofill Batch", html)
         self.assertIn("Apply Queue Handoff", html)
+        self.assertIn("Apply queue refresh", html)
+        self.assertIn("queue_refreshed", html)
         self.assertIn("waiting_for_answers_before_open", html)
         self.assertIn("Automation Handoff", html)
         self.assertIn("review_suggestion_then_approve_or_replace", html)
@@ -12065,6 +12105,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 post_answer_pipeline=post_answer_pipeline,
                 autofill_batch=autofill_batch,
                 apply_queue_handoff=apply_queue_handoff,
+                apply_queue_refresh=apply_queue_refresh,
                 automation_handoff=automation_handoff,
                 answer_memory=answer_memory,
                 closed_jobs=closed_jobs,
@@ -12089,6 +12130,9 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(result["summary"]["autofill_batch_selected_count"], 1)
             self.assertEqual(result["summary"]["apply_queue_handoff_status"], "waiting_for_confirmed_answers")
             self.assertEqual(result["summary"]["apply_queue_handoff_open_after_answers_count"], 1)
+            self.assertEqual(result["summary"]["apply_queue_refresh_status"], "queue_refreshed")
+            self.assertEqual(result["summary"]["apply_queue_refresh_live_open_after_answers_count"], 1)
+            self.assertEqual(result["summary"]["apply_queue_refresh_top_up_required_count"], 0)
             self.assertEqual(result["summary"]["automation_handoff_status"], "waiting_for_confirmed_answers")
             self.assertEqual(result["summary"]["automation_handoff_answer_queue_count"], 1)
             self.assertEqual(result["summary"]["answer_memory_count"], 1)
@@ -12113,6 +12157,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 self.assertIn("xl/worksheets/sheet43.xml", names)
                 self.assertIn("xl/worksheets/sheet44.xml", names)
                 self.assertIn("xl/worksheets/sheet45.xml", names)
+                self.assertIn("xl/worksheets/sheet46.xml", names)
                 critical_inputs = workbook.read("xl/worksheets/sheet2.xml").decode("utf-8")
                 self.assertIn("exact_prompt_answer", critical_inputs)
                 self.assertIn("user_answer", critical_inputs)
@@ -12141,45 +12186,48 @@ class JobApplyAgentTests(unittest.TestCase):
                 self.assertIn("Submit application", autofill_stops)
                 apply_queue_handoff_sheet = workbook.read("xl/worksheets/sheet16.xml").decode("utf-8")
                 self.assertIn("open_after_answers_count", apply_queue_handoff_sheet)
-                apply_queue_handoff_positions = workbook.read("xl/worksheets/sheet17.xml").decode("utf-8")
+                apply_queue_refresh_sheet = workbook.read("xl/worksheets/sheet17.xml").decode("utf-8")
+                self.assertIn("queue_refreshed", apply_queue_refresh_sheet)
+                self.assertIn("live_open_after_answers_count", apply_queue_refresh_sheet)
+                apply_queue_handoff_positions = workbook.read("xl/worksheets/sheet18.xml").decode("utf-8")
                 self.assertIn("waiting_for_answers_before_open", apply_queue_handoff_positions)
-                handoff_sheet = workbook.read("xl/worksheets/sheet18.xml").decode("utf-8")
+                handoff_sheet = workbook.read("xl/worksheets/sheet19.xml").decode("utf-8")
                 self.assertIn("waiting_for_confirmed_answers", handoff_sheet)
-                handoff_answer_queue = workbook.read("xl/worksheets/sheet20.xml").decode("utf-8")
+                handoff_answer_queue = workbook.read("xl/worksheets/sheet21.xml").decode("utf-8")
                 self.assertIn("profile_zip_or_postal_code", handoff_answer_queue)
-                handoff_stop_summary = workbook.read("xl/worksheets/sheet21.xml").decode("utf-8")
+                handoff_stop_summary = workbook.read("xl/worksheets/sheet22.xml").decode("utf-8")
                 self.assertIn("final_submit_confirmation", handoff_stop_summary)
-                problem_buckets = workbook.read("xl/worksheets/sheet23.xml").decode("utf-8")
+                problem_buckets = workbook.read("xl/worksheets/sheet24.xml").decode("utf-8")
                 self.assertIn("needs_user_confirmation", problem_buckets)
-                user_questions = workbook.read("xl/worksheets/sheet24.xml").decode("utf-8")
+                user_questions = workbook.read("xl/worksheets/sheet25.xml").decode("utf-8")
                 self.assertIn("Have you worked at DoorDash?", user_questions)
-                platform_role_summary = workbook.read("xl/worksheets/sheet28.xml").decode("utf-8")
+                platform_role_summary = workbook.read("xl/worksheets/sheet29.xml").decode("utf-8")
                 self.assertIn("Software Backend", platform_role_summary)
-                platform_role_blockers = workbook.read("xl/worksheets/sheet29.xml").decode("utf-8")
+                platform_role_blockers = workbook.read("xl/worksheets/sheet30.xml").decode("utf-8")
                 self.assertIn("Have you worked at DoorDash?", platform_role_blockers)
-                platform_shortfalls = workbook.read("xl/worksheets/sheet31.xml").decode("utf-8")
+                platform_shortfalls = workbook.read("xl/worksheets/sheet32.xml").decode("utf-8")
                 self.assertIn("Greenhouse", platform_shortfalls)
-                closed_postings = workbook.read("xl/worksheets/sheet36.xml").decode("utf-8")
+                closed_postings = workbook.read("xl/worksheets/sheet37.xml").decode("utf-8")
                 self.assertIn("No longer accepting applications", closed_postings)
-                approval_buckets = workbook.read("xl/worksheets/sheet37.xml").decode("utf-8")
+                approval_buckets = workbook.read("xl/worksheets/sheet38.xml").decode("utf-8")
                 self.assertIn("exact_prompt_answer", approval_buckets)
-                approval_tasks = workbook.read("xl/worksheets/sheet38.xml").decode("utf-8")
+                approval_tasks = workbook.read("xl/worksheets/sheet39.xml").decode("utf-8")
                 self.assertIn("Have you worked at DoorDash?", approval_tasks)
-                goal_audit = workbook.read("xl/worksheets/sheet40.xml").decode("utf-8")
+                goal_audit = workbook.read("xl/worksheets/sheet41.xml").decode("utf-8")
                 self.assertIn("needs_user_answers", goal_audit)
-                critical_suggestions = workbook.read("xl/worksheets/sheet41.xml").decode("utf-8")
+                critical_suggestions = workbook.read("xl/worksheets/sheet42.xml").decode("utf-8")
                 self.assertIn("profile_zip_or_postal_code", critical_suggestions)
-                profile_snapshot = workbook.read("xl/worksheets/sheet42.xml").decode("utf-8")
+                profile_snapshot = workbook.read("xl/worksheets/sheet43.xml").decode("utf-8")
                 self.assertIn("minimum_compensation_usd", profile_snapshot)
                 self.assertIn("configured; redacted in export", profile_snapshot)
                 self.assertNotIn("example@example.com", profile_snapshot)
-                final_unblockers = workbook.read("xl/worksheets/sheet43.xml").decode("utf-8")
+                final_unblockers = workbook.read("xl/worksheets/sheet44.xml").decode("utf-8")
                 self.assertIn("profile_zip_or_postal_code", final_unblockers)
                 self.assertIn("Provide exact ZIP/postal code.", final_unblockers)
-                post_answer = workbook.read("xl/worksheets/sheet44.xml").decode("utf-8")
+                post_answer = workbook.read("xl/worksheets/sheet45.xml").decode("utf-8")
                 self.assertIn("waiting_for_confirmed_answers", post_answer)
                 self.assertIn("missing_unblocker_count", post_answer)
-                final_answer_intake = workbook.read("xl/worksheets/sheet45.xml").decode("utf-8")
+                final_answer_intake = workbook.read("xl/worksheets/sheet46.xml").decode("utf-8")
                 self.assertIn("zip_or_postal_code", final_answer_intake)
                 self.assertIn("waiting_for_answer", final_answer_intake)
                 self.assertIn("[ZIP_CODE]", final_answer_intake)
