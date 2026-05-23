@@ -23,6 +23,7 @@ from .core import (
     notify_telegram_for_submissions,
     open_apply_urls_in_browser,
     record_closed_job,
+    render_critical_input_answer_workflow_markdown,
     refresh_closed_jobs_from_live_pages,
     run_pipeline,
     write_answer_gap_report,
@@ -36,6 +37,7 @@ from .core import (
     write_browser_dom_harness,
     write_closed_posting_preflight,
     write_collection_plan,
+    write_critical_input_answer_workflow,
     write_critical_input_answer_update,
     write_form_fill_plan,
     write_fake_learning_probe,
@@ -95,6 +97,8 @@ DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON = Path(__file__).with_name("outbox") / "
 DEFAULT_CRITICAL_INPUT_SUGGESTIONS_MARKDOWN = Path(__file__).with_name("outbox") / "critical_input_suggestions_latest.md"
 DEFAULT_CRITICAL_INPUT_UPDATE_JSON = Path(__file__).with_name("outbox") / "critical_input_update_latest.json"
 DEFAULT_CRITICAL_INPUT_UPDATE_MARKDOWN = Path(__file__).with_name("outbox") / "critical_input_update_latest.md"
+DEFAULT_CRITICAL_INPUT_WORKFLOW_JSON = Path(__file__).with_name("outbox") / "critical_input_workflow_latest.json"
+DEFAULT_CRITICAL_INPUT_WORKFLOW_MARKDOWN = Path(__file__).with_name("outbox") / "critical_input_workflow_latest.md"
 DEFAULT_FAKE_CRITICAL_INPUT_PROBE_JSON = Path(__file__).with_name("outbox") / "fake_critical_input_probe_latest.json"
 DEFAULT_FAKE_CRITICAL_INPUT_PROBE_MARKDOWN = Path(__file__).with_name("outbox") / "fake_critical_input_probe_latest.md"
 DEFAULT_FAKE_CRITICAL_INPUT_ANSWERS_JSON = Path(__file__).with_name("outbox") / "fake_critical_input_answers_latest.json"
@@ -438,6 +442,51 @@ def main() -> int:
         "--approve-high-risk",
         action="store_true",
         help="also approve high-risk rows supplied in this update",
+    )
+
+    critical_inputs_workflow_parser = subparsers.add_parser(
+        "critical-inputs-workflow",
+        help="merge confirmed critical answers, dry-run apply, optionally apply, then refresh reports",
+    )
+    critical_inputs_workflow_parser.add_argument("--approval-pack", default=str(DEFAULT_LEARNING_APPROVAL_PACK_JSON))
+    critical_inputs_workflow_parser.add_argument("--answers", default=str(DEFAULT_CRITICAL_INPUT_ANSWERS_JSON))
+    critical_inputs_workflow_parser.add_argument(
+        "--answers-markdown-output",
+        default=str(DEFAULT_CRITICAL_INPUT_ANSWERS_MARKDOWN),
+    )
+    critical_inputs_workflow_parser.add_argument("--updates", required=True)
+    critical_inputs_workflow_parser.add_argument(
+        "--profile",
+        default=str(DEFAULT_PERSONAL_PROFILE if DEFAULT_PERSONAL_PROFILE.exists() else DEFAULT_PROFILE),
+    )
+    critical_inputs_workflow_parser.add_argument("--memory", default=str(DEFAULT_MEMORY))
+    critical_inputs_workflow_parser.add_argument("--source", default="confirmed_critical_inputs")
+    critical_inputs_workflow_parser.add_argument("--json-output", default=str(DEFAULT_CRITICAL_INPUT_WORKFLOW_JSON))
+    critical_inputs_workflow_parser.add_argument(
+        "--markdown-output",
+        default=str(DEFAULT_CRITICAL_INPUT_WORKFLOW_MARKDOWN),
+    )
+    critical_inputs_workflow_parser.add_argument("--update-json-output", default=str(DEFAULT_CRITICAL_INPUT_UPDATE_JSON))
+    critical_inputs_workflow_parser.add_argument(
+        "--update-markdown-output",
+        default=str(DEFAULT_CRITICAL_INPUT_UPDATE_MARKDOWN),
+    )
+    critical_inputs_workflow_parser.add_argument("--status-json-output", default=str(DEFAULT_CRITICAL_INPUT_STATUS_JSON))
+    critical_inputs_workflow_parser.add_argument(
+        "--status-markdown-output",
+        default=str(DEFAULT_CRITICAL_INPUT_STATUS_MARKDOWN),
+    )
+    critical_inputs_workflow_parser.add_argument("--approve", action="store_true")
+    critical_inputs_workflow_parser.add_argument("--approve-high-risk", action="store_true")
+    critical_inputs_workflow_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="write confirmed values to profile and answer memory after dry-run",
+    )
+    critical_inputs_workflow_parser.add_argument(
+        "--skip-refresh",
+        action="store_true",
+        help="skip regenerating gaps/readiness/coverage/audit/export after applying",
     )
 
     apply_learning_parser = subparsers.add_parser(
@@ -1238,6 +1287,58 @@ def main() -> int:
         print(f"Waiting after update: {summary.get('waiting_after_update_count', 0)}")
         return 0
 
+    if args.command == "critical-inputs-workflow":
+        updates_path = Path(args.updates)
+        if not Path(args.approval_pack).exists():
+            raise FileNotFoundError(f"approval pack not found: {args.approval_pack}")
+        if not Path(args.answers).exists():
+            raise FileNotFoundError(f"critical input answers not found: {args.answers}")
+        if not updates_path.exists():
+            raise FileNotFoundError(f"critical input updates not found: {args.updates}")
+        workflow = write_critical_input_answer_workflow(
+            args.approval_pack,
+            args.answers,
+            json.loads(updates_path.read_text(encoding="utf-8")),
+            args.profile,
+            args.memory,
+            args.json_output,
+            args.markdown_output,
+            args.update_json_output,
+            args.update_markdown_output,
+            args.status_json_output,
+            args.status_markdown_output,
+            answers_markdown_output=args.answers_markdown_output,
+            approve=args.approve,
+            approve_high_risk=args.approve_high_risk,
+            apply_confirmed=args.apply,
+            source=args.source,
+        )
+        refresh = None
+        if args.apply and not args.skip_refresh:
+            refresh = _refresh_application_automation_reports()
+            workflow["refresh"] = refresh
+            Path(args.json_output).write_text(
+                json.dumps(workflow, ensure_ascii=True, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            Path(args.markdown_output).write_text(
+                render_critical_input_answer_workflow_markdown(workflow),
+                encoding="utf-8",
+            )
+        summary = workflow.get("summary") or {}
+        print(f"Wrote critical input workflow JSON to {args.json_output}")
+        print(f"Wrote critical input workflow Markdown to {args.markdown_output}")
+        print(f"Apply executed: {str(bool(args.apply)).lower()}")
+        print(f"Matched updates: {summary.get('matched_updates', 0)}")
+        print(f"Ready to apply: {summary.get('ready_to_apply', 0)}")
+        print(f"Waiting: {summary.get('waiting', 0)}")
+        print(f"Dry-run approved inputs: {summary.get('dry_run_approved_inputs', 0)}")
+        print(f"High-risk approvals blocked: {summary.get('high_risk_approval_blocked', 0)}")
+        if refresh:
+            print(f"Refreshed reports: {', '.join(refresh.get('refreshed', []))}")
+            print(f"Goal status: {refresh.get('goal_status')}")
+        return 0
+
     if args.command == "apply-learning":
         result = apply_learning_task_answers(
             args.tasks,
@@ -1661,6 +1762,124 @@ def _load_optional_json(path_value: str | None) -> dict | None:
         return None
     payload = json.loads(path.read_text(encoding="utf-8"))
     return payload if isinstance(payload, dict) else None
+
+
+def _refresh_application_automation_reports() -> dict[str, object]:
+    outbox_dir = Path(__file__).with_name("outbox")
+    if DEFAULT_RESEARCH_JSON.exists():
+        research = json.loads(DEFAULT_RESEARCH_JSON.read_text(encoding="utf-8"))
+    else:
+        research = write_application_research_report(
+            outbox_dir,
+            DEFAULT_RESEARCH_JSON,
+            DEFAULT_RESEARCH_MARKDOWN,
+            position_target=100,
+        )
+    profile_path = DEFAULT_PERSONAL_PROFILE if DEFAULT_PERSONAL_PROFILE.exists() else DEFAULT_PROFILE
+    profile = load_profile(profile_path) if profile_path.exists() else None
+    answer_memory = load_answer_memory(DEFAULT_MEMORY)
+    gaps = write_answer_gap_report(
+        research,
+        DEFAULT_GAPS_JSON,
+        DEFAULT_GAPS_MARKDOWN,
+        profile=profile,
+        answer_memory=answer_memory,
+    )
+    readiness = write_position_readiness_report(
+        research,
+        gaps,
+        DEFAULT_READINESS_JSON,
+        DEFAULT_READINESS_MARKDOWN,
+        closed_jobs=load_closed_jobs(DEFAULT_CLOSED_JOBS),
+    )
+    coverage = write_research_coverage_gate(
+        research,
+        _load_optional_json(str(DEFAULT_SYNTHETIC_BROWSER_EXEC_JSON)),
+        gaps,
+        DEFAULT_COVERAGE_GATE_JSON,
+        DEFAULT_COVERAGE_GATE_MARKDOWN,
+        position_target=100,
+    )
+    approval_pack = _load_optional_json(str(DEFAULT_LEARNING_APPROVAL_PACK_JSON)) or {}
+    answers_payload = _load_optional_json(str(DEFAULT_CRITICAL_INPUT_ANSWERS_JSON))
+    critical_status = write_critical_input_status_report(
+        approval_pack,
+        DEFAULT_CRITICAL_INPUT_STATUS_JSON,
+        DEFAULT_CRITICAL_INPUT_STATUS_MARKDOWN,
+        answers_payload=answers_payload,
+    )
+    if answers_payload:
+        write_critical_input_suggestion_packet(
+            answers_payload,
+            DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON,
+            DEFAULT_CRITICAL_INPUT_SUGGESTIONS_MARKDOWN,
+            profile=profile,
+            answer_memory=answer_memory,
+        )
+    goal = write_goal_readiness_audit(
+        coverage,
+        gaps,
+        readiness,
+        DEFAULT_GOAL_AUDIT_JSON,
+        DEFAULT_GOAL_AUDIT_MARKDOWN,
+        critical_input_status=critical_status,
+        fake_critical_input_probe=_load_optional_json(str(DEFAULT_FAKE_CRITICAL_INPUT_PROBE_JSON)),
+        fake_position_rehearsal=_load_optional_json(str(DEFAULT_FAKE_POSITION_REHEARSAL_JSON)),
+        closed_jobs=_load_optional_json(str(DEFAULT_CLOSED_JOBS)),
+    )
+    if DEFAULT_COLLECTION_PLAN_JSON.exists() and DEFAULT_LEARNING_TASKS_JSON.exists():
+        write_question_export(
+            gaps,
+            readiness,
+            coverage,
+            json.loads(DEFAULT_COLLECTION_PLAN_JSON.read_text(encoding="utf-8")),
+            json.loads(DEFAULT_LEARNING_TASKS_JSON.read_text(encoding="utf-8")),
+            DEFAULT_QUESTION_EXPORT_XLSX,
+            DEFAULT_QUESTION_EXPORT_HTML,
+            source_artifacts=_question_export_source_artifacts(
+                {
+                    "Answer gaps": str(DEFAULT_GAPS_JSON),
+                    "Automation readiness": str(DEFAULT_READINESS_JSON),
+                    "Research coverage gate": str(DEFAULT_COVERAGE_GATE_JSON),
+                    "Collection plan": str(DEFAULT_COLLECTION_PLAN_JSON),
+                    "Learning tasks": str(DEFAULT_LEARNING_TASKS_JSON),
+                    "Synthetic browser execution": str(DEFAULT_SYNTHETIC_BROWSER_EXEC_JSON),
+                    "Fake learning probe": str(DEFAULT_FAKE_LEARNING_PROBE_JSON),
+                    "Fake critical input probe": str(DEFAULT_FAKE_CRITICAL_INPUT_PROBE_JSON),
+                    "Fake critical input answers": str(DEFAULT_FAKE_CRITICAL_INPUT_ANSWERS_JSON),
+                    "Fake position rehearsal": str(DEFAULT_FAKE_POSITION_REHEARSAL_JSON),
+                    "Learning approval pack": str(DEFAULT_LEARNING_APPROVAL_PACK_JSON),
+                    "Answer memory": str(DEFAULT_MEMORY),
+                    "Closed postings": str(DEFAULT_CLOSED_JOBS),
+                    "Goal readiness audit": str(DEFAULT_GOAL_AUDIT_JSON),
+                    "Critical input suggestions": str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON),
+                }
+            ),
+            synthetic_browser_execution=_load_optional_json(str(DEFAULT_SYNTHETIC_BROWSER_EXEC_JSON)),
+            fake_learning_probe=_load_optional_json(str(DEFAULT_FAKE_LEARNING_PROBE_JSON)),
+            fake_critical_input_probe=_load_optional_json(str(DEFAULT_FAKE_CRITICAL_INPUT_PROBE_JSON)),
+            fake_position_rehearsal=_load_optional_json(str(DEFAULT_FAKE_POSITION_REHEARSAL_JSON)),
+            goal_readiness_audit=goal,
+            critical_input_suggestions=_load_optional_json(str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON)),
+            learning_approval_pack=approval_pack,
+            answer_memory=_load_optional_json(str(DEFAULT_MEMORY)),
+            closed_jobs=_load_optional_json(str(DEFAULT_CLOSED_JOBS)),
+        )
+    return {
+        "refreshed": [
+            "gaps",
+            "readiness",
+            "coverage-gate",
+            "critical-inputs-status",
+            "critical-input-suggestions",
+            "goal-audit",
+            "export-questions",
+        ],
+        "goal_status": goal.get("status"),
+        "goal_complete": bool(goal.get("goal_complete")),
+        "blocking_prompts": gaps.get("blocking_prompt_count", 0),
+        "critical_waiting": (critical_status.get("summary") or {}).get("waiting_count", 0),
+    }
 
 
 def _question_export_source_artifacts(paths: dict[str, str]) -> list[dict[str, object]]:

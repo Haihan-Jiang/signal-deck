@@ -79,6 +79,7 @@ from job_apply_agent.core import (
     render_browser_action_manifest_markdown,
     render_closed_posting_preflight_markdown,
     render_critical_input_answer_template_markdown,
+    render_critical_input_answer_workflow_markdown,
     render_critical_input_answer_update_markdown,
     render_critical_input_suggestions_markdown,
     render_critical_input_status_markdown,
@@ -114,6 +115,7 @@ from job_apply_agent.core import (
     write_closed_posting_preflight,
     write_collection_plan,
     write_critical_input_answer_template,
+    write_critical_input_answer_workflow,
     write_critical_input_answer_update,
     write_critical_input_suggestion_packet,
     write_critical_input_status_report,
@@ -4441,6 +4443,115 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(report_md_path.exists())
             self.assertTrue(answers_md_path.exists())
 
+    def test_critical_input_workflow_dry_runs_then_applies_confirmed_answers(self) -> None:
+        learning_tasks = {
+            "tasks": [
+                {
+                    "group_key": "profile:zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "recommended_storage": "profile",
+                    "labels": ["Zip Code"],
+                    "platforms": ["Ashby"],
+                    "required_count": 4,
+                    "persist_allowed": True,
+                },
+                {
+                    "group_key": "answer_memory:favorite_junk_food",
+                    "question": "What's your favorite junk food?",
+                    "recommended_storage": "answer_memory",
+                    "labels": ["What's your favorite junk food?"],
+                    "platforms": ["Greenhouse"],
+                    "required_count": 2,
+                    "persist_allowed": True,
+                },
+            ],
+        }
+        pack = build_learning_approval_pack(learning_tasks, {})
+        template = build_critical_input_answer_template(pack)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            approval_pack_path = root / "pack.json"
+            answers_path = root / "answers.json"
+            answers_md_path = root / "answers.md"
+            profile_path = root / "profile.json"
+            memory_path = root / "memory.json"
+            workflow_json = root / "workflow.json"
+            workflow_md = root / "workflow.md"
+            update_json = root / "update.json"
+            update_md = root / "update.md"
+            status_json = root / "status.json"
+            status_md = root / "status.md"
+            approval_pack_path.write_text(json.dumps(pack), encoding="utf-8")
+            answers_path.write_text(json.dumps(template), encoding="utf-8")
+            profile_path.write_text(
+                json.dumps(
+                    {
+                        "candidate": {"name": "Test User"},
+                        "preferences": {},
+                        "resume_facts": {},
+                        "question_answers": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            updates = {
+                "profile_zip_or_postal_code": "98004",
+                "answer_memory_favorite_junk_food": "Potato chips",
+            }
+
+            dry_run_workflow = write_critical_input_answer_workflow(
+                approval_pack_path,
+                answers_path,
+                updates,
+                profile_path,
+                memory_path,
+                workflow_json,
+                workflow_md,
+                update_json,
+                update_md,
+                status_json,
+                status_md,
+                answers_markdown_output=answers_md_path,
+                approve=True,
+                apply_confirmed=False,
+            )
+
+            self.assertFalse(dry_run_workflow["summary"]["apply_executed"])
+            self.assertEqual(dry_run_workflow["summary"]["dry_run_approved_inputs"], 2)
+            self.assertFalse(memory_path.exists())
+            self.assertEqual(
+                json.loads(profile_path.read_text(encoding="utf-8"))["question_answers"],
+                {},
+            )
+
+            applied_workflow = write_critical_input_answer_workflow(
+                approval_pack_path,
+                answers_path,
+                updates,
+                profile_path,
+                memory_path,
+                workflow_json,
+                workflow_md,
+                update_json,
+                update_md,
+                status_json,
+                status_md,
+                answers_markdown_output=answers_md_path,
+                approve=True,
+                apply_confirmed=True,
+            )
+
+            profile = json.loads(profile_path.read_text(encoding="utf-8"))
+            memory = load_answer_memory(memory_path)
+            self.assertTrue(applied_workflow["summary"]["apply_executed"])
+            self.assertEqual(profile["question_answers"]["zip_code"], "98004")
+            self.assertIsNotNone(find_learned_answer(memory, "What's your favorite junk food?"))
+            self.assertTrue(workflow_json.exists())
+            self.assertTrue(workflow_md.exists())
+            self.assertTrue(status_json.exists())
+            self.assertIn("Critical Input Answer Workflow", render_critical_input_answer_workflow_markdown(applied_workflow))
+
     def test_critical_input_status_report_groups_waiting_ready_and_supervised(self) -> None:
         learning_tasks = {
             "tasks": [
@@ -6882,6 +6993,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Critical Input Suggestions", html)
         self.assertIn("profile_zip_or_postal_code", html)
         self.assertIn("critical-inputs-update", html)
+        self.assertIn("critical-inputs-workflow", html)
         self.assertIn("Fake Learning Probe", html)
         self.assertIn("Fake Critical Input Probe", html)
         self.assertIn("Fake Position Rehearsal", html)

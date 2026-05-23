@@ -447,6 +447,21 @@ but not approved unless the update object includes
 command is run with `--approve-high-risk`. Supervised-only rows are skipped and
 remain browser review steps.
 
+To run the whole confirmed-answer intake loop in one command, use:
+
+```bash
+python3 -m job_apply_agent critical-inputs-workflow \
+  --updates /path/to/confirmed_critical_input_answers.json \
+  --approve \
+  --apply
+```
+
+This merges the compact answers, writes a status report, runs
+`apply-critical-inputs` as a dry run first, applies only the approved reusable
+values to the local profile/answer memory when `--apply` is present, then
+refreshes gaps, readiness, coverage gate, goal audit, Excel, and HTML. It still
+does not submit real employer applications.
+
 ```bash
 python3 -m job_apply_agent critical-inputs-status
 ```

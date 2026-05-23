@@ -4525,7 +4525,9 @@ def write_critical_input_answer_update(
         encoding="utf-8",
     )
     if answers_markdown_output:
-        Path(answers_markdown_output).write_text(
+        answers_markdown_path = Path(answers_markdown_output)
+        answers_markdown_path.parent.mkdir(parents=True, exist_ok=True)
+        answers_markdown_path.write_text(
             render_critical_input_answer_template_markdown(report.get("updated_answers", {})),
             encoding="utf-8",
         )
@@ -4540,6 +4542,172 @@ def write_critical_input_answer_update(
     json_path.write_text(json.dumps(report_for_file, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
     markdown_path.write_text(render_critical_input_answer_update_markdown(report_for_file), encoding="utf-8")
     return report
+
+
+def write_critical_input_answer_workflow(
+    approval_pack_path: str | Path,
+    answers_path: str | Path,
+    updates_payload: dict[str, Any] | list[Any],
+    profile_path: str | Path,
+    memory_path: str | Path,
+    json_output: str | Path,
+    markdown_output: str | Path,
+    update_json_output: str | Path,
+    update_markdown_output: str | Path,
+    status_json_output: str | Path,
+    status_markdown_output: str | Path,
+    answers_markdown_output: str | Path | None = None,
+    approve: bool = False,
+    approve_high_risk: bool = False,
+    apply_confirmed: bool = False,
+    source: str = "confirmed_critical_inputs",
+) -> dict[str, Any]:
+    approval_pack = _read_json_file(Path(approval_pack_path))
+    if not isinstance(approval_pack, dict):
+        raise ValueError("approval pack must be a JSON object")
+    update_report = write_critical_input_answer_update(
+        answers_path,
+        updates_payload,
+        update_json_output,
+        update_markdown_output,
+        answers_markdown_output=answers_markdown_output,
+        approve=approve,
+        approve_high_risk=approve_high_risk,
+    )
+    updated_answers = _read_json_file(Path(answers_path))
+    if not isinstance(updated_answers, dict):
+        raise ValueError("updated critical input answers must be a JSON object")
+    status_report = write_critical_input_status_report(
+        approval_pack,
+        status_json_output,
+        status_markdown_output,
+        answers_payload=updated_answers,
+    )
+    dry_run_result = apply_critical_input_answers(
+        approval_pack_path,
+        profile_path,
+        memory_path,
+        answers_path=answers_path,
+        source=source,
+        dry_run=True,
+    )
+    apply_result = None
+    if apply_confirmed:
+        apply_result = apply_critical_input_answers(
+            approval_pack_path,
+            profile_path,
+            memory_path,
+            answers_path=answers_path,
+            source=source,
+            dry_run=False,
+        )
+    workflow = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "critical_input_answer_workflow",
+        "apply_confirmed": bool(apply_confirmed),
+        "summary": {
+            "matched_updates": (update_report.get("summary") or {}).get("matched_update_count", 0),
+            "unknown_updates": (update_report.get("summary") or {}).get("unknown_update_count", 0),
+            "high_risk_approval_blocked": (update_report.get("summary") or {}).get(
+                "high_risk_approval_blocked_count", 0
+            ),
+            "supervised_skipped": (update_report.get("summary") or {}).get("supervised_skipped_count", 0),
+            "ready_to_apply": (status_report.get("summary") or {}).get("ready_to_apply_count", 0),
+            "waiting": (status_report.get("summary") or {}).get("waiting_count", 0),
+            "dry_run_approved_inputs": dry_run_result.get("approved_input_count", 0),
+            "dry_run_profile_updates": len(dry_run_result.get("profile_updates", [])),
+            "dry_run_resume_fact_updates": len(dry_run_result.get("resume_fact_updates", [])),
+            "dry_run_answer_memory_updates": len(dry_run_result.get("answer_memory_updates", [])),
+            "apply_executed": bool(apply_result),
+            "applied_profile_updates": len((apply_result or {}).get("profile_updates", [])),
+            "applied_resume_fact_updates": len((apply_result or {}).get("resume_fact_updates", [])),
+            "applied_answer_memory_updates": len((apply_result or {}).get("answer_memory_updates", [])),
+        },
+        "update_report": {key: value for key, value in update_report.items() if key != "updated_answers"},
+        "status_report": status_report,
+        "dry_run_apply_result": dry_run_result,
+        "apply_result": apply_result,
+        "outputs": {
+            "answers": str(answers_path),
+            "answers_markdown": str(answers_markdown_output or ""),
+            "update_json": str(update_json_output),
+            "update_markdown": str(update_markdown_output),
+            "status_json": str(status_json_output),
+            "status_markdown": str(status_markdown_output),
+        },
+        "next_commands": _critical_input_answer_workflow_next_commands(apply_confirmed),
+        "policy": {
+            "submits_real_applications": False,
+            "writes_profile_or_memory_only_when_apply_confirmed": True,
+            "final_submit_remains_supervised": True,
+            "supervised_browser_review_only_skipped": True,
+        },
+    }
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(workflow, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(render_critical_input_answer_workflow_markdown(workflow), encoding="utf-8")
+    return workflow
+
+
+def render_critical_input_answer_workflow_markdown(workflow: dict[str, Any]) -> str:
+    summary = workflow.get("summary") or {}
+    lines = [
+        "# Critical Input Answer Workflow",
+        "",
+        f"Generated: {workflow.get('generated_at')}",
+        f"Apply executed: {str(bool(workflow.get('apply_confirmed'))).lower()}",
+        "",
+        "## Summary",
+        "",
+        f"- matched updates: {summary.get('matched_updates', 0)}",
+        f"- unknown updates: {summary.get('unknown_updates', 0)}",
+        f"- high-risk approvals blocked: {summary.get('high_risk_approval_blocked', 0)}",
+        f"- supervised skipped: {summary.get('supervised_skipped', 0)}",
+        f"- ready to apply: {summary.get('ready_to_apply', 0)}",
+        f"- waiting: {summary.get('waiting', 0)}",
+        f"- dry-run approved inputs: {summary.get('dry_run_approved_inputs', 0)}",
+        f"- dry-run profile updates: {summary.get('dry_run_profile_updates', 0)}",
+        f"- dry-run resume fact updates: {summary.get('dry_run_resume_fact_updates', 0)}",
+        f"- dry-run answer memory updates: {summary.get('dry_run_answer_memory_updates', 0)}",
+        f"- applied profile updates: {summary.get('applied_profile_updates', 0)}",
+        f"- applied resume fact updates: {summary.get('applied_resume_fact_updates', 0)}",
+        f"- applied answer memory updates: {summary.get('applied_answer_memory_updates', 0)}",
+        "",
+        "## Next Commands",
+        "",
+    ]
+    for command in workflow.get("next_commands") or []:
+        lines.append(f"- `{command}`")
+    lines.extend(
+        [
+            "",
+            "## Policy",
+            "",
+            "- This workflow never submits real employer applications.",
+            "- Profile and answer memory writes require the apply flag.",
+            "- Final submit, CAPTCHA/security, and protected-class answers remain supervised.",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _critical_input_answer_workflow_next_commands(apply_confirmed: bool) -> list[str]:
+    if apply_confirmed:
+        return [
+            "python3 -m job_apply_agent gaps",
+            "python3 -m job_apply_agent readiness",
+            "python3 -m job_apply_agent coverage-gate",
+            "python3 -m job_apply_agent critical-inputs-status",
+            "python3 -m job_apply_agent critical-input-suggestions",
+            "python3 -m job_apply_agent goal-audit",
+            "python3 -m job_apply_agent export-questions",
+        ]
+    return [
+        "python3 -m job_apply_agent critical-inputs-workflow --updates <confirmed_answers.json> --approve --apply",
+    ]
 
 
 def render_critical_input_answer_update_markdown(report: dict[str, Any]) -> str:
@@ -8547,6 +8715,10 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                 "Compact update command": (
                     "python3 -m job_apply_agent critical-inputs-update "
                     "--updates <confirmed_answers.json> --approve"
+                ),
+                "Full intake workflow": (
+                    "python3 -m job_apply_agent critical-inputs-workflow "
+                    "--updates <confirmed_answers.json> --approve --apply"
                 ),
             }
         ),
