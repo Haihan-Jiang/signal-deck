@@ -28,6 +28,7 @@ from .core import (
     run_pipeline,
     write_answer_gap_report,
     write_apply_run_audit,
+    write_apply_queue_handoff,
     write_apply_queue_readiness,
     write_application_playbook,
     write_application_research_report,
@@ -87,6 +88,10 @@ DEFAULT_APPLY_QUEUE_JSON = Path(__file__).with_name("outbox") / "apply_queue_rea
 DEFAULT_APPLY_QUEUE_MARKDOWN = Path(__file__).with_name("outbox") / "apply_queue_readiness_latest.md"
 DEFAULT_APPLY_QUEUE_HTML = Path(__file__).with_name("outbox") / "apply_queue_readiness_latest.html"
 DEFAULT_APPLY_QUEUE_LIVE_CHECK_JOBS = Path(__file__).with_name("outbox") / "apply_queue_live_check_jobs_latest.json"
+DEFAULT_APPLY_QUEUE_HANDOFF_JSON = Path(__file__).with_name("outbox") / "apply_queue_handoff_latest.json"
+DEFAULT_APPLY_QUEUE_HANDOFF_MARKDOWN = Path(__file__).with_name("outbox") / "apply_queue_handoff_latest.md"
+DEFAULT_APPLY_QUEUE_HANDOFF_HTML = Path(__file__).with_name("outbox") / "apply_queue_handoff_latest.html"
+DEFAULT_APPLY_QUEUE_OPEN_READY_JOBS = Path(__file__).with_name("outbox") / "apply_queue_open_ready_jobs_latest.json"
 DEFAULT_AUTOMATION_HANDOFF_JSON = Path(__file__).with_name("outbox") / "automation_handoff_latest.json"
 DEFAULT_AUTOMATION_HANDOFF_MARKDOWN = Path(__file__).with_name("outbox") / "automation_handoff_latest.md"
 DEFAULT_AUTOMATION_HANDOFF_HTML = Path(__file__).with_name("outbox") / "automation_handoff_latest.html"
@@ -370,6 +375,23 @@ def main() -> int:
     apply_queue_parser.add_argument("--markdown-output", default=str(DEFAULT_APPLY_QUEUE_MARKDOWN))
     apply_queue_parser.add_argument("--html-output", default=str(DEFAULT_APPLY_QUEUE_HTML))
     apply_queue_parser.add_argument("--live-check-jobs-output", default=str(DEFAULT_APPLY_QUEUE_LIVE_CHECK_JOBS))
+
+    apply_queue_handoff_parser = subparsers.add_parser(
+        "apply-queue-handoff",
+        help="combine apply queue and closed preflight into an open-ready supervised handoff",
+    )
+    apply_queue_handoff_parser.add_argument("--apply-queue-json", default=str(DEFAULT_APPLY_QUEUE_JSON))
+    apply_queue_handoff_parser.add_argument("--closed-preflight-json", default=str(DEFAULT_CLOSED_PREFLIGHT_JSON))
+    apply_queue_handoff_parser.add_argument("--json-output", default=str(DEFAULT_APPLY_QUEUE_HANDOFF_JSON))
+    apply_queue_handoff_parser.add_argument("--markdown-output", default=str(DEFAULT_APPLY_QUEUE_HANDOFF_MARKDOWN))
+    apply_queue_handoff_parser.add_argument("--html-output", default=str(DEFAULT_APPLY_QUEUE_HANDOFF_HTML))
+    apply_queue_handoff_parser.add_argument(
+        "--open-ready-jobs-output",
+        default=str(DEFAULT_APPLY_QUEUE_OPEN_READY_JOBS),
+    )
+    apply_queue_handoff_parser.add_argument("--open-browser", action="store_true")
+    apply_queue_handoff_parser.add_argument("--open-limit", type=int, default=5)
+    apply_queue_handoff_parser.add_argument("--review-log", default=str(DEFAULT_REVIEW_LOG))
 
     automation_handoff_parser = subparsers.add_parser(
         "automation-handoff",
@@ -1045,6 +1067,12 @@ def main() -> int:
         "--apply-queue-live-check-jobs-json",
         default=str(DEFAULT_APPLY_QUEUE_LIVE_CHECK_JOBS),
     )
+    export_questions_parser.add_argument("--apply-queue-handoff-json", default=str(DEFAULT_APPLY_QUEUE_HANDOFF_JSON))
+    export_questions_parser.add_argument("--apply-queue-handoff-html", default=str(DEFAULT_APPLY_QUEUE_HANDOFF_HTML))
+    export_questions_parser.add_argument(
+        "--apply-queue-open-ready-jobs-json",
+        default=str(DEFAULT_APPLY_QUEUE_OPEN_READY_JOBS),
+    )
     export_questions_parser.add_argument(
         "--critical-input-suggestions-json",
         default=str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON),
@@ -1250,6 +1278,9 @@ def main() -> int:
                     "Apply queue": args.apply_queue_json,
                     "Apply queue HTML": args.apply_queue_html,
                     "Apply queue live-check jobs": args.apply_queue_live_check_jobs_json,
+                    "Apply queue handoff": args.apply_queue_handoff_json,
+                    "Apply queue handoff HTML": args.apply_queue_handoff_html,
+                    "Apply queue open-ready jobs": args.apply_queue_open_ready_jobs_json,
                     "Critical input suggestions": args.critical_input_suggestions_json,
                     "Critical input questionnaire": args.critical_input_questionnaire_json,
                     "Critical input questionnaire HTML": args.critical_input_questionnaire_html,
@@ -1269,6 +1300,7 @@ def main() -> int:
             critical_input_preflight=_load_optional_json(args.critical_input_preflight_json),
             critical_input_impact=_load_optional_json(args.critical_input_impact_json),
             autofill_batch=_load_optional_json(args.autofill_batch_json),
+            apply_queue_handoff=_load_optional_json(args.apply_queue_handoff_json),
             automation_handoff=_load_optional_json(args.automation_handoff_json),
             learning_approval_pack=_load_optional_json(args.learning_approval_pack_json),
             answer_memory=_load_optional_json(args.answer_memory_json),
@@ -1461,6 +1493,44 @@ def main() -> int:
         print(f"Live-check jobs: {report.get('live_check_job_count', 0)}")
         print(f"Ready for supervised autofill: {str(bool(report.get('ready_for_supervised_autofill'))).lower()}")
         print(f"Critical updates ready: {str(bool(summary.get('updates_ready_for_apply'))).lower()}")
+        return 0
+
+    if args.command == "apply-queue-handoff":
+        for label, path_value in [
+            ("apply queue", args.apply_queue_json),
+            ("closed preflight", args.closed_preflight_json),
+        ]:
+            if not Path(path_value).exists():
+                raise FileNotFoundError(f"{label} not found: {path_value}")
+        report = write_apply_queue_handoff(
+            args.apply_queue_json,
+            args.closed_preflight_json,
+            args.json_output,
+            args.markdown_output,
+            args.html_output,
+            args.open_ready_jobs_output,
+        )
+        print(f"Wrote apply queue handoff JSON to {args.json_output}")
+        print(f"Wrote apply queue handoff Markdown to {args.markdown_output}")
+        print(f"Wrote apply queue handoff HTML to {args.html_output}")
+        print(f"Wrote open-ready jobs to {args.open_ready_jobs_output}")
+        print(f"Status: {report.get('status')}")
+        print(f"Open ready now: {report.get('open_ready_count', 0)}")
+        print(f"Open after answers: {report.get('open_after_answers_count', 0)}")
+        print(f"Manual live checks: {report.get('manual_live_check_count', 0)}")
+        if args.open_browser:
+            if not report.get("ready_for_supervised_open_batch"):
+                print("Open skipped: apply queue handoff is not ready for supervised open batch")
+            else:
+                opened_urls = open_apply_urls_in_browser(
+                    report.get("open_ready_jobs") or [],
+                    max_items=args.open_limit,
+                    record_path=args.review_log,
+                    source="apply_queue_handoff",
+                    closed_jobs={"version": 1, "jobs": []},
+                )
+                print(f"Opened {len(opened_urls)} apply URL(s) in browser")
+                print(f"Recorded browser review queue in {args.review_log}")
         return 0
 
     if args.command == "automation-handoff":
@@ -2577,6 +2647,16 @@ def _refresh_application_automation_reports() -> dict[str, object]:
         DEFAULT_APPLY_QUEUE_HTML,
         DEFAULT_APPLY_QUEUE_LIVE_CHECK_JOBS,
     )
+    apply_queue_handoff = None
+    if DEFAULT_CLOSED_PREFLIGHT_JSON.exists():
+        apply_queue_handoff = write_apply_queue_handoff(
+            DEFAULT_APPLY_QUEUE_JSON,
+            DEFAULT_CLOSED_PREFLIGHT_JSON,
+            DEFAULT_APPLY_QUEUE_HANDOFF_JSON,
+            DEFAULT_APPLY_QUEUE_HANDOFF_MARKDOWN,
+            DEFAULT_APPLY_QUEUE_HANDOFF_HTML,
+            DEFAULT_APPLY_QUEUE_OPEN_READY_JOBS,
+        )
     automation_handoff = write_automation_handoff_report(
         goal,
         _load_optional_json(str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_JSON)),
@@ -2600,6 +2680,9 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                 "Apply queue": str(DEFAULT_APPLY_QUEUE_JSON),
                 "Apply queue HTML": str(DEFAULT_APPLY_QUEUE_HTML),
                 "Apply queue live-check jobs": str(DEFAULT_APPLY_QUEUE_LIVE_CHECK_JOBS),
+                "Apply queue handoff": str(DEFAULT_APPLY_QUEUE_HANDOFF_JSON),
+                "Apply queue handoff HTML": str(DEFAULT_APPLY_QUEUE_HANDOFF_HTML),
+                "Apply queue open-ready jobs": str(DEFAULT_APPLY_QUEUE_OPEN_READY_JOBS),
                 "Answer memory": str(DEFAULT_MEMORY),
                 "Closed postings": str(DEFAULT_CLOSED_JOBS),
             }
@@ -2637,6 +2720,9 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                     "Apply queue": str(DEFAULT_APPLY_QUEUE_JSON),
                     "Apply queue HTML": str(DEFAULT_APPLY_QUEUE_HTML),
                     "Apply queue live-check jobs": str(DEFAULT_APPLY_QUEUE_LIVE_CHECK_JOBS),
+                    "Apply queue handoff": str(DEFAULT_APPLY_QUEUE_HANDOFF_JSON),
+                    "Apply queue handoff HTML": str(DEFAULT_APPLY_QUEUE_HANDOFF_HTML),
+                    "Apply queue open-ready jobs": str(DEFAULT_APPLY_QUEUE_OPEN_READY_JOBS),
                     "Critical input suggestions": str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON),
                     "Critical input questionnaire": str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_JSON),
                     "Critical input questionnaire HTML": str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_HTML),
@@ -2659,6 +2745,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             critical_input_preflight=_load_optional_json(str(DEFAULT_CRITICAL_INPUT_PREFLIGHT_JSON)),
             critical_input_impact=_load_optional_json(str(DEFAULT_CRITICAL_INPUT_IMPACT_JSON)),
             autofill_batch=_load_optional_json(str(DEFAULT_AUTOFILL_BATCH_JSON)),
+            apply_queue_handoff=apply_queue_handoff,
             automation_handoff=automation_handoff,
             learning_approval_pack=approval_pack,
             answer_memory=_load_optional_json(str(DEFAULT_MEMORY)),
@@ -2681,6 +2768,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             "critical-inputs-readiness",
             "goal-audit",
             "apply-queue",
+            "apply-queue-handoff" if apply_queue_handoff else "apply-queue-handoff-skipped",
             "automation-handoff",
             "export-questions",
         ],
@@ -2688,6 +2776,8 @@ def _refresh_application_automation_reports() -> dict[str, object]:
         "goal_complete": bool(goal.get("goal_complete")),
         "apply_queue_status": apply_queue.get("status"),
         "apply_queue_live_check_jobs": apply_queue.get("live_check_job_count", 0),
+        "apply_queue_handoff_status": (apply_queue_handoff or {}).get("status"),
+        "apply_queue_open_ready": (apply_queue_handoff or {}).get("open_ready_count", 0),
         "blocking_prompts": gaps.get("blocking_prompt_count", 0),
         "critical_waiting": (critical_status.get("summary") or {}).get("waiting_count", 0),
     }

@@ -14,6 +14,7 @@ from job_apply_agent.core import (
     apply_critical_input_answers,
     apply_learning_task_answers,
     build_answer_gap_report,
+    build_apply_queue_handoff,
     build_apply_queue_readiness,
     build_apply_run_audit,
     build_application_draft,
@@ -78,6 +79,8 @@ from job_apply_agent.core import (
     record_closed_job,
     refresh_closed_jobs_from_live_pages,
     render_answer_gap_markdown,
+    render_apply_queue_handoff_html,
+    render_apply_queue_handoff_markdown,
     render_apply_queue_readiness_html,
     render_apply_queue_readiness_markdown,
     render_apply_run_audit_markdown,
@@ -130,6 +133,7 @@ from job_apply_agent.core import (
     select_candidate_topup,
     shorten_apply_url,
     write_answer_gap_report,
+    write_apply_queue_handoff,
     write_apply_queue_readiness,
     write_apply_run_audit,
     write_application_playbook,
@@ -8030,6 +8034,192 @@ class JobApplyAgentTests(unittest.TestCase):
             live_payload = json.loads(live_jobs_output.read_text(encoding="utf-8"))
             self.assertEqual(len(live_payload["jobs"]), 100)
 
+    def test_apply_queue_handoff_waits_for_answers_and_keeps_uncertain_closed(self) -> None:
+        apply_queue = {
+            "status": "waiting_for_confirmed_answers",
+            "ready_for_supervised_autofill": False,
+            "position_count": 3,
+            "live_check_job_count": 3,
+            "global_blockers": ["critical_input_updates_not_ready"],
+            "positions": [
+                {
+                    "index": 1,
+                    "queue_status": "waiting_for_confirmed_answers",
+                    "position_key": "url:https://jobs.lever.co/example/open",
+                    "platform": "Lever",
+                    "company": "OpenCo",
+                    "title": "SRE",
+                    "role_family": "SRE",
+                    "apply_url": "https://jobs.lever.co/example/open",
+                    "final_submit_supervised": True,
+                    "blockers": ["critical_answers_not_ready"],
+                },
+                {
+                    "index": 2,
+                    "queue_status": "waiting_for_confirmed_answers",
+                    "position_key": "url:https://jobs.ashbyhq.com/example/uncertain",
+                    "platform": "Ashby",
+                    "company": "UncertainCo",
+                    "title": "Platform Engineer",
+                    "role_family": "Platform",
+                    "apply_url": "https://jobs.ashbyhq.com/example/uncertain",
+                    "final_submit_supervised": True,
+                    "blockers": ["critical_answers_not_ready"],
+                },
+                {
+                    "index": 3,
+                    "queue_status": "closed_registry",
+                    "position_key": "url:https://job-boards.greenhouse.io/example/jobs/closed",
+                    "platform": "Greenhouse",
+                    "company": "ClosedCo",
+                    "title": "DevOps Engineer",
+                    "role_family": "DevOps",
+                    "apply_url": "https://job-boards.greenhouse.io/example/jobs/closed",
+                    "final_submit_supervised": True,
+                    "blockers": ["closed_registry_or_text"],
+                },
+            ],
+        }
+        closed_preflight = {
+            "candidate_count": 3,
+            "live_checked_count": 3,
+            "open_eligible_count": 1,
+            "closed_count": 1,
+            "uncertain_count": 1,
+            "error_count": 1,
+            "status_counts": {
+                "open_live_checked": 1,
+                "check_error": 1,
+                "closed_live_text": 1,
+            },
+            "checks": [
+                {
+                    "key": "url:https://jobs.lever.co/example/open",
+                    "url": "https://jobs.lever.co/example/open",
+                    "status": "open_live_checked",
+                    "open_eligible": True,
+                    "closed": False,
+                },
+                {
+                    "key": "url:https://jobs.ashbyhq.com/example/uncertain",
+                    "url": "https://jobs.ashbyhq.com/example/uncertain",
+                    "status": "check_error",
+                    "open_eligible": False,
+                    "closed": False,
+                    "error": "timed out",
+                },
+                {
+                    "key": "url:https://job-boards.greenhouse.io/example/jobs/closed",
+                    "url": "https://job-boards.greenhouse.io/example/jobs/closed",
+                    "status": "closed_live_text",
+                    "open_eligible": False,
+                    "closed": True,
+                    "reason": "No longer accepting applications",
+                },
+            ],
+        }
+
+        report = build_apply_queue_handoff(apply_queue, closed_preflight)
+        markdown = render_apply_queue_handoff_markdown(report)
+        html = render_apply_queue_handoff_html(report)
+
+        self.assertEqual(report["status"], "waiting_for_confirmed_answers")
+        self.assertFalse(report["ready_for_supervised_open_batch"])
+        self.assertEqual(report["open_ready_count"], 0)
+        self.assertEqual(report["open_after_answers_count"], 1)
+        self.assertEqual(report["manual_live_check_count"], 1)
+        self.assertEqual(report["closed_or_skipped_count"], 1)
+        self.assertEqual(report["positions"][0]["handoff_status"], "waiting_for_answers_before_open")
+        self.assertEqual(report["positions"][1]["handoff_status"], "requires_manual_live_check")
+        self.assertEqual(report["positions"][2]["handoff_status"], "skip_closed")
+        self.assertEqual(report["open_after_answers_jobs"][0]["company"], "OpenCo")
+        self.assertIn("live_preflight_uncertain_or_missing", report["global_blockers"])
+        self.assertTrue(report["policy"]["do_not_open_uncertain_candidates"])
+        self.assertIn("Apply Queue Handoff", markdown)
+        self.assertIn("waiting_for_answers_before_open", html)
+
+    def test_apply_queue_handoff_ready_writes_open_ready_jobs(self) -> None:
+        positions = []
+        checks = []
+        for index in range(1, 101):
+            url = f"https://jobs.lever.co/example/{index}"
+            positions.append(
+                {
+                    "index": index,
+                    "queue_status": "ready_for_live_closed_preflight",
+                    "position_key": f"url:{url}",
+                    "platform": "Lever",
+                    "company": "Example",
+                    "title": f"SRE {index}",
+                    "role_family": "SRE",
+                    "apply_url": url,
+                    "final_submit_supervised": True,
+                    "blockers": [],
+                }
+            )
+            checks.append(
+                {
+                    "key": f"url:{url}",
+                    "url": url,
+                    "status": "open_live_checked",
+                    "open_eligible": True,
+                    "closed": False,
+                }
+            )
+        apply_queue = {
+            "status": "ready_for_live_closed_preflight",
+            "ready_for_supervised_autofill": True,
+            "position_count": 100,
+            "live_check_job_count": 100,
+            "global_blockers": [],
+            "positions": positions,
+        }
+        closed_preflight = {
+            "candidate_count": 100,
+            "live_checked_count": 100,
+            "open_eligible_count": 100,
+            "closed_count": 0,
+            "uncertain_count": 0,
+            "error_count": 0,
+            "status_counts": {"open_live_checked": 100},
+            "checks": checks,
+        }
+
+        report = build_apply_queue_handoff(apply_queue, closed_preflight)
+        self.assertEqual(report["status"], "ready_to_open_for_supervised_autofill")
+        self.assertTrue(report["ready_for_supervised_open_batch"])
+        self.assertEqual(report["open_ready_count"], 100)
+        self.assertEqual(report["handoff_status_counts"], {"ready_to_open_for_supervised_autofill": 100})
+        self.assertFalse(report["real_platform_submission"])
+        self.assertEqual(report["open_ready_jobs"][0]["automation"]["mode"], "supervised_autofill")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            queue_path = Path(temp_dir) / "queue.json"
+            preflight_path = Path(temp_dir) / "preflight.json"
+            json_output = Path(temp_dir) / "handoff.json"
+            markdown_output = Path(temp_dir) / "handoff.md"
+            html_output = Path(temp_dir) / "handoff.html"
+            jobs_output = Path(temp_dir) / "open_ready.json"
+            queue_path.write_text(json.dumps(apply_queue), encoding="utf-8")
+            preflight_path.write_text(json.dumps(closed_preflight), encoding="utf-8")
+
+            written = write_apply_queue_handoff(
+                queue_path,
+                preflight_path,
+                json_output,
+                markdown_output,
+                html_output,
+                jobs_output,
+            )
+
+            self.assertEqual(written["status"], "ready_to_open_for_supervised_autofill")
+            self.assertTrue(json_output.exists())
+            self.assertTrue(markdown_output.exists())
+            self.assertTrue(html_output.exists())
+            self.assertTrue(jobs_output.exists())
+            jobs_payload = json.loads(jobs_output.read_text(encoding="utf-8"))
+            self.assertEqual(len(jobs_payload["jobs"]), 100)
+
     def test_collection_plan_turns_coverage_shortfalls_into_search_tasks(self) -> None:
         gate = {
             "position_target": 100,
@@ -9688,6 +9878,42 @@ class JobApplyAgentTests(unittest.TestCase):
             "policy": {"final_submit": "supervised"},
             "next_commands": ["python3 -m job_apply_agent automation-handoff"],
         }
+        apply_queue_handoff = {
+            "status": "waiting_for_confirmed_answers",
+            "ready_for_supervised_open_batch": False,
+            "open_ready_count": 0,
+            "open_after_answers_count": 1,
+            "manual_live_check_count": 1,
+            "closed_or_skipped_count": 0,
+            "preflight": {
+                "live_checked_count": 2,
+                "open_eligible_count": 1,
+                "uncertain_count": 1,
+                "status_counts": {"open_live_checked": 1, "check_error": 1},
+            },
+            "handoff_status_counts": {
+                "waiting_for_answers_before_open": 1,
+                "requires_manual_live_check": 1,
+            },
+            "global_blockers": ["critical_input_updates_not_ready"],
+            "next_commands": ["python3 -m job_apply_agent apply-queue-handoff"],
+            "positions": [
+                {
+                    "index": 1,
+                    "handoff_status": "waiting_for_answers_before_open",
+                    "queue_status": "waiting_for_confirmed_answers",
+                    "live_status": "open_live_checked",
+                    "platform": "Greenhouse",
+                    "company": "DoorDash",
+                    "title": "Software Engineer",
+                    "role_family": "Software Backend",
+                    "live_open_eligible": True,
+                    "live_closed": False,
+                    "next_action": "apply confirmed critical inputs, rerun apply-queue, then open",
+                    "apply_url": "https://job-boards.greenhouse.io/doordash/jobs/1",
+                }
+            ],
+        }
 
         export = build_question_export(
             gaps,
@@ -9706,6 +9932,7 @@ class JobApplyAgentTests(unittest.TestCase):
             critical_input_preflight=critical_input_preflight,
             critical_input_impact=critical_input_impact,
             autofill_batch=autofill_batch,
+            apply_queue_handoff=apply_queue_handoff,
             automation_handoff=automation_handoff,
             answer_memory=answer_memory,
             closed_jobs=closed_jobs,
@@ -9727,6 +9954,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Critical Input Impact", html)
         self.assertIn("Critical Input Preflight", html)
         self.assertIn("Autofill Batch", html)
+        self.assertIn("Apply Queue Handoff", html)
+        self.assertIn("waiting_for_answers_before_open", html)
         self.assertIn("Automation Handoff", html)
         self.assertIn("review_suggestion_then_approve_or_replace", html)
         self.assertIn("Submit application", html)
@@ -9780,6 +10009,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 critical_input_preflight=critical_input_preflight,
                 critical_input_impact=critical_input_impact,
                 autofill_batch=autofill_batch,
+                apply_queue_handoff=apply_queue_handoff,
                 automation_handoff=automation_handoff,
                 answer_memory=answer_memory,
                 closed_jobs=closed_jobs,
@@ -9798,6 +10028,8 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(result["summary"]["critical_questionnaire_question_count"], 1)
             self.assertEqual(result["summary"]["critical_impact_top_input_id"], "profile_zip_or_postal_code")
             self.assertEqual(result["summary"]["autofill_batch_selected_count"], 1)
+            self.assertEqual(result["summary"]["apply_queue_handoff_status"], "waiting_for_confirmed_answers")
+            self.assertEqual(result["summary"]["apply_queue_handoff_open_after_answers_count"], 1)
             self.assertEqual(result["summary"]["automation_handoff_status"], "waiting_for_confirmed_answers")
             self.assertEqual(result["summary"]["automation_handoff_answer_queue_count"], 1)
             self.assertEqual(result["summary"]["answer_memory_count"], 1)
@@ -9818,6 +10050,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 self.assertIn("xl/worksheets/sheet30.xml", names)
                 self.assertIn("xl/worksheets/sheet39.xml", names)
                 self.assertIn("xl/worksheets/sheet40.xml", names)
+                self.assertIn("xl/worksheets/sheet42.xml", names)
                 critical_inputs = workbook.read("xl/worksheets/sheet2.xml").decode("utf-8")
                 self.assertIn("exact_prompt_answer", critical_inputs)
                 self.assertIn("user_answer", critical_inputs)
@@ -9844,33 +10077,37 @@ class JobApplyAgentTests(unittest.TestCase):
                 self.assertIn("final_submit_confirmation", autofill_positions)
                 autofill_stops = workbook.read("xl/worksheets/sheet15.xml").decode("utf-8")
                 self.assertIn("Submit application", autofill_stops)
-                handoff_sheet = workbook.read("xl/worksheets/sheet16.xml").decode("utf-8")
+                apply_queue_handoff_sheet = workbook.read("xl/worksheets/sheet16.xml").decode("utf-8")
+                self.assertIn("open_after_answers_count", apply_queue_handoff_sheet)
+                apply_queue_handoff_positions = workbook.read("xl/worksheets/sheet17.xml").decode("utf-8")
+                self.assertIn("waiting_for_answers_before_open", apply_queue_handoff_positions)
+                handoff_sheet = workbook.read("xl/worksheets/sheet18.xml").decode("utf-8")
                 self.assertIn("waiting_for_confirmed_answers", handoff_sheet)
-                handoff_answer_queue = workbook.read("xl/worksheets/sheet18.xml").decode("utf-8")
+                handoff_answer_queue = workbook.read("xl/worksheets/sheet20.xml").decode("utf-8")
                 self.assertIn("profile_zip_or_postal_code", handoff_answer_queue)
-                handoff_stop_summary = workbook.read("xl/worksheets/sheet19.xml").decode("utf-8")
+                handoff_stop_summary = workbook.read("xl/worksheets/sheet21.xml").decode("utf-8")
                 self.assertIn("final_submit_confirmation", handoff_stop_summary)
-                problem_buckets = workbook.read("xl/worksheets/sheet21.xml").decode("utf-8")
+                problem_buckets = workbook.read("xl/worksheets/sheet23.xml").decode("utf-8")
                 self.assertIn("needs_user_confirmation", problem_buckets)
-                user_questions = workbook.read("xl/worksheets/sheet22.xml").decode("utf-8")
+                user_questions = workbook.read("xl/worksheets/sheet24.xml").decode("utf-8")
                 self.assertIn("Have you worked at DoorDash?", user_questions)
-                platform_role_summary = workbook.read("xl/worksheets/sheet26.xml").decode("utf-8")
+                platform_role_summary = workbook.read("xl/worksheets/sheet28.xml").decode("utf-8")
                 self.assertIn("Software Backend", platform_role_summary)
-                platform_role_blockers = workbook.read("xl/worksheets/sheet27.xml").decode("utf-8")
+                platform_role_blockers = workbook.read("xl/worksheets/sheet29.xml").decode("utf-8")
                 self.assertIn("Have you worked at DoorDash?", platform_role_blockers)
-                platform_shortfalls = workbook.read("xl/worksheets/sheet29.xml").decode("utf-8")
+                platform_shortfalls = workbook.read("xl/worksheets/sheet31.xml").decode("utf-8")
                 self.assertIn("Greenhouse", platform_shortfalls)
-                closed_postings = workbook.read("xl/worksheets/sheet34.xml").decode("utf-8")
+                closed_postings = workbook.read("xl/worksheets/sheet36.xml").decode("utf-8")
                 self.assertIn("No longer accepting applications", closed_postings)
-                approval_buckets = workbook.read("xl/worksheets/sheet35.xml").decode("utf-8")
+                approval_buckets = workbook.read("xl/worksheets/sheet37.xml").decode("utf-8")
                 self.assertIn("exact_prompt_answer", approval_buckets)
-                approval_tasks = workbook.read("xl/worksheets/sheet36.xml").decode("utf-8")
+                approval_tasks = workbook.read("xl/worksheets/sheet38.xml").decode("utf-8")
                 self.assertIn("Have you worked at DoorDash?", approval_tasks)
-                goal_audit = workbook.read("xl/worksheets/sheet38.xml").decode("utf-8")
+                goal_audit = workbook.read("xl/worksheets/sheet40.xml").decode("utf-8")
                 self.assertIn("needs_user_answers", goal_audit)
-                critical_suggestions = workbook.read("xl/worksheets/sheet39.xml").decode("utf-8")
+                critical_suggestions = workbook.read("xl/worksheets/sheet41.xml").decode("utf-8")
                 self.assertIn("profile_zip_or_postal_code", critical_suggestions)
-                profile_snapshot = workbook.read("xl/worksheets/sheet40.xml").decode("utf-8")
+                profile_snapshot = workbook.read("xl/worksheets/sheet42.xml").decode("utf-8")
                 self.assertIn("minimum_compensation_usd", profile_snapshot)
                 self.assertIn("configured; redacted in export", profile_snapshot)
                 self.assertNotIn("example@example.com", profile_snapshot)

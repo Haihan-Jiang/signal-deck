@@ -260,6 +260,28 @@ audit, and `closed_jobs.json`. It emits a `closed-preflight --jobs` payload for
 the next live check, marks already closed postings as skipped, and keeps real
 platform final submit out of scope until explicitly supervised.
 
+After running `closed-preflight` on that payload, combine the live page result
+back into the queue:
+
+```bash
+python3 -m job_apply_agent apply-queue-handoff
+```
+
+This writes:
+
+```text
+job_apply_agent/outbox/apply_queue_handoff_latest.json
+job_apply_agent/outbox/apply_queue_handoff_latest.md
+job_apply_agent/outbox/apply_queue_handoff_latest.html
+job_apply_agent/outbox/apply_queue_open_ready_jobs_latest.json
+```
+
+The handoff report is the real-page open gate: it only marks jobs open-ready
+when the queue is answer-ready and the live preflight says the page is open. It
+keeps uncertain pages out of the open list and can later open only the verified
+jobs with `--open-browser`, recording non-sensitive review rows in
+`browser_review_queue.jsonl`.
+
 To make the 100-position target machine-checkable across real observations and
 synthetic execution evidence:
 

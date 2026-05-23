@@ -9132,6 +9132,298 @@ def write_apply_queue_readiness(
     return report
 
 
+def build_apply_queue_handoff(
+    apply_queue: dict[str, Any],
+    closed_preflight: dict[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(apply_queue, dict):
+        raise ValueError("apply queue must be a JSON object")
+    if not isinstance(closed_preflight, dict):
+        raise ValueError("closed preflight must be a JSON object")
+    positions = [
+        position for position in apply_queue.get("positions", []) if isinstance(position, dict)
+    ]
+    check_index = _closed_preflight_check_index(closed_preflight)
+    rows: list[dict[str, Any]] = []
+    open_ready_jobs: list[dict[str, Any]] = []
+    open_after_answers_jobs: list[dict[str, Any]] = []
+    manual_live_check_jobs: list[dict[str, Any]] = []
+    for position in positions:
+        row = _apply_queue_handoff_row(position, check_index)
+        rows.append(row)
+        if row.get("handoff_status") == "ready_to_open_for_supervised_autofill":
+            open_ready_jobs.append(_apply_queue_open_ready_job(row))
+        elif row.get("handoff_status") == "waiting_for_answers_before_open":
+            open_after_answers_jobs.append(_apply_queue_open_ready_job(row))
+        elif row.get("handoff_status") in {"requires_manual_live_check", "requires_live_preflight"}:
+            manual_live_check_jobs.append(_apply_queue_open_ready_job(row))
+
+    status_counts = _count_by(rows, "handoff_status")
+    apply_queue_ready = bool(apply_queue.get("ready_for_supervised_autofill"))
+    position_count = len(rows)
+    open_ready_count = len(open_ready_jobs)
+    uncertain_count = sum(
+        1
+        for row in rows
+        if row.get("handoff_status") in {"requires_manual_live_check", "requires_live_preflight"}
+    )
+    closed_or_skipped_count = sum(1 for row in rows if row.get("handoff_status") == "skip_closed")
+    full_batch_open_ready = bool(
+        apply_queue_ready
+        and position_count >= 100
+        and open_ready_count >= 100
+        and open_ready_count == position_count
+        and not uncertain_count
+        and not closed_or_skipped_count
+    )
+    status = "ready_to_open_for_supervised_autofill" if full_batch_open_ready else "not_ready"
+    if not apply_queue_ready:
+        status = "waiting_for_confirmed_answers"
+    elif uncertain_count or closed_or_skipped_count or open_ready_count < position_count:
+        status = "needs_live_preflight_cleanup"
+    blockers = list(apply_queue.get("global_blockers") or [])
+    if uncertain_count:
+        blockers.append("live_preflight_uncertain_or_missing")
+    if closed_or_skipped_count:
+        blockers.append("live_preflight_closed_or_skipped")
+    if position_count < 100:
+        blockers.append("handoff_position_count_below_100")
+    if apply_queue_ready and open_ready_count < 100:
+        blockers.append("open_ready_count_below_100")
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "apply_queue_handoff",
+        "status": status,
+        "ready_for_supervised_open_batch": full_batch_open_ready,
+        "ready_for_unattended_real_submit": False,
+        "real_platform_submission": False,
+        "position_count": position_count,
+        "handoff_status_counts": status_counts,
+        "open_ready_count": open_ready_count,
+        "open_after_answers_count": len(open_after_answers_jobs),
+        "manual_live_check_count": len(manual_live_check_jobs),
+        "closed_or_skipped_count": closed_or_skipped_count,
+        "preflight": {
+            "candidate_count": closed_preflight.get("candidate_count", 0),
+            "live_checked_count": closed_preflight.get("live_checked_count", 0),
+            "open_eligible_count": closed_preflight.get("open_eligible_count", 0),
+            "closed_count": closed_preflight.get("closed_count", 0),
+            "uncertain_count": closed_preflight.get("uncertain_count", 0),
+            "error_count": closed_preflight.get("error_count", 0),
+            "status_counts": closed_preflight.get("status_counts") or {},
+        },
+        "summary": {
+            "apply_queue_status": apply_queue.get("status"),
+            "apply_queue_ready_for_supervised_autofill": apply_queue_ready,
+            "apply_queue_position_count": apply_queue.get("position_count", position_count),
+            "apply_queue_live_check_job_count": apply_queue.get("live_check_job_count", 0),
+            "open_ready_count": open_ready_count,
+            "open_after_answers_count": len(open_after_answers_jobs),
+            "manual_live_check_count": len(manual_live_check_jobs),
+            "closed_or_skipped_count": closed_or_skipped_count,
+            "final_submit_supervised_count": sum(
+                1 for row in rows if row.get("final_submit_supervised")
+            ),
+        },
+        "global_blockers": _unique_strings(blockers),
+        "positions": rows,
+        "open_ready_jobs": open_ready_jobs,
+        "open_after_answers_jobs": open_after_answers_jobs,
+        "manual_live_check_jobs": manual_live_check_jobs,
+        "open_ready_jobs_payload": {"jobs": open_ready_jobs},
+        "next_commands": _apply_queue_handoff_next_commands(status, manual_live_check_jobs),
+        "policy": {
+            "open_only_live_verified_candidates": True,
+            "do_not_open_uncertain_candidates": True,
+            "stop_on_no_longer_accepting": True,
+            "persist_closed_postings": True,
+            "final_submit_remains_supervised": True,
+            "real_platform_submission": False,
+        },
+    }
+
+
+def write_apply_queue_handoff(
+    apply_queue_path: str | Path,
+    closed_preflight_path: str | Path,
+    json_output: str | Path,
+    markdown_output: str | Path,
+    html_output: str | Path,
+    open_ready_jobs_output: str | Path,
+) -> dict[str, Any]:
+    apply_queue = _read_json_file(Path(apply_queue_path))
+    closed_preflight = _read_json_file(Path(closed_preflight_path))
+    report = build_apply_queue_handoff(apply_queue, closed_preflight)
+    report["source_paths"] = {
+        "apply_queue": str(apply_queue_path),
+        "closed_preflight": str(closed_preflight_path),
+    }
+    report["outputs"] = {
+        "json": str(json_output),
+        "markdown": str(markdown_output),
+        "html": str(html_output),
+        "open_ready_jobs": str(open_ready_jobs_output),
+    }
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    html_path = Path(html_output)
+    open_jobs_path = Path(open_ready_jobs_output)
+    for path in [json_path, markdown_path, html_path, open_jobs_path]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    open_jobs_path.write_text(
+        json.dumps(report.get("open_ready_jobs_payload", {"jobs": []}), ensure_ascii=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(render_apply_queue_handoff_markdown(report), encoding="utf-8")
+    html_path.write_text(render_apply_queue_handoff_html(report), encoding="utf-8")
+    return report
+
+
+def render_apply_queue_handoff_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    preflight = report.get("preflight") or {}
+    lines = [
+        "# Apply Queue Handoff",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        f"Status: {report.get('status')}",
+        f"Ready for supervised open batch: {str(bool(report.get('ready_for_supervised_open_batch'))).lower()}",
+        "Ready for unattended real submit: false",
+        "",
+        "## Summary",
+        "",
+        f"- positions: {report.get('position_count', 0)}",
+        f"- apply queue status: {summary.get('apply_queue_status')}",
+        f"- apply queue ready: {str(bool(summary.get('apply_queue_ready_for_supervised_autofill'))).lower()}",
+        f"- live checked: {preflight.get('live_checked_count', 0)} / {preflight.get('candidate_count', 0)}",
+        f"- live open eligible: {preflight.get('open_eligible_count', 0)}",
+        f"- live closed: {preflight.get('closed_count', 0)}",
+        f"- live uncertain: {preflight.get('uncertain_count', 0)}",
+        f"- open ready now: {summary.get('open_ready_count', 0)}",
+        f"- open after answers: {summary.get('open_after_answers_count', 0)}",
+        f"- manual live checks: {summary.get('manual_live_check_count', 0)}",
+        "",
+        "## Global Blockers",
+        "",
+    ]
+    blockers = report.get("global_blockers") or []
+    if blockers:
+        for blocker in blockers:
+            lines.append(f"- {blocker}")
+    else:
+        lines.append("- None")
+    lines.extend(["", "## Handoff Status Counts", ""])
+    for status, count in sorted((report.get("handoff_status_counts") or {}).items()):
+        lines.append(f"- {status}: {count}")
+    lines.extend(["", "## Positions", ""])
+    for row in (report.get("positions") or [])[:120]:
+        lines.append(
+            "- {index}. {status}: {company} - {title} [{platform}; live={live_status}; queue={queue_status}]".format(
+                index=row.get("index"),
+                status=row.get("handoff_status"),
+                company=row.get("company") or "Unknown company",
+                title=row.get("title") or "Unknown title",
+                platform=row.get("platform") or "Unknown",
+                live_status=row.get("live_status") or "not_checked",
+                queue_status=row.get("queue_status"),
+            )
+        )
+        if row.get("blockers"):
+            lines.append(f"  blockers: {', '.join(row.get('blockers') or [])}")
+        lines.append(f"  next: {row.get('next_action')}")
+        if row.get("apply_url"):
+            lines.append(f"  url: {row.get('apply_url')}")
+    lines.extend(["", "## Next Commands", ""])
+    for command in report.get("next_commands") or []:
+        lines.append(f"- `{command}`")
+    return "\n".join(lines) + "\n"
+
+
+def render_apply_queue_handoff_html(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    preflight = report.get("preflight") or {}
+    rows = [
+        [
+            row.get("index"),
+            row.get("handoff_status"),
+            row.get("queue_status"),
+            row.get("live_status"),
+            row.get("platform"),
+            row.get("company"),
+            row.get("title"),
+            ", ".join(row.get("blockers") or []),
+            row.get("next_action"),
+            row.get("apply_url"),
+        ]
+        for row in report.get("positions") or []
+    ]
+    return "\n".join(
+        [
+            "<!doctype html>",
+            '<html lang="en">',
+            "<head>",
+            '<meta charset="utf-8">',
+            '<meta name="viewport" content="width=device-width, initial-scale=1">',
+            "<title>Apply Queue Handoff</title>",
+            "<style>",
+            _question_export_css(),
+            "</style>",
+            "</head>",
+            "<body>",
+            "<main>",
+            "<h1>Apply Queue Handoff</h1>",
+            f"<p class=\"muted\">Generated: {_html_escape(report.get('generated_at'))}</p>",
+            _html_kpis(
+                [
+                    ("Status", report.get("status")),
+                    ("Positions", report.get("position_count", 0)),
+                    ("Open ready", report.get("open_ready_count", 0)),
+                    ("After answers", report.get("open_after_answers_count", 0)),
+                    ("Manual check", report.get("manual_live_check_count", 0)),
+                    ("Live checked", preflight.get("live_checked_count", 0)),
+                    ("Live open", preflight.get("open_eligible_count", 0)),
+                    ("Live uncertain", preflight.get("uncertain_count", 0)),
+                ]
+            ),
+            "<section><h2>Summary</h2>",
+            _html_key_value_table(summary),
+            "</section>",
+            "<section><h2>Preflight</h2>",
+            _html_key_value_table(preflight),
+            "</section>",
+            "<section><h2>Global Blockers</h2>",
+            _html_table(["Blocker"], [[blocker] for blocker in report.get("global_blockers") or []])
+            if report.get("global_blockers")
+            else "<p class=\"muted\">None</p>",
+            "</section>",
+            "<section><h2>Positions</h2>",
+            _html_table(
+                [
+                    "#",
+                    "Handoff status",
+                    "Queue status",
+                    "Live status",
+                    "Platform",
+                    "Company",
+                    "Title",
+                    "Blockers",
+                    "Next action",
+                    "Apply URL",
+                ],
+                rows,
+            ),
+            "</section>",
+            "<section><h2>Policy</h2>",
+            _html_key_value_table(report.get("policy") or {}),
+            "</section>",
+            "</main>",
+            "</body>",
+            "</html>",
+        ]
+    )
+
+
 def render_apply_queue_readiness_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") or {}
     lines = [
@@ -9400,6 +9692,135 @@ def _apply_queue_next_commands(ready_for_supervised_autofill: bool, live_check_j
             1,
             "python3 -m job_apply_agent critical-inputs-workflow --updates job_apply_agent/outbox/critical_input_full_updates_template.json --approve --approve-high-risk --apply",
         )
+    return commands
+
+
+def _closed_preflight_check_index(closed_preflight: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    index: dict[str, dict[str, Any]] = {}
+    for check in closed_preflight.get("checks") or []:
+        if not isinstance(check, dict):
+            continue
+        keys = {
+            str(check.get("key") or ""),
+            str(check.get("job_id") or ""),
+            str(check.get("url") or ""),
+        }
+        url = str(check.get("url") or "")
+        if url:
+            keys.add(f"url:{shorten_apply_url(url, check)}")
+            keys.add(shorten_apply_url(url, check))
+        for key in keys:
+            if key:
+                index.setdefault(key, check)
+    return index
+
+
+def _apply_queue_handoff_row(
+    position: dict[str, Any],
+    check_index: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    position_key = str(position.get("position_key") or "")
+    apply_url = str(position.get("apply_url") or "")
+    short_url = shorten_apply_url(apply_url, position)
+    keys = [
+        position_key,
+        job_registry_key(position),
+        f"url:{short_url}" if short_url else "",
+        short_url,
+    ]
+    check = next((check_index[key] for key in keys if key and key in check_index), None)
+    live_status = str((check or {}).get("status") or "not_live_checked")
+    live_open = bool((check or {}).get("open_eligible"))
+    live_closed = bool((check or {}).get("closed"))
+    queue_status = str(position.get("queue_status") or "")
+    blockers = list(position.get("blockers") or [])
+    if not check:
+        blockers.append("live_preflight_missing")
+    elif live_closed:
+        blockers.append("live_preflight_closed")
+    elif not live_open:
+        blockers.append("live_preflight_uncertain")
+    handoff_status = "ready_to_open_for_supervised_autofill"
+    if live_closed or queue_status == "closed_registry":
+        handoff_status = "skip_closed"
+    elif not check:
+        handoff_status = "requires_live_preflight"
+    elif not live_open:
+        handoff_status = "requires_manual_live_check"
+    elif queue_status == "waiting_for_confirmed_answers":
+        handoff_status = "waiting_for_answers_before_open"
+    elif queue_status != "ready_for_live_closed_preflight":
+        handoff_status = "blocked_by_apply_queue"
+    return {
+        "index": position.get("index"),
+        "handoff_status": handoff_status,
+        "queue_status": queue_status,
+        "live_status": live_status,
+        "live_open_eligible": live_open,
+        "live_closed": live_closed,
+        "live_error": (check or {}).get("error"),
+        "position_key": position_key,
+        "platform": position.get("platform"),
+        "company": position.get("company"),
+        "title": position.get("title"),
+        "role_family": position.get("role_family"),
+        "apply_url": short_url or apply_url,
+        "browser_action_count": position.get("browser_action_count", 0),
+        "stop_action_count": position.get("stop_action_count", 0),
+        "final_submit_supervised": bool(position.get("final_submit_supervised")),
+        "blockers": _unique_strings(blockers),
+        "next_action": _apply_queue_handoff_next_action(handoff_status),
+    }
+
+
+def _apply_queue_open_ready_job(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "apply_url": row.get("apply_url"),
+        "short_apply_url": row.get("apply_url"),
+        "company": row.get("company"),
+        "title": row.get("title"),
+        "platform": row.get("platform"),
+        "job_id": row.get("position_key"),
+        "role_family": row.get("role_family"),
+        "queue_index": row.get("index"),
+        "automation": {"mode": "supervised_autofill"},
+        "safety": {"human_review_required_before_real_submit": True},
+        "source": "apply_queue_handoff",
+    }
+
+
+def _apply_queue_handoff_next_action(handoff_status: str) -> str:
+    if handoff_status == "ready_to_open_for_supervised_autofill":
+        return "open for supervised autofill and stop before final submit"
+    if handoff_status == "waiting_for_answers_before_open":
+        return "apply confirmed critical inputs, rerun apply-queue, then open"
+    if handoff_status == "requires_manual_live_check":
+        return "rerun live preflight or inspect this URL before opening"
+    if handoff_status == "requires_live_preflight":
+        return "run closed-preflight for this URL before opening"
+    if handoff_status == "skip_closed":
+        return "skip and keep closed posting persisted"
+    return "fix apply queue blockers before opening"
+
+
+def _apply_queue_handoff_next_commands(
+    status: str,
+    manual_live_check_jobs: list[dict[str, Any]],
+) -> list[str]:
+    commands = [
+        "python3 -m job_apply_agent critical-inputs-readiness",
+        "python3 -m job_apply_agent apply-queue",
+        "python3 -m job_apply_agent apply-queue-handoff",
+    ]
+    if status == "waiting_for_confirmed_answers":
+        commands.insert(
+            1,
+            "python3 -m job_apply_agent critical-inputs-workflow --updates job_apply_agent/outbox/critical_input_full_updates_template.json --approve --approve-high-risk --apply",
+        )
+    if manual_live_check_jobs:
+        commands.append("rerun closed-preflight for manual_live_check_jobs before opening those URLs")
+    if status == "ready_to_open_for_supervised_autofill":
+        commands.append("python3 -m job_apply_agent apply-queue-handoff --open-browser --open-limit 100")
     return commands
 
 
@@ -12375,6 +12796,7 @@ def write_question_export(
     critical_input_preflight: dict[str, Any] | None = None,
     critical_input_impact: dict[str, Any] | None = None,
     autofill_batch: dict[str, Any] | None = None,
+    apply_queue_handoff: dict[str, Any] | None = None,
     automation_handoff: dict[str, Any] | None = None,
     learning_approval_pack: dict[str, Any] | None = None,
     answer_memory: dict[str, Any] | None = None,
@@ -12398,6 +12820,7 @@ def write_question_export(
         critical_input_preflight=critical_input_preflight,
         critical_input_impact=critical_input_impact,
         autofill_batch=autofill_batch,
+        apply_queue_handoff=apply_queue_handoff,
         automation_handoff=automation_handoff,
         learning_approval_pack=learning_approval_pack,
         answer_memory=answer_memory,
@@ -12431,6 +12854,7 @@ def build_question_export(
     critical_input_preflight: dict[str, Any] | None = None,
     critical_input_impact: dict[str, Any] | None = None,
     autofill_batch: dict[str, Any] | None = None,
+    apply_queue_handoff: dict[str, Any] | None = None,
     automation_handoff: dict[str, Any] | None = None,
     learning_approval_pack: dict[str, Any] | None = None,
     answer_memory: dict[str, Any] | None = None,
@@ -12478,6 +12902,25 @@ def build_question_export(
     autofill_batch_rows = _autofill_batch_export_rows(autofill_batch)
     autofill_batch_position_rows = _autofill_batch_position_export_rows(autofill_batch)
     autofill_batch_stop_rows = _autofill_batch_stop_action_export_rows(autofill_batch)
+    apply_queue_handoff_rows = _apply_queue_handoff_export_rows(apply_queue_handoff)
+    apply_queue_handoff_position_rows = _table_dict_subset_rows(
+        (apply_queue_handoff or {}).get("positions") or [],
+        [
+            "index",
+            "handoff_status",
+            "queue_status",
+            "live_status",
+            "platform",
+            "company",
+            "title",
+            "role_family",
+            "live_open_eligible",
+            "live_closed",
+            "live_error",
+            "next_action",
+            "apply_url",
+        ],
+    )
     automation_handoff_rows = _automation_handoff_export_rows(automation_handoff)
     automation_handoff_requirement_rows = _table_dict_subset_rows(
         (automation_handoff or {}).get("requirements") or [],
@@ -12692,6 +13135,14 @@ def build_question_export(
         "autofill_batch_selector_miss_count": int(
             (autofill_batch or {}).get("selector_miss_count") or 0
         ),
+        "apply_queue_handoff_status": (apply_queue_handoff or {}).get("status", ""),
+        "apply_queue_handoff_open_ready_count": int((apply_queue_handoff or {}).get("open_ready_count") or 0),
+        "apply_queue_handoff_open_after_answers_count": int(
+            (apply_queue_handoff or {}).get("open_after_answers_count") or 0
+        ),
+        "apply_queue_handoff_manual_live_check_count": int(
+            (apply_queue_handoff or {}).get("manual_live_check_count") or 0
+        ),
         "automation_handoff_status": (automation_handoff or {}).get("status", ""),
         "automation_handoff_answer_queue_count": len(automation_handoff_answer_rows),
         "automation_handoff_missing_profile_input_count": len(automation_handoff_profile_rows),
@@ -12721,6 +13172,8 @@ def build_question_export(
         "autofill_batch": autofill_batch_rows,
         "autofill_batch_positions": autofill_batch_position_rows,
         "autofill_batch_stop_actions": autofill_batch_stop_rows,
+        "apply_queue_handoff": apply_queue_handoff_rows,
+        "apply_queue_handoff_positions": apply_queue_handoff_position_rows,
         "automation_handoff": automation_handoff_rows,
         "automation_handoff_requirements": automation_handoff_requirement_rows,
         "automation_handoff_answer_queue": automation_handoff_answer_rows,
@@ -13259,6 +13712,46 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                     row.get("apply_url"),
                 ]
                 for row in export.get("autofill_batch_positions", [])
+            ],
+        ),
+        "</section>",
+        "<section><h2>Apply Queue Handoff</h2>",
+        _html_table(
+            ["Section", "Metric", "Value"],
+            [
+                [row.get("section"), row.get("metric"), row.get("value")]
+                for row in export.get("apply_queue_handoff", [])
+            ],
+        ),
+        _html_table(
+            [
+                "Index",
+                "Handoff status",
+                "Queue status",
+                "Live status",
+                "Platform",
+                "Company",
+                "Title",
+                "Live open",
+                "Live closed",
+                "Next action",
+                "Apply URL",
+            ],
+            [
+                [
+                    row.get("index"),
+                    row.get("handoff_status"),
+                    row.get("queue_status"),
+                    row.get("live_status"),
+                    row.get("platform"),
+                    row.get("company"),
+                    row.get("title"),
+                    _yes_no(row.get("live_open_eligible")),
+                    _yes_no(row.get("live_closed")),
+                    row.get("next_action"),
+                    row.get("apply_url"),
+                ]
+                for row in export.get("apply_queue_handoff_positions", [])
             ],
         ),
         "</section>",
@@ -20919,6 +21412,54 @@ def _autofill_batch_stop_action_export_rows(
     return rows
 
 
+def _apply_queue_handoff_export_rows(
+    apply_queue_handoff: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if not apply_queue_handoff:
+        return []
+    rows = [
+        {"section": "summary", "metric": "status", "value": apply_queue_handoff.get("status")},
+        {
+            "section": "summary",
+            "metric": "ready_for_supervised_open_batch",
+            "value": apply_queue_handoff.get("ready_for_supervised_open_batch"),
+        },
+        {
+            "section": "summary",
+            "metric": "open_ready_count",
+            "value": apply_queue_handoff.get("open_ready_count"),
+        },
+        {
+            "section": "summary",
+            "metric": "open_after_answers_count",
+            "value": apply_queue_handoff.get("open_after_answers_count"),
+        },
+        {
+            "section": "summary",
+            "metric": "manual_live_check_count",
+            "value": apply_queue_handoff.get("manual_live_check_count"),
+        },
+        {
+            "section": "summary",
+            "metric": "closed_or_skipped_count",
+            "value": apply_queue_handoff.get("closed_or_skipped_count"),
+        },
+    ]
+    for key, value in sorted((apply_queue_handoff.get("preflight") or {}).items()):
+        if isinstance(value, dict):
+            for child_key, child_value in sorted(value.items()):
+                rows.append({"section": "preflight", "metric": f"{key}:{child_key}", "value": child_value})
+        else:
+            rows.append({"section": "preflight", "metric": key, "value": value})
+    for key, value in sorted((apply_queue_handoff.get("handoff_status_counts") or {}).items()):
+        rows.append({"section": "handoff_status", "metric": key, "value": value})
+    for blocker in apply_queue_handoff.get("global_blockers") or []:
+        rows.append({"section": "global_blocker", "metric": "blocker", "value": blocker})
+    for command in apply_queue_handoff.get("next_commands") or []:
+        rows.append({"section": "next_command", "metric": "command", "value": command})
+    return rows
+
+
 def _automation_handoff_export_rows(
     automation_handoff: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
@@ -21391,6 +21932,8 @@ def _write_question_export_xlsx(export: dict[str, Any], path: Path) -> None:
         ("Autofill Batch", _table_rows(export.get("autofill_batch", []))),
         ("Autofill Batch Positions", _table_rows(export.get("autofill_batch_positions", []))),
         ("Autofill Batch Stops", _table_rows(export.get("autofill_batch_stop_actions", []))),
+        ("Apply Queue Handoff", _table_rows(export.get("apply_queue_handoff", []))),
+        ("Apply Queue Handoff Positions", _table_rows(export.get("apply_queue_handoff_positions", []))),
         ("Automation Handoff", _table_rows(export.get("automation_handoff", []))),
         ("Handoff Requirements", _table_rows(export.get("automation_handoff_requirements", []))),
         ("Handoff Answer Queue", _table_rows(export.get("automation_handoff_answer_queue", []))),
