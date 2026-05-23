@@ -12531,6 +12531,7 @@ def _apply_queue_handoff_next_commands(
     if top_up_required_count > 0:
         commands.extend(
             [
+                "python3 -m job_apply_agent refresh-apply-queue --max-rounds 2 --live-check-limit 100",
                 "python3 -m job_apply_agent autofill-batch --limit 100",
                 "python3 -m job_apply_agent apply-queue",
                 "python3 -m job_apply_agent closed-preflight --jobs job_apply_agent/outbox/apply_queue_live_check_jobs_latest.json --live-check-limit 100",

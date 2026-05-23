@@ -125,6 +125,8 @@ DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_MARKDOWN = (
 DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_HTML = (
     Path(__file__).with_name("outbox") / "apply_queue_autofill_packet_latest.html"
 )
+DEFAULT_APPLY_QUEUE_REFRESH_JSON = Path(__file__).with_name("outbox") / "apply_queue_refresh_latest.json"
+DEFAULT_APPLY_QUEUE_REFRESH_MARKDOWN = Path(__file__).with_name("outbox") / "apply_queue_refresh_latest.md"
 DEFAULT_AUTOMATION_HANDOFF_JSON = Path(__file__).with_name("outbox") / "automation_handoff_latest.json"
 DEFAULT_AUTOMATION_HANDOFF_MARKDOWN = Path(__file__).with_name("outbox") / "automation_handoff_latest.md"
 DEFAULT_AUTOMATION_HANDOFF_HTML = Path(__file__).with_name("outbox") / "automation_handoff_latest.html"
@@ -634,6 +636,27 @@ def main() -> int:
         default=str(DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_MARKDOWN),
     )
     apply_queue_autofill_parser.add_argument("--html-output", default=str(DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_HTML))
+
+    refresh_apply_queue_parser = subparsers.add_parser(
+        "refresh-apply-queue",
+        help="rebuild, live-check, and top up the 100-position supervised apply queue",
+    )
+    refresh_apply_queue_parser.add_argument("--max-rounds", type=int, default=2)
+    refresh_apply_queue_parser.add_argument("--live-check-limit", type=int, default=100)
+    refresh_apply_queue_parser.add_argument("--live-check-timeout", type=float, default=15.0)
+    refresh_apply_queue_parser.add_argument(
+        "--skip-live-check",
+        action="store_true",
+        help="reuse the latest closed-preflight artifact instead of fetching live pages",
+    )
+    refresh_apply_queue_parser.add_argument(
+        "--force-rebuild",
+        action="store_true",
+        help="rebuild the autofill batch before the first live-check round",
+    )
+    refresh_apply_queue_parser.add_argument("--include-values", action="store_true")
+    refresh_apply_queue_parser.add_argument("--json-output", default=str(DEFAULT_APPLY_QUEUE_REFRESH_JSON))
+    refresh_apply_queue_parser.add_argument("--markdown-output", default=str(DEFAULT_APPLY_QUEUE_REFRESH_MARKDOWN))
 
     automation_handoff_parser = subparsers.add_parser(
         "automation-handoff",
@@ -2469,6 +2492,19 @@ def main() -> int:
         print(f"Final-submit stops: {summary.get('final_submit_stop_count', 0)}")
         print(f"Selector misses: {summary.get('selector_miss_count', 0)}")
         print(f"Local synthetic submits: {summary.get('local_synthetic_submit_count', 0)}")
+        return 0
+
+    if args.command == "refresh-apply-queue":
+        report = _run_apply_queue_refresh(args)
+        final = report.get("final") or {}
+        print(f"Wrote apply queue refresh JSON to {args.json_output}")
+        print(f"Wrote apply queue refresh Markdown to {args.markdown_output}")
+        print(f"Status: {report.get('status')}")
+        print(f"Rounds: {len(report.get('rounds') or [])}")
+        print(f"Live open after answers: {final.get('live_open_after_answers_count', 0)}")
+        print(f"Top-up required: {final.get('top_up_required_count', 0)}")
+        print(f"Manual live checks: {final.get('manual_live_check_count', 0)}")
+        print(f"Goal complete: {str(bool(final.get('goal_complete'))).lower()}")
         return 0
 
     if args.command == "automation-handoff":
@@ -4571,6 +4607,292 @@ def _load_optional_json(path_value: str | None) -> dict | None:
         return None
     payload = json.loads(path.read_text(encoding="utf-8"))
     return payload if isinstance(payload, dict) else None
+
+
+def _load_jobs_payload(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    jobs = payload.get("jobs") if isinstance(payload, dict) else payload
+    if not isinstance(jobs, list):
+        return []
+    return [job for job in jobs if isinstance(job, dict)]
+
+
+def _run_apply_queue_refresh(args: argparse.Namespace) -> dict:
+    profile_path = DEFAULT_PERSONAL_PROFILE if DEFAULT_PERSONAL_PROFILE.exists() else DEFAULT_PROFILE
+    max_rounds = max(1, int(args.max_rounds or 1))
+    rounds: list[dict] = []
+    needs_rebuild = bool(args.force_rebuild or not DEFAULT_AUTOFILL_BATCH_JSON.exists())
+    final_handoff: dict = {}
+    final_packet: dict = {}
+    final_goal: dict | None = None
+    if not DEFAULT_RESEARCH_JSON.exists() or not DEFAULT_READINESS_JSON.exists():
+        _refresh_application_automation_reports()
+
+    for round_index in range(1, max_rounds + 1):
+        rebuilt_autofill = False
+        if needs_rebuild:
+            research = json.loads(DEFAULT_RESEARCH_JSON.read_text(encoding="utf-8"))
+            readiness = json.loads(DEFAULT_READINESS_JSON.read_text(encoding="utf-8"))
+            profile = load_profile(profile_path) if profile_path.exists() else None
+            answer_memory = load_answer_memory(DEFAULT_MEMORY)
+            write_autofill_batch_plan(
+                research,
+                readiness,
+                DEFAULT_AUTOFILL_BATCH_JSON,
+                DEFAULT_AUTOFILL_BATCH_MARKDOWN,
+                DEFAULT_AUTOFILL_BATCH_HTML,
+                profile=profile,
+                answer_memory=answer_memory,
+                closed_jobs=load_closed_jobs(DEFAULT_CLOSED_JOBS),
+                limit=100,
+                include_values=bool(args.include_values),
+            )
+            rebuilt_autofill = True
+
+        if not DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_JSON.exists() or not DEFAULT_GOAL_AUDIT_JSON.exists():
+            _refresh_application_automation_reports()
+        apply_queue = write_apply_queue_readiness(
+            DEFAULT_AUTOFILL_BATCH_JSON,
+            DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_JSON,
+            DEFAULT_GOAL_AUDIT_JSON,
+            DEFAULT_CLOSED_JOBS,
+            DEFAULT_APPLY_QUEUE_JSON,
+            DEFAULT_APPLY_QUEUE_MARKDOWN,
+            DEFAULT_APPLY_QUEUE_HTML,
+            DEFAULT_APPLY_QUEUE_LIVE_CHECK_JOBS,
+        )
+        jobs = _load_jobs_payload(DEFAULT_APPLY_QUEUE_LIVE_CHECK_JOBS)
+        if args.skip_live_check:
+            if DEFAULT_CLOSED_PREFLIGHT_JSON.exists():
+                live_check = _load_optional_json(str(DEFAULT_CLOSED_PREFLIGHT_JSON)) or {}
+                live_check_status = "reused"
+            else:
+                live_check = write_closed_posting_preflight(
+                    jobs,
+                    DEFAULT_CLOSED_JOBS,
+                    DEFAULT_CLOSED_PREFLIGHT_JSON,
+                    DEFAULT_CLOSED_PREFLIGHT_MARKDOWN,
+                    max_checks=0,
+                    timeout=args.live_check_timeout,
+                    source="apply_queue_refresh_skipped",
+                )
+                live_check_status = "skipped_generated_unchecked_preflight"
+        else:
+            live_check = write_closed_posting_preflight(
+                jobs,
+                DEFAULT_CLOSED_JOBS,
+                DEFAULT_CLOSED_PREFLIGHT_JSON,
+                DEFAULT_CLOSED_PREFLIGHT_MARKDOWN,
+                max_checks=args.live_check_limit,
+                timeout=args.live_check_timeout,
+                source="apply_queue_refresh",
+            )
+            live_check_status = "checked"
+
+        supplemental_preflights = (
+            [DEFAULT_APPLY_QUEUE_MANUAL_LIVE_CHECK_JSON]
+            if DEFAULT_APPLY_QUEUE_MANUAL_LIVE_CHECK_JSON.exists()
+            else []
+        )
+        final_handoff = write_apply_queue_handoff(
+            DEFAULT_APPLY_QUEUE_JSON,
+            DEFAULT_CLOSED_PREFLIGHT_JSON,
+            DEFAULT_APPLY_QUEUE_HANDOFF_JSON,
+            DEFAULT_APPLY_QUEUE_HANDOFF_MARKDOWN,
+            DEFAULT_APPLY_QUEUE_HANDOFF_HTML,
+            DEFAULT_APPLY_QUEUE_OPEN_READY_JOBS,
+            supplemental_preflight_paths=supplemental_preflights,
+        )
+        final_packet = write_apply_queue_autofill_packet(
+            DEFAULT_RESEARCH_JSON,
+            DEFAULT_APPLY_QUEUE_HANDOFF_JSON,
+            profile_path,
+            DEFAULT_MEMORY,
+            DEFAULT_CLOSED_JOBS,
+            DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_JSON,
+            DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_MARKDOWN,
+            DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_HTML,
+            limit=100,
+            target_count=100,
+            include_values=bool(args.include_values),
+        )
+        top_up_required = int(final_handoff.get("top_up_required_count") or 0)
+        rounds.append(
+            {
+                "round": round_index,
+                "rebuilt_autofill_batch": rebuilt_autofill,
+                "apply_queue_status": apply_queue.get("status"),
+                "apply_queue_positions": apply_queue.get("position_count", 0),
+                "live_check_status": live_check_status,
+                "live_checked": live_check.get("live_checked_count", 0),
+                "live_open_eligible": live_check.get("open_eligible_count", 0),
+                "live_closed": live_check.get("closed_count", 0),
+                "live_uncertain": live_check.get("uncertain_count", 0),
+                "handoff_status": final_handoff.get("status"),
+                "live_open_after_answers": final_handoff.get("live_open_after_answers_count", 0),
+                "manual_live_checks": final_handoff.get("manual_live_check_count", 0),
+                "top_up_required": top_up_required,
+                "packet_status": final_packet.get("status"),
+                "packet_selected": final_packet.get("selected_count", 0),
+            }
+        )
+        needs_rebuild = top_up_required > 0
+        if not needs_rebuild:
+            break
+
+    platform_playbook = None
+    position_execution = None
+    if DEFAULT_RESEARCH_JSON.exists():
+        platform_playbook = write_platform_question_playbook(
+            json.loads(DEFAULT_RESEARCH_JSON.read_text(encoding="utf-8")),
+            DEFAULT_PLATFORM_QUESTION_PLAYBOOK_JSON,
+            DEFAULT_PLATFORM_QUESTION_PLAYBOOK_MARKDOWN,
+            DEFAULT_PLATFORM_QUESTION_PLAYBOOK_HTML,
+            autofill_batch=_load_optional_json(str(DEFAULT_AUTOFILL_BATCH_JSON)),
+            fake_position_rehearsal=_load_optional_json(str(DEFAULT_FAKE_POSITION_REHEARSAL_JSON)),
+            automation_handoff=_load_optional_json(str(DEFAULT_AUTOMATION_HANDOFF_JSON)),
+            closed_jobs=_load_optional_json(str(DEFAULT_CLOSED_JOBS)),
+        )
+    if (
+        DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_JSON.exists()
+        and DEFAULT_POST_ANSWER_SYNTHETIC_AUTOFILL_PACKET_JSON.exists()
+        and DEFAULT_PLATFORM_QUESTION_PLAYBOOK_JSON.exists()
+        and DEFAULT_GOAL_AUDIT_JSON.exists()
+    ):
+        position_execution = write_position_execution_audit(
+            DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_JSON,
+            DEFAULT_POST_ANSWER_SYNTHETIC_AUTOFILL_PACKET_JSON,
+            DEFAULT_PLATFORM_QUESTION_PLAYBOOK_JSON,
+            DEFAULT_GOAL_AUDIT_JSON,
+            DEFAULT_POSITION_EXECUTION_AUDIT_JSON,
+            DEFAULT_POSITION_EXECUTION_AUDIT_MARKDOWN,
+            DEFAULT_POSITION_EXECUTION_AUDIT_HTML,
+            target_count=100,
+        )
+    coverage = _load_optional_json(str(DEFAULT_COVERAGE_GATE_JSON))
+    gaps = _load_optional_json(str(DEFAULT_GAPS_JSON))
+    readiness = _load_optional_json(str(DEFAULT_READINESS_JSON))
+    if coverage and gaps and readiness:
+        final_goal = write_goal_readiness_audit(
+            coverage,
+            gaps,
+            readiness,
+            DEFAULT_GOAL_AUDIT_JSON,
+            DEFAULT_GOAL_AUDIT_MARKDOWN,
+            critical_input_status=_load_optional_json(str(DEFAULT_CRITICAL_INPUT_STATUS_JSON)),
+            critical_input_updates_readiness=_load_optional_json(str(DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_JSON)),
+            fake_critical_input_probe=_load_optional_json(str(DEFAULT_FAKE_CRITICAL_INPUT_PROBE_JSON)),
+            fake_position_rehearsal=_load_optional_json(str(DEFAULT_FAKE_POSITION_REHEARSAL_JSON)),
+            autofill_batch_plan=_load_optional_json(str(DEFAULT_AUTOFILL_BATCH_JSON)),
+            synthetic_unblocker_proof=_load_optional_json(str(DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_JSON)),
+            post_answer_pipeline=_load_optional_json(str(DEFAULT_POST_ANSWER_PIPELINE_JSON)),
+            closed_preflight=_load_optional_json(str(DEFAULT_CLOSED_PREFLIGHT_JSON)),
+            closed_jobs=_load_optional_json(str(DEFAULT_CLOSED_JOBS)),
+            platform_question_playbook=platform_playbook or _load_optional_json(str(DEFAULT_PLATFORM_QUESTION_PLAYBOOK_JSON)),
+            position_execution_audit=position_execution or _load_optional_json(str(DEFAULT_POSITION_EXECUTION_AUDIT_JSON)),
+        )
+
+    final_summary = {
+        "handoff_status": final_handoff.get("status"),
+        "target_count": final_handoff.get("target_count", 100),
+        "live_open_after_answers_count": final_handoff.get("live_open_after_answers_count", 0),
+        "top_up_required_count": final_handoff.get("top_up_required_count", 0),
+        "manual_live_check_count": final_handoff.get("manual_live_check_count", 0),
+        "closed_or_skipped_count": final_handoff.get("closed_or_skipped_count", 0),
+        "packet_status": final_packet.get("status"),
+        "packet_selected_count": final_packet.get("selected_count", 0),
+        "goal_status": (final_goal or {}).get("status"),
+        "goal_complete": bool((final_goal or {}).get("goal_complete")),
+    }
+    status = "needs_top_up"
+    if int(final_summary["top_up_required_count"] or 0) <= 0:
+        status = "needs_manual_live_check" if int(final_summary["manual_live_check_count"] or 0) else "queue_refreshed"
+    report = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "apply_queue_refresh",
+        "status": status,
+        "skip_live_check": bool(args.skip_live_check),
+        "include_values": bool(args.include_values),
+        "max_rounds": max_rounds,
+        "rounds": rounds,
+        "final": final_summary,
+        "outputs": {
+            "json": str(args.json_output),
+            "markdown": str(args.markdown_output),
+            "apply_queue": str(DEFAULT_APPLY_QUEUE_JSON),
+            "closed_preflight": str(DEFAULT_CLOSED_PREFLIGHT_JSON),
+            "handoff": str(DEFAULT_APPLY_QUEUE_HANDOFF_JSON),
+            "autofill_packet": str(DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_JSON),
+            "position_execution_audit": str(DEFAULT_POSITION_EXECUTION_AUDIT_JSON),
+            "goal_audit": str(DEFAULT_GOAL_AUDIT_JSON),
+        },
+        "policy": {
+            "live_check_before_open": not bool(args.skip_live_check),
+            "stop_on_no_longer_accepting": True,
+            "persist_closed_postings": True,
+            "real_platform_submission": False,
+            "final_submit_remains_supervised": True,
+        },
+    }
+    _write_apply_queue_refresh_report(report, Path(args.json_output), Path(args.markdown_output))
+    return report
+
+
+def _write_apply_queue_refresh_report(report: dict, json_path: Path, markdown_path: Path) -> None:
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(_render_apply_queue_refresh_markdown(report), encoding="utf-8")
+
+
+def _render_apply_queue_refresh_markdown(report: dict) -> str:
+    final = report.get("final") or {}
+    lines = [
+        "# Apply Queue Refresh",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        f"Status: {report.get('status')}",
+        f"Skip live check: {str(bool(report.get('skip_live_check'))).lower()}",
+        f"Include values: {str(bool(report.get('include_values'))).lower()}",
+        "",
+        "## Final",
+        "",
+        f"- handoff status: {final.get('handoff_status')}",
+        f"- target count: {final.get('target_count', 100)}",
+        f"- live open after answers: {final.get('live_open_after_answers_count', 0)}",
+        f"- top-up required: {final.get('top_up_required_count', 0)}",
+        f"- manual live checks: {final.get('manual_live_check_count', 0)}",
+        f"- closed or skipped: {final.get('closed_or_skipped_count', 0)}",
+        f"- packet status: {final.get('packet_status')}",
+        f"- packet selected: {final.get('packet_selected_count', 0)}",
+        f"- goal status: {final.get('goal_status')}",
+        f"- goal complete: {str(bool(final.get('goal_complete'))).lower()}",
+        "",
+        "## Rounds",
+        "",
+    ]
+    for row in report.get("rounds") or []:
+        lines.append(
+            "- round {round}: rebuild={rebuilt}; live={live}; checked={checked}; open={open}; closed={closed}; "
+            "uncertain={uncertain}; after_answers={after}; top_up={topup}; packet={packet}".format(
+                round=row.get("round"),
+                rebuilt=str(bool(row.get("rebuilt_autofill_batch"))).lower(),
+                live=row.get("live_check_status"),
+                checked=row.get("live_checked", 0),
+                open=row.get("live_open_eligible", 0),
+                closed=row.get("live_closed", 0),
+                uncertain=row.get("live_uncertain", 0),
+                after=row.get("live_open_after_answers", 0),
+                topup=row.get("top_up_required", 0),
+                packet=row.get("packet_status"),
+            )
+        )
+    lines.extend(["", "## Policy", ""])
+    for key, value in sorted((report.get("policy") or {}).items()):
+        lines.append(f"- {key}: {str(value).lower() if isinstance(value, bool) else value}")
+    return "\n".join(lines) + "\n"
 
 
 def _validate_final_answer_intake_server_post_answer_args(args: argparse.Namespace) -> None:

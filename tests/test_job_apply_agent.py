@@ -9668,9 +9668,23 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["top_up_required_count"], 1)
         self.assertIn("live_open_after_answers_below_target", report["global_blockers"])
         self.assertTrue(
-            any(command.startswith("python3 -m job_apply_agent autofill-batch") for command in report["next_commands"])
+            any(command.startswith("python3 -m job_apply_agent refresh-apply-queue") for command in report["next_commands"])
         )
         self.assertIn("top-up required: 1", markdown)
+
+    def test_refresh_apply_queue_cli_help_exposes_live_check_controls(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "-m", "job_apply_agent", "refresh-apply-queue", "--help"],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--live-check-limit", result.stdout)
+        self.assertIn("--skip-live-check", result.stdout)
+        self.assertIn("--force-rebuild", result.stdout)
 
     def test_apply_queue_handoff_supplemental_preflight_overrides_timeout(self) -> None:
         url = "https://jobs.lever.co/example/retry"

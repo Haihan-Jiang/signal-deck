@@ -293,6 +293,27 @@ job_apply_agent/outbox/apply_queue_manual_live_check_latest.json
 exists, so a later successful retry can turn an uncertain row into an eligible
 open row without hand-editing the primary preflight report.
 
+For the normal 100-position maintenance loop, use the one-command refresh. It
+rebuilds the apply queue, runs the live closed-posting check, merges handoff
+state, prepares the autofill packet, and if closed rows make the queue fall
+below 100 it rebuilds the batch for another round:
+
+```bash
+python3 -m job_apply_agent refresh-apply-queue --max-rounds 2 --live-check-limit 100
+```
+
+This writes:
+
+```text
+job_apply_agent/outbox/apply_queue_refresh_latest.json
+job_apply_agent/outbox/apply_queue_refresh_latest.md
+```
+
+The refresh report records `live_open_after_answers_count` and
+`top_up_required_count`, so a daily run can tell whether the 100-position queue
+is still live-open after the final confirmed answers or whether it needs a
+replacement pass. It still never submits real employer applications.
+
 After the handoff is built, prepare the supervised browser autofill packet:
 
 ```bash
