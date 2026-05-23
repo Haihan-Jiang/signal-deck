@@ -4171,7 +4171,10 @@ def render_learning_approval_pack_markdown(pack: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def build_critical_input_answer_template(approval_pack: dict[str, Any]) -> dict[str, Any]:
+def build_critical_input_answer_template(
+    approval_pack: dict[str, Any],
+    existing_answers_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     answers: list[dict[str, Any]] = []
     for index, item in enumerate(approval_pack.get("critical_inputs", []), start=1):
         if not isinstance(item, dict):
@@ -4194,10 +4197,12 @@ def build_critical_input_answer_template(approval_pack: dict[str, Any]) -> dict[
                 "labels": item.get("labels") or [],
             }
         )
+    preserved_answer_count = _sync_existing_critical_input_answers(answers, existing_answers_payload)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source": "learning_approval_pack.critical_inputs",
         "answer_count": len(answers),
+        "preserved_answer_count": preserved_answer_count,
         "instructions": (
             "Fill critical_inputs.user_answer and set approval_decision=approved only for truthful reusable answers. "
             "The answers field is a legacy mirror; editing either critical_inputs or answers is accepted. "
@@ -4207,6 +4212,48 @@ def build_critical_input_answer_template(approval_pack: dict[str, Any]) -> dict[
         "critical_inputs": answers,
         "answers": answers,
     }
+
+
+def _sync_existing_critical_input_answers(
+    answers: list[dict[str, Any]],
+    existing_answers_payload: dict[str, Any] | None,
+) -> int:
+    if not isinstance(existing_answers_payload, dict):
+        return 0
+    existing_rows = _critical_input_answer_rows(existing_answers_payload)
+    existing_index: dict[str, dict[str, Any]] = {}
+    for index, row in enumerate(existing_rows, start=1):
+        keys = {
+            str(row.get("input_id") or ""),
+            str(row.get("group_key") or ""),
+            _critical_input_task_key(row),
+            _critical_input_answer_id(row, index),
+        }
+        for key in keys:
+            if key:
+                existing_index[key] = row
+
+    preserved = 0
+    for index, answer in enumerate(answers, start=1):
+        existing = (
+            existing_index.get(str(answer.get("input_id") or ""))
+            or existing_index.get(str(answer.get("group_key") or ""))
+            or existing_index.get(_critical_input_task_key(answer))
+            or existing_index.get(_critical_input_answer_id(answer, index))
+        )
+        if not existing:
+            continue
+        copied_any = False
+        for field in ["user_answer", "approval_decision"]:
+            if field in existing:
+                answer[field] = existing.get(field)
+                copied_any = copied_any or bool(str(existing.get(field) or "").strip())
+        for field in ["notes", "high_risk_user_confirmed"]:
+            if field in existing and field not in answer:
+                answer[field] = existing.get(field)
+        if copied_any:
+            preserved += 1
+    return preserved
 
 
 def build_fake_critical_input_probe(approval_pack: dict[str, Any]) -> dict[str, Any]:
@@ -4335,8 +4382,12 @@ def write_critical_input_answer_template(
     approval_pack: dict[str, Any],
     json_output: str | Path,
     markdown_output: str | Path,
+    existing_answers_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    template = build_critical_input_answer_template(approval_pack)
+    template = build_critical_input_answer_template(
+        approval_pack,
+        existing_answers_payload=existing_answers_payload,
+    )
     json_path = Path(json_output)
     markdown_path = Path(markdown_output)
     json_path.parent.mkdir(parents=True, exist_ok=True)

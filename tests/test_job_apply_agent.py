@@ -4907,6 +4907,7 @@ class JobApplyAgentTests(unittest.TestCase):
         pack = build_learning_approval_pack(learning_tasks, {})
         template = build_critical_input_answer_template(pack)
         self.assertEqual(template["answer_count"], 2)
+        self.assertEqual(template["preserved_answer_count"], 0)
         self.assertEqual(len(template["critical_inputs"]), 2)
         self.assertEqual(template["answers"][0]["approval_decision"], "")
         markdown = render_critical_input_answer_template_markdown(template)
@@ -4966,6 +4967,53 @@ class JobApplyAgentTests(unittest.TestCase):
                     answer["approval_decision"] = "approved"
             status = build_critical_input_status_report(pack, critical_inputs_payload)
             self.assertEqual(status["summary"]["ready_to_apply_count"], 1)
+
+    def test_critical_input_answer_template_syncs_new_pack_and_preserves_answers(self) -> None:
+        old_tasks = {
+            "tasks": [
+                {
+                    "group_key": "profile:zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "recommended_storage": "profile",
+                    "labels": ["Zip Code"],
+                    "platforms": ["Ashby"],
+                    "required_count": 4,
+                    "persist_allowed": True,
+                },
+            ],
+        }
+        new_tasks = {
+            "tasks": [
+                *old_tasks["tasks"],
+                {
+                    "group_key": "resume_facts:education_grading",
+                    "question": "What GPA should automation use?",
+                    "recommended_storage": "resume_facts",
+                    "labels": ["What is your GPA?"],
+                    "platforms": ["Greenhouse"],
+                    "required_count": 8,
+                    "persist_allowed": True,
+                },
+            ],
+        }
+        old_pack = build_learning_approval_pack(old_tasks, {})
+        existing = build_critical_input_answer_template(old_pack)
+        existing["critical_inputs"][0]["user_answer"] = "98004"
+        existing["critical_inputs"][0]["approval_decision"] = "approved"
+
+        new_pack = build_learning_approval_pack(new_tasks, {})
+        synced = build_critical_input_answer_template(
+            new_pack,
+            existing_answers_payload=existing,
+        )
+        rows_by_id = {row["input_id"]: row for row in synced["critical_inputs"]}
+
+        self.assertEqual(synced["answer_count"], 2)
+        self.assertEqual(synced["preserved_answer_count"], 1)
+        self.assertEqual(rows_by_id["profile_zip_or_postal_code"]["user_answer"], "98004")
+        self.assertEqual(rows_by_id["profile_zip_or_postal_code"]["approval_decision"], "approved")
+        self.assertIn("resume_facts_education_grading", rows_by_id)
+        self.assertEqual(rows_by_id["resume_facts_education_grading"]["user_answer"], "")
 
     def test_critical_input_answer_update_merges_compact_answers_safely(self) -> None:
         learning_tasks = {

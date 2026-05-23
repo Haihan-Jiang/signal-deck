@@ -1448,10 +1448,12 @@ def main() -> int:
             json.loads(approval_pack_path.read_text(encoding="utf-8")),
             args.json_output,
             args.markdown_output,
+            existing_answers_payload=_load_optional_json(args.json_output),
         )
         print(f"Wrote critical input answer JSON to {args.json_output}")
         print(f"Wrote critical input answer Markdown to {args.markdown_output}")
         print(f"Answers needed: {template.get('answer_count', 0)}")
+        print(f"Preserved answers: {template.get('preserved_answer_count', 0)}")
         return 0
 
     if args.command == "critical-inputs-status":
@@ -2140,8 +2142,26 @@ def _refresh_application_automation_reports() -> dict[str, object]:
         DEFAULT_COVERAGE_GATE_MARKDOWN,
         position_target=100,
     )
-    approval_pack = _load_optional_json(str(DEFAULT_LEARNING_APPROVAL_PACK_JSON)) or {}
-    answers_payload = _load_optional_json(str(DEFAULT_CRITICAL_INPUT_ANSWERS_JSON))
+    learning_tasks = write_learning_task_template(
+        readiness,
+        DEFAULT_LEARNING_TASKS_JSON,
+        DEFAULT_LEARNING_TASKS_MARKDOWN,
+        profile=profile,
+        answer_memory=answer_memory,
+    )
+    approval_pack = write_learning_approval_pack(
+        learning_tasks,
+        readiness,
+        DEFAULT_LEARNING_APPROVAL_PACK_JSON,
+        DEFAULT_LEARNING_APPROVAL_PACK_MARKDOWN,
+    )
+    existing_answers_payload = _load_optional_json(str(DEFAULT_CRITICAL_INPUT_ANSWERS_JSON))
+    answers_payload = write_critical_input_answer_template(
+        approval_pack,
+        DEFAULT_CRITICAL_INPUT_ANSWERS_JSON,
+        DEFAULT_CRITICAL_INPUT_ANSWERS_MARKDOWN,
+        existing_answers_payload=existing_answers_payload,
+    )
     critical_status = write_critical_input_status_report(
         approval_pack,
         DEFAULT_CRITICAL_INPUT_STATUS_JSON,
@@ -2277,6 +2297,9 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             "gaps",
             "readiness",
             "coverage-gate",
+            "learning-template",
+            "learning-approval-pack",
+            "critical-inputs-template",
             "critical-inputs-status",
             "critical-input-suggestions",
             "critical-inputs-questionnaire",
