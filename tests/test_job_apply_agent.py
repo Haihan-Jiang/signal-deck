@@ -7811,14 +7811,20 @@ class JobApplyAgentTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 2)
+            self.assertIn("Placeholder aliases: zip_or_postal_code", result.stdout)
             report = json.loads(report_path.read_text(encoding="utf-8"))
             self.assertEqual(report["status"], "waiting_for_filled_reply")
             self.assertEqual(report["placeholder_line_count"], 1)
+            self.assertEqual(report["placeholder_alias_count"], 1)
+            self.assertEqual(report["placeholder_aliases"], ["zip_or_postal_code"])
             self.assertTrue(report["final_audits_requested"])
             self.assertEqual(report["final_audits"], [])
             self.assertIn("goal-audit", json.dumps(report["final_audit_commands"]))
             self.assertFalse(report["stores_answer_text_in_report"])
-            self.assertIn("Final Answer Autopilot", markdown_path.read_text(encoding="utf-8"))
+            markdown_text = markdown_path.read_text(encoding="utf-8")
+            self.assertIn("Final Answer Autopilot", markdown_text)
+            self.assertIn("Placeholder aliases remaining: 1", markdown_text)
+            self.assertIn("zip_or_postal_code", markdown_text)
 
     def test_final_answer_autopilot_validates_filled_reply_without_storing_answer_text(self) -> None:
         unblockers = {
@@ -7874,6 +7880,8 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(report["status"], "validated_ready")
             self.assertEqual(report["validate_exit_code"], 0)
             self.assertEqual(report["placeholder_line_count"], 0)
+            self.assertEqual(report["placeholder_alias_count"], 0)
+            self.assertEqual(report["placeholder_aliases"], [])
             self.assertTrue(report["final_audits_requested"])
             self.assertEqual(report["final_audits"], [])
             self.assertFalse(report["stores_answer_text_in_report"])

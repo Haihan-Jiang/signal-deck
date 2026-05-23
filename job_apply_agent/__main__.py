@@ -4244,6 +4244,29 @@ def _final_answer_reply_placeholder_count(reply_text: str) -> int:
     return count
 
 
+def _final_answer_reply_placeholder_aliases(reply_text: str) -> list[str]:
+    aliases: list[str] = []
+    seen: set[str] = set()
+    for line in reply_text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "<fill>" not in stripped:
+            continue
+        alias = _final_answer_reply_placeholder_alias(stripped)
+        if alias and alias not in seen:
+            aliases.append(alias)
+            seen.add(alias)
+    return aliases
+
+
+def _final_answer_reply_placeholder_alias(line: str) -> str:
+    prefix = str(line or "").split("<fill>", 1)[0].strip()
+    for separator in ["\uff1a", ":"]:
+        if separator in prefix:
+            prefix = prefix.split(separator, 1)[0].strip()
+            break
+    return prefix.strip("`* ")
+
+
 def _final_answer_autopilot_validate_command(
     args: argparse.Namespace,
     reply_file: str | Path | None = None,
@@ -4342,18 +4365,33 @@ def _render_final_answer_autopilot_markdown(report: dict[str, object]) -> str:
         f"Reply file: `{report.get('reply_file')}`",
         f"Attempts: {report.get('attempt_count', 0)}",
         f"Placeholder lines remaining: {report.get('placeholder_line_count', 0)}",
+        f"Placeholder aliases remaining: {report.get('placeholder_alias_count', 0)}",
         f"Validate exit code: {report.get('validate_exit_code', '')}",
         f"Pipeline exit code: {report.get('pipeline_exit_code', '')}",
         "",
-        "## Commands",
-        "",
-        f"- validate: `{report.get('validate_command', '')}`",
-        f"- pipeline: `{report.get('pipeline_command', '')}`",
-        "",
-        "## Final Audits",
-        "",
-        f"- requested: {str(bool(report.get('final_audits_requested'))).lower()}",
     ]
+    placeholder_aliases = (
+        report.get("placeholder_aliases")
+        if isinstance(report.get("placeholder_aliases"), list)
+        else []
+    )
+    if placeholder_aliases:
+        lines.extend(["## Placeholder Aliases", ""])
+        for alias in placeholder_aliases:
+            lines.append(f"- {alias}")
+        lines.append("")
+    lines.extend(
+        [
+            "## Commands",
+            "",
+            f"- validate: `{report.get('validate_command', '')}`",
+            f"- pipeline: `{report.get('pipeline_command', '')}`",
+            "",
+            "## Final Audits",
+            "",
+            f"- requested: {str(bool(report.get('final_audits_requested'))).lower()}",
+        ]
+    )
     audit_rows = report.get("final_audits") if isinstance(report.get("final_audits"), list) else []
     if audit_rows:
         for row in audit_rows:
@@ -4398,10 +4436,12 @@ def _final_answer_autopilot_base_report(
     validate_exit_code: int | None = None,
     pipeline_exit_code: int | None = None,
     final_audits: list[dict[str, object]] | None = None,
+    placeholder_aliases: list[str] | None = None,
     reason: str = "",
     reply_source: str = "reply_file",
     reply_file_for_report: str | Path | None = None,
 ) -> dict[str, object]:
+    safe_placeholder_aliases = [str(alias) for alias in placeholder_aliases or [] if str(alias).strip()]
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source": "final_answer_autopilot",
@@ -4418,6 +4458,8 @@ def _final_answer_autopilot_base_report(
         "open_browser_requested": bool(args.open_browser),
         "attempt_count": attempt_count,
         "placeholder_line_count": placeholder_line_count,
+        "placeholder_alias_count": len(safe_placeholder_aliases),
+        "placeholder_aliases": safe_placeholder_aliases,
         "validate_command": shlex.join(validate_command),
         "pipeline_command": shlex.join(pipeline_command),
         "final_audits_requested": not bool(args.skip_final_audits),
@@ -4512,12 +4554,14 @@ def _run_final_answer_autopilot_for_reply_path(
         else:
             reply_text = reply_path.read_text(encoding="utf-8")
             placeholder_count = _final_answer_reply_placeholder_count(reply_text)
+            placeholder_aliases = _final_answer_reply_placeholder_aliases(reply_text)
             if placeholder_count:
                 report = _final_answer_autopilot_base_report(
                     args,
                     status="waiting_for_filled_reply",
                     attempt_count=attempt_count,
                     placeholder_line_count=placeholder_count,
+                    placeholder_aliases=placeholder_aliases,
                     validate_command=validate_command,
                     pipeline_command=pipeline_command,
                     reason="reply file still contains <fill> placeholders",
@@ -4528,6 +4572,8 @@ def _run_final_answer_autopilot_for_reply_path(
                 if not args.watch:
                     print(f"Final answer autopilot: {report['status']}")
                     print(f"Placeholder lines remaining: {placeholder_count}")
+                    if placeholder_aliases:
+                        print("Placeholder aliases: " + ", ".join(placeholder_aliases))
                     return 2 if args.fail_on_not_ready else 0
             else:
                 validate_result = subprocess.run(
