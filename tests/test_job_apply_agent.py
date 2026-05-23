@@ -10237,8 +10237,35 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(audit["requirements"][0]["evidence"]["latest_preflight_uncertain"], 0)
         self.assertEqual(audit["blocker_summary"]["latest_preflight_open_eligible_count"], 100)
         self.assertEqual(audit["blocker_summary"]["latest_preflight_uncertain_count"], 0)
+        self.assertFalse(audit["blocker_summary"]["latest_preflight_stale"])
+        self.assertIsNone(audit["blocker_summary"]["latest_preflight_age_seconds"])
         self.assertGreaterEqual(audit["requirements"][0]["evidence"]["closed_phrase_count"], 20)
         self.assertGreaterEqual(audit["requirements"][0]["evidence"]["closed_regex_count"], 7)
+        stale_closed_preflight = {**closed_preflight, "generated_at": "2000-01-01T00:00:00+00:00"}
+        stale_audit = build_goal_readiness_audit(
+            coverage_gate,
+            gaps,
+            readiness,
+            critical_input_status=critical_status,
+            critical_input_updates_readiness=critical_updates_readiness,
+            fake_learning_probe=fake_learning_probe,
+            fake_critical_input_probe=fake_critical,
+            fake_position_rehearsal=fake_rehearsal,
+            autofill_batch_plan=autofill_batch,
+            synthetic_unblocker_proof=synthetic_unblocker_proof,
+            post_answer_pipeline=post_answer_pipeline,
+            closed_preflight=stale_closed_preflight,
+            closed_jobs=closed_jobs,
+            platform_question_playbook=platform_question_playbook,
+            position_execution_audit=position_execution_audit,
+        )
+        stale_closed_requirement = next(
+            item for item in stale_audit["requirements"] if item["id"] == "closed_posting_filter"
+        )
+        self.assertEqual(stale_closed_requirement["status"], "needs_fresh_live_preflight")
+        self.assertTrue(stale_closed_requirement["evidence"]["latest_preflight_stale"])
+        self.assertTrue(stale_audit["blocker_summary"]["latest_preflight_stale"])
+        self.assertIn("closed_posting_filter", stale_audit["completion_verdict"]["blocking_requirement_ids"])
         fake_requirement = next(item for item in audit["requirements"] if item["id"] == "fake_candidate_100_position_rehearsal")
         self.assertTrue(fake_requirement["evidence"]["post_answer_synthetic_queue_rehearsal_ready"])
         fake_learning_requirement = next(item for item in audit["requirements"] if item["id"] == "fake_learning_blocker_clearance")

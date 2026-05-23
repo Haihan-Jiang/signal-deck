@@ -14596,6 +14596,22 @@ GOAL_POLICY_GATE_STATUSES = {
     "sensitive_not_stored",
 }
 
+GOAL_LIVE_PREFLIGHT_MAX_AGE_SECONDS = 6 * 60 * 60
+
+
+def _timestamp_age_seconds(value: Any, now: datetime | None = None) -> int | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        timestamp = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    reference = now or datetime.now(timezone.utc)
+    return max(0, int((reference - timestamp.astimezone(timezone.utc)).total_seconds()))
+
 
 def build_goal_readiness_audit(
     coverage_gate: dict[str, Any],
@@ -14645,6 +14661,13 @@ def build_goal_readiness_audit(
     preflight_error_count = int(preflight.get("error_count") or 0)
     preflight_retry_attempts = int(preflight.get("retry_attempts") or 0)
     preflight_fetch_attempt_count = int(preflight.get("fetch_attempt_count") or 0)
+    preflight_generated_at = str(preflight.get("generated_at") or "").strip()
+    preflight_age_seconds = _timestamp_age_seconds(preflight_generated_at)
+    preflight_stale = bool(
+        preflight
+        and preflight_age_seconds is not None
+        and preflight_age_seconds > GOAL_LIVE_PREFLIGHT_MAX_AGE_SECONDS
+    )
     preflight_ready = bool(
         not preflight
         or (
@@ -14653,6 +14676,7 @@ def build_goal_readiness_audit(
             and preflight_open_eligible_count >= 100
             and preflight_uncertain_count == 0
             and preflight_error_count == 0
+            and not preflight_stale
         )
     )
     data_blocker_count = _coverage_status_total(coverage_counts, GOAL_DATA_BLOCKER_STATUSES)
@@ -14875,6 +14899,8 @@ def build_goal_readiness_audit(
             "status": (
                 "achieved"
                 if closed_count > 0 and preflight_ready
+                else "needs_fresh_live_preflight"
+                if preflight_stale
                 else "needs_live_preflight_retry"
                 if closed_count > 0
                 else "needs_live_evidence"
@@ -14890,6 +14916,10 @@ def build_goal_readiness_audit(
                 "latest_preflight_errors": preflight_error_count,
                 "latest_preflight_retry_attempts": preflight_retry_attempts,
                 "latest_preflight_fetch_attempts": preflight_fetch_attempt_count,
+                "latest_preflight_generated_at": preflight_generated_at,
+                "latest_preflight_age_seconds": preflight_age_seconds,
+                "latest_preflight_max_age_seconds": GOAL_LIVE_PREFLIGHT_MAX_AGE_SECONDS,
+                "latest_preflight_stale": preflight_stale,
                 "closed_phrase_count": len(CLOSED_APPLICATION_PHRASES),
                 "closed_regex_count": len(_CLOSED_APPLICATION_PATTERN_SPECS),
                 "policy": "closed postings are excluded before notify/open/apply",
@@ -15121,6 +15151,10 @@ def build_goal_readiness_audit(
             "latest_preflight_error_count": preflight_error_count,
             "latest_preflight_retry_attempts": preflight_retry_attempts,
             "latest_preflight_fetch_attempt_count": preflight_fetch_attempt_count,
+            "latest_preflight_generated_at": preflight_generated_at,
+            "latest_preflight_age_seconds": preflight_age_seconds,
+            "latest_preflight_max_age_seconds": GOAL_LIVE_PREFLIGHT_MAX_AGE_SECONDS,
+            "latest_preflight_stale": preflight_stale,
             "real_platform_target_achieved": bool(coverage_gate.get("real_platform_target_achieved")),
             "real_platform_role_target_achieved": bool(coverage_gate.get("real_platform_role_target_achieved")),
             "positions_observed_total": int(coverage_gate.get("positions_observed_total") or 0),
@@ -15356,7 +15390,9 @@ def render_goal_readiness_audit_markdown(audit: dict[str, Any]) -> str:
             f"uncertain {summary.get('latest_preflight_uncertain_count', 0)}, "
             f"errors {summary.get('latest_preflight_error_count', 0)}, "
             f"retry attempts {summary.get('latest_preflight_retry_attempts', 0)}, "
-            f"fetch attempts {summary.get('latest_preflight_fetch_attempt_count', 0)}",
+            f"fetch attempts {summary.get('latest_preflight_fetch_attempt_count', 0)}, "
+            f"fresh {str(not bool(summary.get('latest_preflight_stale'))).lower()}, "
+            f"age seconds {summary.get('latest_preflight_age_seconds')}",
             f"- real platform coverage achieved: {str(bool(summary.get('real_platform_target_achieved'))).lower()}",
             f"- real platform-role coverage achieved: {str(bool(summary.get('real_platform_role_target_achieved'))).lower()}",
             f"- real positions observed: {summary.get('positions_observed_total', 0)}",
@@ -15804,6 +15840,10 @@ def build_automation_handoff_report(
             "direct_autopilot_command", ""
         ),
         "can_unattended_submit_real_employers": False,
+        "latest_preflight_generated_at": blocker_summary.get("latest_preflight_generated_at", ""),
+        "latest_preflight_age_seconds": blocker_summary.get("latest_preflight_age_seconds"),
+        "latest_preflight_max_age_seconds": blocker_summary.get("latest_preflight_max_age_seconds"),
+        "latest_preflight_stale": bool(blocker_summary.get("latest_preflight_stale")),
         "data_blocking_prompt_count": int(blocker_summary.get("data_blocking_prompt_count") or 0),
         "critical_waiting_count": int(blocker_summary.get("critical_waiting_count") or 0),
         "critical_supervised_only_count": int(
@@ -16160,6 +16200,8 @@ def render_automation_handoff_markdown(report: dict[str, Any]) -> str:
         "- blocking final-answer aliases: "
         + (", ".join(summary.get("goal_completion_blocking_final_answer_aliases") or []) or "none"),
         f"- direct autopilot command: `{summary.get('goal_completion_direct_autopilot_command', '')}`",
+        f"- latest preflight stale: {str(bool(summary.get('latest_preflight_stale'))).lower()}",
+        f"- latest preflight age seconds: {summary.get('latest_preflight_age_seconds')}",
         "",
     ]
     lines.extend(
@@ -16388,6 +16430,8 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
                 [
                     ("Status", report.get("status")),
                     ("Goal completion", summary.get("goal_completion_status") or "unknown"),
+                    ("Preflight stale", str(bool(summary.get("latest_preflight_stale"))).lower()),
+                    ("Preflight age sec", summary.get("latest_preflight_age_seconds")),
                     (
                         "Goal requirements",
                         f"{summary.get('goal_completion_satisfied_requirement_count', 0)} / {summary.get('goal_completion_total_requirement_count', 0)}",
