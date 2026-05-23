@@ -240,6 +240,26 @@ prompts, and runs those manifests against local synthetic forms to catch selecto
 misses. It does not submit real employer applications; final submit, CAPTCHA,
 and protected-class or privacy gates remain supervised stops.
 
+Turn that 100-position batch into a live-check queue before opening real pages:
+
+```bash
+python3 -m job_apply_agent apply-queue
+```
+
+This writes:
+
+```text
+job_apply_agent/outbox/apply_queue_readiness_latest.json
+job_apply_agent/outbox/apply_queue_readiness_latest.md
+job_apply_agent/outbox/apply_queue_readiness_latest.html
+job_apply_agent/outbox/apply_queue_live_check_jobs_latest.json
+```
+
+The apply queue joins the selected batch, critical-input readiness, the goal
+audit, and `closed_jobs.json`. It emits a `closed-preflight --jobs` payload for
+the next live check, marks already closed postings as skipped, and keeps real
+platform final submit out of scope until explicitly supervised.
+
 To make the 100-position target machine-checkable across real observations and
 synthetic execution evidence:
 

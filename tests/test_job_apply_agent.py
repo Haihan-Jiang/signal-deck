@@ -14,6 +14,7 @@ from job_apply_agent.core import (
     apply_critical_input_answers,
     apply_learning_task_answers,
     build_answer_gap_report,
+    build_apply_queue_readiness,
     build_apply_run_audit,
     build_application_draft,
     build_application_playbook,
@@ -77,6 +78,8 @@ from job_apply_agent.core import (
     record_closed_job,
     refresh_closed_jobs_from_live_pages,
     render_answer_gap_markdown,
+    render_apply_queue_readiness_html,
+    render_apply_queue_readiness_markdown,
     render_apply_run_audit_markdown,
     render_application_playbook_markdown,
     render_automation_handoff_html,
@@ -127,6 +130,7 @@ from job_apply_agent.core import (
     select_candidate_topup,
     shorten_apply_url,
     write_answer_gap_report,
+    write_apply_queue_readiness,
     write_apply_run_audit,
     write_application_playbook,
     write_application_research_report,
@@ -7848,6 +7852,183 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(json_output.exists())
             self.assertTrue(markdown_output.exists())
             self.assertTrue(html_output.exists())
+
+    def test_apply_queue_readiness_waits_for_answers_and_filters_closed_registry(self) -> None:
+        open_position = {
+            "index": 1,
+            "position_key": "url:https://job-boards.greenhouse.io/example/jobs/1",
+            "platform": "Greenhouse",
+            "company": "Example",
+            "title": "Site Reliability Engineer",
+            "role_family": "Site Reliability",
+            "apply_url": "https://job-boards.greenhouse.io/example/jobs/1",
+            "readiness": "autofill_ready",
+            "manifest_status": "autofill_ready_with_supervised_gates",
+            "autofill_allowed": True,
+            "browser_action_count": 7,
+            "stop_action_count": 1,
+            "stop_action_statuses": ["final_submit_confirmation"],
+            "local_check_selector_miss_count": 0,
+            "local_synthetic_submit_count": 1,
+        }
+        closed_position = {
+            "index": 2,
+            "position_key": "url:https://jobs.lever.co/closed/2",
+            "platform": "Lever",
+            "company": "Closed Co",
+            "title": "Platform Engineer",
+            "role_family": "Platform",
+            "apply_url": "https://jobs.lever.co/closed/2",
+            "readiness": "autofill_ready",
+            "manifest_status": "autofill_ready_with_supervised_gates",
+            "autofill_allowed": True,
+            "browser_action_count": 6,
+            "stop_action_count": 1,
+            "stop_action_statuses": ["final_submit_confirmation"],
+            "local_check_selector_miss_count": 0,
+            "local_synthetic_submit_count": 1,
+        }
+        autofill_batch = {
+            "selected_count": 2,
+            "selected_autofill_allowed_count": 2,
+            "selector_miss_count": 0,
+            "local_synthetic_submit_count": 2,
+            "local_synthetic_submit_achieved": True,
+            "positions": [open_position, closed_position],
+        }
+        updates_readiness = {
+            "ready_for_apply": False,
+            "summary": {
+                "waiting_after_update_count": 6,
+                "data_blocking_prompts_after": 51,
+                "high_risk_unconfirmed_count": 0,
+            },
+        }
+        goal_audit = {"status": "needs_user_answers", "goal_complete": False}
+        closed_jobs = {
+            "version": 1,
+            "jobs": [
+                {
+                    "key": job_registry_key(closed_position),
+                    "status": "CLOSED",
+                    "reason": "No longer accepting applications",
+                }
+            ],
+        }
+
+        report = build_apply_queue_readiness(
+            autofill_batch,
+            critical_input_updates_readiness=updates_readiness,
+            goal_readiness_audit=goal_audit,
+            closed_jobs=closed_jobs,
+        )
+        markdown = render_apply_queue_readiness_markdown(report)
+        html = render_apply_queue_readiness_html(report)
+
+        self.assertEqual(report["status"], "waiting_for_confirmed_answers")
+        self.assertFalse(report["ready_for_supervised_autofill"])
+        self.assertEqual(report["live_check_job_count"], 1)
+        self.assertEqual(report["live_check_jobs"][0]["apply_url"], open_position["apply_url"])
+        self.assertEqual(report["positions"][0]["queue_status"], "waiting_for_confirmed_answers")
+        self.assertEqual(report["positions"][1]["queue_status"], "closed_registry")
+        self.assertIn("critical_input_updates_not_ready", report["global_blockers"])
+        self.assertIn("data_blockers_remaining_after_updates", report["global_blockers"])
+        self.assertTrue(report["policy"]["stop_on_no_longer_accepting"])
+        self.assertFalse(report["policy"]["real_platform_submission"])
+        self.assertIn("Apply Queue Readiness", markdown)
+        self.assertIn("closed_registry", markdown)
+        self.assertIn("waiting_for_confirmed_answers", html)
+
+    def test_apply_queue_readiness_ready_for_live_preflight_with_100_clean_positions(self) -> None:
+        positions = []
+        for index in range(1, 101):
+            positions.append(
+                {
+                    "index": index,
+                    "position_key": f"url:https://jobs.ashbyhq.com/example/{index}",
+                    "platform": "Ashby",
+                    "company": "Example",
+                    "title": f"Platform Engineer {index}",
+                    "role_family": "Platform",
+                    "apply_url": f"https://jobs.ashbyhq.com/example/{index}?src=LinkedIn",
+                    "readiness": "autofill_ready",
+                    "manifest_status": "autofill_ready_with_supervised_gates",
+                    "autofill_allowed": True,
+                    "browser_action_count": 5,
+                    "stop_action_count": 1,
+                    "stop_action_statuses": ["final_submit_confirmation"],
+                    "local_check_selector_miss_count": 0,
+                    "local_synthetic_submit_count": 1,
+                }
+            )
+        autofill_batch = {
+            "selected_count": 100,
+            "selected_autofill_allowed_count": 100,
+            "selector_miss_count": 0,
+            "local_synthetic_submit_count": 100,
+            "local_synthetic_submit_achieved": True,
+            "positions": positions,
+        }
+        updates_readiness = {
+            "ready_for_apply": True,
+            "summary": {
+                "waiting_after_update_count": 0,
+                "data_blocking_prompts_after": 0,
+                "high_risk_unconfirmed_count": 0,
+            },
+        }
+
+        report = build_apply_queue_readiness(
+            autofill_batch,
+            critical_input_updates_readiness=updates_readiness,
+            goal_readiness_audit={"status": "ready", "goal_complete": False},
+            closed_jobs={"version": 1, "jobs": []},
+        )
+
+        self.assertEqual(report["status"], "ready_for_live_closed_preflight")
+        self.assertTrue(report["ready_for_supervised_autofill"])
+        self.assertFalse(report["ready_for_unattended_real_submit"])
+        self.assertEqual(report["live_check_job_count"], 100)
+        self.assertEqual(
+            report["queue_status_counts"],
+            {"ready_for_live_closed_preflight": 100},
+        )
+        self.assertEqual(report["global_blockers"], [])
+        self.assertIn("closed-preflight", report["next_commands"][1])
+        self.assertNotIn("--apply", report["next_commands"][0])
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            autofill_path = Path(temp_dir) / "autofill.json"
+            updates_path = Path(temp_dir) / "updates.json"
+            goal_path = Path(temp_dir) / "goal.json"
+            closed_path = Path(temp_dir) / "closed.json"
+            json_output = Path(temp_dir) / "queue.json"
+            markdown_output = Path(temp_dir) / "queue.md"
+            html_output = Path(temp_dir) / "queue.html"
+            live_jobs_output = Path(temp_dir) / "live_jobs.json"
+            autofill_path.write_text(json.dumps(autofill_batch), encoding="utf-8")
+            updates_path.write_text(json.dumps(updates_readiness), encoding="utf-8")
+            goal_path.write_text(json.dumps({"status": "ready"}), encoding="utf-8")
+            closed_path.write_text(json.dumps({"version": 1, "jobs": []}), encoding="utf-8")
+
+            written = write_apply_queue_readiness(
+                autofill_path,
+                updates_path,
+                goal_path,
+                closed_path,
+                json_output,
+                markdown_output,
+                html_output,
+                live_jobs_output,
+            )
+
+            self.assertEqual(written["status"], "ready_for_live_closed_preflight")
+            self.assertTrue(json_output.exists())
+            self.assertTrue(markdown_output.exists())
+            self.assertTrue(html_output.exists())
+            self.assertTrue(live_jobs_output.exists())
+            live_payload = json.loads(live_jobs_output.read_text(encoding="utf-8"))
+            self.assertEqual(len(live_payload["jobs"]), 100)
 
     def test_collection_plan_turns_coverage_shortfalls_into_search_tasks(self) -> None:
         gate = {

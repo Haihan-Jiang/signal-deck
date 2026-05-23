@@ -28,6 +28,7 @@ from .core import (
     run_pipeline,
     write_answer_gap_report,
     write_apply_run_audit,
+    write_apply_queue_readiness,
     write_application_playbook,
     write_application_research_report,
     write_automation_handoff_report,
@@ -82,6 +83,10 @@ DEFAULT_READINESS_MARKDOWN = Path(__file__).with_name("outbox") / "automation_re
 DEFAULT_AUTOFILL_BATCH_JSON = Path(__file__).with_name("outbox") / "autofill_batch_latest.json"
 DEFAULT_AUTOFILL_BATCH_MARKDOWN = Path(__file__).with_name("outbox") / "autofill_batch_latest.md"
 DEFAULT_AUTOFILL_BATCH_HTML = Path(__file__).with_name("outbox") / "autofill_batch_latest.html"
+DEFAULT_APPLY_QUEUE_JSON = Path(__file__).with_name("outbox") / "apply_queue_readiness_latest.json"
+DEFAULT_APPLY_QUEUE_MARKDOWN = Path(__file__).with_name("outbox") / "apply_queue_readiness_latest.md"
+DEFAULT_APPLY_QUEUE_HTML = Path(__file__).with_name("outbox") / "apply_queue_readiness_latest.html"
+DEFAULT_APPLY_QUEUE_LIVE_CHECK_JOBS = Path(__file__).with_name("outbox") / "apply_queue_live_check_jobs_latest.json"
 DEFAULT_AUTOMATION_HANDOFF_JSON = Path(__file__).with_name("outbox") / "automation_handoff_latest.json"
 DEFAULT_AUTOMATION_HANDOFF_MARKDOWN = Path(__file__).with_name("outbox") / "automation_handoff_latest.md"
 DEFAULT_AUTOMATION_HANDOFF_HTML = Path(__file__).with_name("outbox") / "automation_handoff_latest.html"
@@ -349,6 +354,22 @@ def main() -> int:
     autofill_batch_parser.add_argument("--json-output", default=str(DEFAULT_AUTOFILL_BATCH_JSON))
     autofill_batch_parser.add_argument("--markdown-output", default=str(DEFAULT_AUTOFILL_BATCH_MARKDOWN))
     autofill_batch_parser.add_argument("--html-output", default=str(DEFAULT_AUTOFILL_BATCH_HTML))
+
+    apply_queue_parser = subparsers.add_parser(
+        "apply-queue",
+        help="turn the selected 100-position autofill batch into a go/no-go queue with live-check jobs",
+    )
+    apply_queue_parser.add_argument("--autofill-batch-json", default=str(DEFAULT_AUTOFILL_BATCH_JSON))
+    apply_queue_parser.add_argument(
+        "--critical-input-updates-readiness-json",
+        default=str(DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_JSON),
+    )
+    apply_queue_parser.add_argument("--goal-audit-json", default=str(DEFAULT_GOAL_AUDIT_JSON))
+    apply_queue_parser.add_argument("--closed-jobs-json", default=str(DEFAULT_CLOSED_JOBS))
+    apply_queue_parser.add_argument("--json-output", default=str(DEFAULT_APPLY_QUEUE_JSON))
+    apply_queue_parser.add_argument("--markdown-output", default=str(DEFAULT_APPLY_QUEUE_MARKDOWN))
+    apply_queue_parser.add_argument("--html-output", default=str(DEFAULT_APPLY_QUEUE_HTML))
+    apply_queue_parser.add_argument("--live-check-jobs-output", default=str(DEFAULT_APPLY_QUEUE_LIVE_CHECK_JOBS))
 
     automation_handoff_parser = subparsers.add_parser(
         "automation-handoff",
@@ -1018,6 +1039,12 @@ def main() -> int:
     export_questions_parser.add_argument("--autofill-batch-html", default=str(DEFAULT_AUTOFILL_BATCH_HTML))
     export_questions_parser.add_argument("--automation-handoff-json", default=str(DEFAULT_AUTOMATION_HANDOFF_JSON))
     export_questions_parser.add_argument("--automation-handoff-html", default=str(DEFAULT_AUTOMATION_HANDOFF_HTML))
+    export_questions_parser.add_argument("--apply-queue-json", default=str(DEFAULT_APPLY_QUEUE_JSON))
+    export_questions_parser.add_argument("--apply-queue-html", default=str(DEFAULT_APPLY_QUEUE_HTML))
+    export_questions_parser.add_argument(
+        "--apply-queue-live-check-jobs-json",
+        default=str(DEFAULT_APPLY_QUEUE_LIVE_CHECK_JOBS),
+    )
     export_questions_parser.add_argument(
         "--critical-input-suggestions-json",
         default=str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON),
@@ -1220,6 +1247,9 @@ def main() -> int:
                     "Autofill batch HTML": args.autofill_batch_html,
                     "Automation handoff": args.automation_handoff_json,
                     "Automation handoff HTML": args.automation_handoff_html,
+                    "Apply queue": args.apply_queue_json,
+                    "Apply queue HTML": args.apply_queue_html,
+                    "Apply queue live-check jobs": args.apply_queue_live_check_jobs_json,
                     "Critical input suggestions": args.critical_input_suggestions_json,
                     "Critical input questionnaire": args.critical_input_questionnaire_json,
                     "Critical input questionnaire HTML": args.critical_input_questionnaire_html,
@@ -1400,6 +1430,37 @@ def main() -> int:
         print(f"Browser actions: {report.get('browser_action_count', 0)}")
         print(f"Selector misses: {report.get('selector_miss_count', 0)}")
         print(f"Would submit: {report.get('would_submit_count', 0)}")
+        return 0
+
+    if args.command == "apply-queue":
+        for label, path_value in [
+            ("autofill batch", args.autofill_batch_json),
+            ("critical input updates readiness", args.critical_input_updates_readiness_json),
+            ("goal audit", args.goal_audit_json),
+            ("closed jobs", args.closed_jobs_json),
+        ]:
+            if not Path(path_value).exists():
+                raise FileNotFoundError(f"{label} not found: {path_value}")
+        report = write_apply_queue_readiness(
+            args.autofill_batch_json,
+            args.critical_input_updates_readiness_json,
+            args.goal_audit_json,
+            args.closed_jobs_json,
+            args.json_output,
+            args.markdown_output,
+            args.html_output,
+            args.live_check_jobs_output,
+        )
+        summary = report.get("summary") or {}
+        print(f"Wrote apply queue JSON to {args.json_output}")
+        print(f"Wrote apply queue Markdown to {args.markdown_output}")
+        print(f"Wrote apply queue HTML to {args.html_output}")
+        print(f"Wrote live-check jobs to {args.live_check_jobs_output}")
+        print(f"Status: {report.get('status')}")
+        print(f"Positions: {report.get('position_count', 0)}")
+        print(f"Live-check jobs: {report.get('live_check_job_count', 0)}")
+        print(f"Ready for supervised autofill: {str(bool(report.get('ready_for_supervised_autofill'))).lower()}")
+        print(f"Critical updates ready: {str(bool(summary.get('updates_ready_for_apply'))).lower()}")
         return 0
 
     if args.command == "automation-handoff":
@@ -2506,6 +2567,16 @@ def _refresh_application_automation_reports() -> dict[str, object]:
         synthetic_unblocker_proof=_load_optional_json(str(DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_JSON)),
         closed_jobs=_load_optional_json(str(DEFAULT_CLOSED_JOBS)),
     )
+    apply_queue = write_apply_queue_readiness(
+        DEFAULT_AUTOFILL_BATCH_JSON,
+        DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_JSON,
+        DEFAULT_GOAL_AUDIT_JSON,
+        DEFAULT_CLOSED_JOBS,
+        DEFAULT_APPLY_QUEUE_JSON,
+        DEFAULT_APPLY_QUEUE_MARKDOWN,
+        DEFAULT_APPLY_QUEUE_HTML,
+        DEFAULT_APPLY_QUEUE_LIVE_CHECK_JOBS,
+    )
     automation_handoff = write_automation_handoff_report(
         goal,
         _load_optional_json(str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_JSON)),
@@ -2526,6 +2597,9 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                 "Synthetic unblocker proof": str(DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_JSON),
                 "Critical input full updates template": str(DEFAULT_CRITICAL_INPUT_FULL_UPDATES_JSON),
                 "Critical input updates readiness": str(DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_JSON),
+                "Apply queue": str(DEFAULT_APPLY_QUEUE_JSON),
+                "Apply queue HTML": str(DEFAULT_APPLY_QUEUE_HTML),
+                "Apply queue live-check jobs": str(DEFAULT_APPLY_QUEUE_LIVE_CHECK_JOBS),
                 "Answer memory": str(DEFAULT_MEMORY),
                 "Closed postings": str(DEFAULT_CLOSED_JOBS),
             }
@@ -2560,6 +2634,9 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                     "Autofill batch HTML": str(DEFAULT_AUTOFILL_BATCH_HTML),
                     "Automation handoff": str(DEFAULT_AUTOMATION_HANDOFF_JSON),
                     "Automation handoff HTML": str(DEFAULT_AUTOMATION_HANDOFF_HTML),
+                    "Apply queue": str(DEFAULT_APPLY_QUEUE_JSON),
+                    "Apply queue HTML": str(DEFAULT_APPLY_QUEUE_HTML),
+                    "Apply queue live-check jobs": str(DEFAULT_APPLY_QUEUE_LIVE_CHECK_JOBS),
                     "Critical input suggestions": str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON),
                     "Critical input questionnaire": str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_JSON),
                     "Critical input questionnaire HTML": str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_HTML),
@@ -2603,11 +2680,14 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             "synthetic-unblocker-proof",
             "critical-inputs-readiness",
             "goal-audit",
+            "apply-queue",
             "automation-handoff",
             "export-questions",
         ],
         "goal_status": goal.get("status"),
         "goal_complete": bool(goal.get("goal_complete")),
+        "apply_queue_status": apply_queue.get("status"),
+        "apply_queue_live_check_jobs": apply_queue.get("live_check_job_count", 0),
         "blocking_prompts": gaps.get("blocking_prompt_count", 0),
         "critical_waiting": (critical_status.get("summary") or {}).get("waiting_count", 0),
     }

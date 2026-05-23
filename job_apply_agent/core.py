@@ -8980,6 +8980,429 @@ def render_autofill_batch_plan_html(report: dict[str, Any]) -> str:
     )
 
 
+def build_apply_queue_readiness(
+    autofill_batch: dict[str, Any],
+    critical_input_updates_readiness: dict[str, Any] | None = None,
+    goal_readiness_audit: dict[str, Any] | None = None,
+    closed_jobs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if not isinstance(autofill_batch, dict):
+        raise ValueError("autofill batch must be a JSON object")
+    updates = critical_input_updates_readiness or {}
+    goal = goal_readiness_audit or {}
+    positions = [
+        position for position in autofill_batch.get("positions", []) if isinstance(position, dict)
+    ]
+    updates_ready = bool(updates.get("ready_for_apply"))
+    update_summary = updates.get("summary") or {}
+    selected_count = int(autofill_batch.get("selected_count") or len(positions))
+    selected_allowed = int(autofill_batch.get("selected_autofill_allowed_count") or 0)
+    selector_miss_count = int(autofill_batch.get("selector_miss_count") or 0)
+    local_synthetic_submit_count = int(autofill_batch.get("local_synthetic_submit_count") or 0)
+    local_synthetic_submit_achieved = bool(autofill_batch.get("local_synthetic_submit_achieved"))
+    global_blockers = _apply_queue_global_blockers(
+        selected_count=selected_count,
+        selected_allowed=selected_allowed,
+        selector_miss_count=selector_miss_count,
+        local_synthetic_submit_count=local_synthetic_submit_count,
+        local_synthetic_submit_achieved=local_synthetic_submit_achieved,
+        updates_ready=updates_ready,
+        update_summary=update_summary,
+    )
+    queue_positions: list[dict[str, Any]] = []
+    live_check_jobs: list[dict[str, Any]] = []
+    for index, position in enumerate(positions, start=1):
+        row = _apply_queue_position_row(
+            index,
+            position,
+            updates_ready=updates_ready,
+            closed_jobs=closed_jobs,
+        )
+        queue_positions.append(row)
+        if row.get("include_in_live_check"):
+            live_check_jobs.append(_apply_queue_live_check_job(row))
+
+    status_counts = _count_by(queue_positions, "queue_status")
+    ready_for_supervised_autofill = bool(
+        selected_count >= 100
+        and selected_allowed >= 100
+        and selector_miss_count == 0
+        and local_synthetic_submit_count >= 100
+        and local_synthetic_submit_achieved
+        and updates_ready
+        and not any(
+            row.get("queue_status") in {"closed_registry", "blocked_selector_miss", "blocked_not_autofill_allowed"}
+            for row in queue_positions
+        )
+    )
+    live_check_jobs_path = "job_apply_agent/outbox/apply_queue_live_check_jobs_latest.json"
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "apply_queue_readiness",
+        "status": "ready_for_live_closed_preflight"
+        if ready_for_supervised_autofill
+        else "waiting_for_confirmed_answers"
+        if not updates_ready
+        else "not_ready",
+        "ready_for_supervised_autofill": ready_for_supervised_autofill,
+        "ready_for_unattended_real_submit": False,
+        "real_platform_submission": False,
+        "position_count": len(queue_positions),
+        "live_check_job_count": len(live_check_jobs),
+        "queue_status_counts": status_counts,
+        "global_blockers": global_blockers,
+        "summary": {
+            "selected_count": selected_count,
+            "selected_autofill_allowed_count": selected_allowed,
+            "selector_miss_count": selector_miss_count,
+            "local_synthetic_submit_count": local_synthetic_submit_count,
+            "local_synthetic_submit_achieved": local_synthetic_submit_achieved,
+            "updates_ready_for_apply": updates_ready,
+            "updates_waiting_after_update_count": int(update_summary.get("waiting_after_update_count") or 0),
+            "updates_data_blocking_prompts_after": int(update_summary.get("data_blocking_prompts_after") or 0),
+            "updates_high_risk_unconfirmed_count": int(update_summary.get("high_risk_unconfirmed_count") or 0),
+            "goal_status": goal.get("status", ""),
+            "goal_complete": bool(goal.get("goal_complete")),
+            "closed_registry_count": _closed_registry_count(closed_jobs),
+            "live_check_required_before_open_count": len(live_check_jobs),
+            "final_submit_supervised_count": sum(
+                1 for row in queue_positions if row.get("final_submit_supervised")
+            ),
+        },
+        "positions": queue_positions,
+        "live_check_jobs": live_check_jobs,
+        "live_check_jobs_payload": {"jobs": live_check_jobs},
+        "next_commands": _apply_queue_next_commands(ready_for_supervised_autofill, live_check_jobs_path),
+        "policy": {
+            "run_live_closed_preflight_before_open": True,
+            "stop_on_no_longer_accepting": True,
+            "persist_closed_postings": True,
+            "final_submit_remains_supervised": True,
+            "captcha_or_security_not_bypassed": True,
+            "real_platform_submission": False,
+        },
+    }
+
+
+def write_apply_queue_readiness(
+    autofill_batch_path: str | Path,
+    critical_input_updates_readiness_path: str | Path,
+    goal_readiness_audit_path: str | Path,
+    closed_jobs_path: str | Path,
+    json_output: str | Path,
+    markdown_output: str | Path,
+    html_output: str | Path,
+    live_check_jobs_output: str | Path,
+) -> dict[str, Any]:
+    autofill_batch = _read_json_file(Path(autofill_batch_path))
+    critical_input_updates_readiness = _read_json_file(Path(critical_input_updates_readiness_path))
+    goal_readiness_audit = _read_json_file(Path(goal_readiness_audit_path))
+    closed_jobs = load_closed_jobs(closed_jobs_path)
+    report = build_apply_queue_readiness(
+        autofill_batch,
+        critical_input_updates_readiness=critical_input_updates_readiness,
+        goal_readiness_audit=goal_readiness_audit,
+        closed_jobs=closed_jobs,
+    )
+    report["source_paths"] = {
+        "autofill_batch": str(autofill_batch_path),
+        "critical_input_updates_readiness": str(critical_input_updates_readiness_path),
+        "goal_readiness_audit": str(goal_readiness_audit_path),
+        "closed_jobs": str(closed_jobs_path),
+    }
+    report["outputs"] = {
+        "json": str(json_output),
+        "markdown": str(markdown_output),
+        "html": str(html_output),
+        "live_check_jobs": str(live_check_jobs_output),
+    }
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    html_path = Path(html_output)
+    live_jobs_path = Path(live_check_jobs_output)
+    for path in [json_path, markdown_path, html_path, live_jobs_path]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    live_jobs_path.write_text(
+        json.dumps(report.get("live_check_jobs_payload", {"jobs": []}), ensure_ascii=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(render_apply_queue_readiness_markdown(report), encoding="utf-8")
+    html_path.write_text(render_apply_queue_readiness_html(report), encoding="utf-8")
+    return report
+
+
+def render_apply_queue_readiness_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    lines = [
+        "# Apply Queue Readiness",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        f"Status: {report.get('status')}",
+        f"Ready for supervised autofill: {str(bool(report.get('ready_for_supervised_autofill'))).lower()}",
+        "Ready for unattended real submit: false",
+        "",
+        "## Summary",
+        "",
+        f"- positions: {report.get('position_count', 0)}",
+        f"- live-check jobs: {report.get('live_check_job_count', 0)}",
+        f"- selected autofill allowed: {summary.get('selected_autofill_allowed_count', 0)}",
+        f"- selector misses: {summary.get('selector_miss_count', 0)}",
+        f"- local synthetic submits: {summary.get('local_synthetic_submit_count', 0)}",
+        f"- local synthetic submit achieved: {str(bool(summary.get('local_synthetic_submit_achieved'))).lower()}",
+        f"- critical updates ready: {str(bool(summary.get('updates_ready_for_apply'))).lower()}",
+        f"- critical updates waiting: {summary.get('updates_waiting_after_update_count', 0)}",
+        f"- data blockers after updates: {summary.get('updates_data_blocking_prompts_after', 0)}",
+        f"- high-risk confirmations missing: {summary.get('updates_high_risk_unconfirmed_count', 0)}",
+        f"- final-submit supervised stops: {summary.get('final_submit_supervised_count', 0)}",
+        "",
+        "## Global Blockers",
+        "",
+    ]
+    blockers = report.get("global_blockers") or []
+    if blockers:
+        for blocker in blockers:
+            lines.append(f"- {blocker}")
+    else:
+        lines.append("- None")
+    lines.extend(["", "## Queue Status Counts", ""])
+    for status, count in sorted((report.get("queue_status_counts") or {}).items()):
+        lines.append(f"- {status}: {count}")
+    lines.extend(["", "## Positions", ""])
+    for row in (report.get("positions") or [])[:120]:
+        lines.append(
+            "- {index}. {status}: {company} - {title} [{platform}; actions={actions}; stops={stops}]".format(
+                index=row.get("index"),
+                status=row.get("queue_status"),
+                company=row.get("company") or "Unknown company",
+                title=row.get("title") or "Unknown title",
+                platform=row.get("platform") or "Unknown",
+                actions=row.get("browser_action_count", 0),
+                stops=row.get("stop_action_count", 0),
+            )
+        )
+        if row.get("blockers"):
+            lines.append(f"  blockers: {', '.join(row.get('blockers') or [])}")
+        lines.append(f"  next: {row.get('next_action')}")
+        if row.get("apply_url"):
+            lines.append(f"  url: {row.get('apply_url')}")
+    lines.extend(["", "## Next Commands", ""])
+    for command in report.get("next_commands") or []:
+        lines.append(f"- `{command}`")
+    return "\n".join(lines) + "\n"
+
+
+def render_apply_queue_readiness_html(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    positions = report.get("positions") or []
+    position_rows = [
+        [
+            row.get("index"),
+            row.get("queue_status"),
+            row.get("platform"),
+            row.get("company"),
+            row.get("title"),
+            row.get("role_family"),
+            ", ".join(row.get("blockers") or []),
+            row.get("next_action"),
+            row.get("browser_action_count", 0),
+            row.get("stop_action_count", 0),
+            row.get("apply_url"),
+        ]
+        for row in positions
+    ]
+    status_rows = [
+        [status, count] for status, count in sorted((report.get("queue_status_counts") or {}).items())
+    ]
+    blocker_rows = [[blocker] for blocker in (report.get("global_blockers") or [])]
+    return "\n".join(
+        [
+            "<!doctype html>",
+            '<html lang="en">',
+            "<head>",
+            '<meta charset="utf-8">',
+            '<meta name="viewport" content="width=device-width, initial-scale=1">',
+            "<title>Apply Queue Readiness</title>",
+            "<style>",
+            _question_export_css(),
+            "</style>",
+            "</head>",
+            "<body>",
+            "<main>",
+            "<h1>Apply Queue Readiness</h1>",
+            f"<p class=\"muted\">Generated: {_html_escape(report.get('generated_at'))}</p>",
+            _html_kpis(
+                [
+                    ("Status", report.get("status")),
+                    ("Positions", report.get("position_count", 0)),
+                    ("Live-check jobs", report.get("live_check_job_count", 0)),
+                    ("Ready", str(bool(report.get("ready_for_supervised_autofill"))).lower()),
+                    ("Selector misses", summary.get("selector_miss_count", 0)),
+                    ("Local submits", summary.get("local_synthetic_submit_count", 0)),
+                    ("Answers ready", str(bool(summary.get("updates_ready_for_apply"))).lower()),
+                    ("Waiting inputs", summary.get("updates_waiting_after_update_count", 0)),
+                ]
+            ),
+            "<section><h2>Global Blockers</h2>",
+            _html_table(["Blocker"], blocker_rows) if blocker_rows else "<p class=\"muted\">None</p>",
+            "</section>",
+            "<section><h2>Status Counts</h2>",
+            _html_table(["Status", "Count"], status_rows),
+            "</section>",
+            "<section><h2>Positions</h2>",
+            _html_table(
+                [
+                    "#",
+                    "Queue status",
+                    "Platform",
+                    "Company",
+                    "Title",
+                    "Role",
+                    "Blockers",
+                    "Next action",
+                    "Actions",
+                    "Stops",
+                    "Apply URL",
+                ],
+                position_rows,
+            ),
+            "</section>",
+            "<section><h2>Policy</h2>",
+            _html_key_value_table(report.get("policy") or {}),
+            "</section>",
+            "</main>",
+            "</body>",
+            "</html>",
+        ]
+    )
+
+
+def _apply_queue_global_blockers(
+    selected_count: int,
+    selected_allowed: int,
+    selector_miss_count: int,
+    local_synthetic_submit_count: int,
+    local_synthetic_submit_achieved: bool,
+    updates_ready: bool,
+    update_summary: dict[str, Any],
+) -> list[str]:
+    blockers: list[str] = []
+    if selected_count < 100:
+        blockers.append("selected_autofill_queue_below_100")
+    if selected_allowed < 100:
+        blockers.append("autofill_allowed_queue_below_100")
+    if selector_miss_count:
+        blockers.append("selector_misses_present")
+    if local_synthetic_submit_count < 100 or not local_synthetic_submit_achieved:
+        blockers.append("local_synthetic_100_submit_proof_missing")
+    if not updates_ready:
+        blockers.append("critical_input_updates_not_ready")
+    if int(update_summary.get("waiting_after_update_count") or 0):
+        blockers.append("critical_inputs_waiting")
+    if int(update_summary.get("data_blocking_prompts_after") or 0):
+        blockers.append("data_blockers_remaining_after_updates")
+    if int(update_summary.get("high_risk_unconfirmed_count") or 0):
+        blockers.append("high_risk_confirmations_missing")
+    return blockers
+
+
+def _apply_queue_position_row(
+    index: int,
+    position: dict[str, Any],
+    updates_ready: bool,
+    closed_jobs: dict[str, Any] | None,
+) -> dict[str, Any]:
+    closed_reason = closed_application_reason(position, closed_jobs=closed_jobs)
+    blockers: list[str] = []
+    if closed_reason:
+        blockers.append("closed_registry_or_text")
+    if not bool(position.get("autofill_allowed")):
+        blockers.append("not_autofill_allowed")
+    if int(position.get("local_check_selector_miss_count") or 0):
+        blockers.append("selector_miss")
+    if not updates_ready:
+        blockers.append("critical_answers_not_ready")
+    queue_status = "ready_for_live_closed_preflight"
+    if closed_reason:
+        queue_status = "closed_registry"
+    elif "selector_miss" in blockers:
+        queue_status = "blocked_selector_miss"
+    elif "not_autofill_allowed" in blockers:
+        queue_status = "blocked_not_autofill_allowed"
+    elif not updates_ready:
+        queue_status = "waiting_for_confirmed_answers"
+    next_action = _apply_queue_next_action(queue_status)
+    stop_statuses = _string_list(position.get("stop_action_statuses"))
+    return {
+        "index": index,
+        "queue_status": queue_status,
+        "position_key": position.get("position_key"),
+        "platform": position.get("platform"),
+        "company": position.get("company"),
+        "title": position.get("title"),
+        "role_family": position.get("role_family"),
+        "apply_url": position.get("apply_url"),
+        "readiness": position.get("readiness"),
+        "manifest_status": position.get("manifest_status"),
+        "autofill_allowed": bool(position.get("autofill_allowed")),
+        "browser_action_count": int(position.get("browser_action_count") or 0),
+        "stop_action_count": int(position.get("stop_action_count") or 0),
+        "stop_action_statuses": stop_statuses,
+        "final_submit_supervised": "final_submit_confirmation" in stop_statuses,
+        "local_check_policy_stop": position.get("local_check_policy_stop"),
+        "local_check_selector_miss_count": int(position.get("local_check_selector_miss_count") or 0),
+        "local_synthetic_submit_count": int(position.get("local_synthetic_submit_count") or 0),
+        "local_synthetic_submit_selector_miss_count": int(
+            position.get("local_synthetic_submit_selector_miss_count") or 0
+        ),
+        "closed_reason": closed_reason,
+        "blockers": blockers,
+        "include_in_live_check": bool(position.get("apply_url")) and not closed_reason,
+        "next_action": next_action,
+    }
+
+
+def _apply_queue_next_action(queue_status: str) -> str:
+    if queue_status == "closed_registry":
+        return "skip this posting and keep it persisted in closed_jobs.json"
+    if queue_status == "blocked_selector_miss":
+        return "fix selector mapping before opening this application"
+    if queue_status == "blocked_not_autofill_allowed":
+        return "inspect missing inputs or policy stops before selecting this application"
+    if queue_status == "waiting_for_confirmed_answers":
+        return "fill and approve critical_input_full_updates_template.json, then rerun apply-queue"
+    return "run closed-preflight live check, then open for supervised autofill and stop before final submit"
+
+
+def _apply_queue_live_check_job(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "apply_url": row.get("apply_url"),
+        "short_apply_url": shorten_apply_url(str(row.get("apply_url") or "")),
+        "company": row.get("company"),
+        "title": row.get("title"),
+        "platform": row.get("platform"),
+        "job_id": row.get("position_key"),
+        "role_family": row.get("role_family"),
+        "queue_index": row.get("index"),
+        "source": "apply_queue_readiness",
+    }
+
+
+def _apply_queue_next_commands(ready_for_supervised_autofill: bool, live_check_jobs_path: str) -> list[str]:
+    commands = [
+        "python3 -m job_apply_agent critical-inputs-readiness",
+        f"python3 -m job_apply_agent closed-preflight --jobs {live_check_jobs_path} --live-check-limit 100",
+    ]
+    if ready_for_supervised_autofill:
+        commands.append("open only the open_eligible closed-preflight results for supervised autofill")
+    else:
+        commands.insert(
+            1,
+            "python3 -m job_apply_agent critical-inputs-workflow --updates job_apply_agent/outbox/critical_input_full_updates_template.json --approve --approve-high-risk --apply",
+        )
+    return commands
+
+
 def _fake_profile_for_learning_tasks(
     learning_tasks: dict[str, Any],
 ) -> tuple[CandidateProfile, list[str]]:
