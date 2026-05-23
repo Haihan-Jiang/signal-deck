@@ -1041,6 +1041,98 @@ class JobApplyAgentTests(unittest.TestCase):
             ).category,
             "government_employment",
         )
+        self.assertEqual(
+            classify_application_prompt("Work Eligibility Status").category,
+            "work_authorization",
+        )
+        self.assertEqual(
+            classify_application_prompt("Do you have 8+ years expertise in C#?").category,
+            "experience_years",
+        )
+        self.assertEqual(
+            classify_application_prompt(
+                "If successful, how soon are you able to commence in this role with Envoy Global?"
+            ).category,
+            "availability",
+        )
+        self.assertEqual(
+            classify_application_prompt("Stack Overflow Jobs").category,
+            "referral_source",
+        )
+        self.assertEqual(
+            classify_application_prompt("Middle Name").category,
+            "profile_identity",
+        )
+        self.assertEqual(
+            classify_application_prompt("Candidate Personal Data Disclosure").category,
+            "policy_acknowledgement",
+        )
+        self.assertEqual(
+            classify_application_prompt(
+                "Have you ever been charged or convicted of a misdemeanor or felony?"
+            ).category,
+            "background_or_export_control",
+        )
+        self.assertEqual(
+            classify_application_prompt(
+                "EXPORT CONTROLS - This position requires access to information and technology that is subject to U.S. export controls."
+            ).category,
+            "background_or_export_control",
+        )
+        self.assertEqual(
+            classify_application_prompt(
+                "Government Employment: In the last 5 years, have you been an employee of a U.S. federal, state, or local government?"
+            ).category,
+            "government_employment",
+        )
+        self.assertEqual(
+            classify_application_prompt(
+                "Please indicate which ethnic group(s) you identify with. Please select all that apply."
+            ).automation_action,
+            "do_not_store_sensitive",
+        )
+        self.assertEqual(
+            classify_application_prompt(
+                "As a requirement of the role you will be required to attend in-person meetings at our clients' worksites."
+            ).category,
+            "location_constraint",
+        )
+        self.assertEqual(
+            classify_application_prompt("Are you able to meet a fully vaccinated against COVID-19 requirement?").category,
+            "health_requirement",
+        )
+        self.assertEqual(
+            classify_application_prompt("What design patterns have you implemented in a production service?").category,
+            "skills_experience",
+        )
+        self.assertEqual(
+            classify_application_prompt("What is your overall experience/proficiency with Python?").category,
+            "skills_experience",
+        )
+        self.assertEqual(
+            classify_application_prompt("Do you have experience against nation state level adversaries?").category,
+            "domain_experience",
+        )
+        self.assertEqual(
+            classify_application_prompt("When building a customer-facing feature, how do you typically approach it?").category,
+            "role_specific_free_text",
+        )
+        self.assertEqual(
+            classify_application_prompt("Which of the following most influenced your decision to apply?").category,
+            "role_specific_free_text",
+        )
+        self.assertEqual(
+            classify_application_prompt("X (Twitter) account").category,
+            "profile_link",
+        )
+        self.assertEqual(
+            classify_application_prompt("Are you legally entitled to work in Australia?").category,
+            "country_work_permit",
+        )
+        self.assertEqual(
+            classify_application_prompt("When would you like to hear back from us regarding potential opportunities?").category,
+            "availability",
+        )
 
     def test_application_research_summarizes_form_snapshots_and_jsonl(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1350,6 +1442,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 "start_date": "I can start in about two months.",
                 "sponsorship": "Yes, I will now or in the future require visa sponsorship or a visa transfer.",
                 "authorization": "I am authorized to work in the United States.",
+                "years_experience": "4 years or less, depending on the specific skill or domain asked.",
             },
         )
         research = {
@@ -1364,6 +1457,26 @@ class JobApplyAgentTests(unittest.TestCase):
                     "sensitivity": "standard_preference",
                     "required": True,
                     "platform": "Ashby",
+                    "source_file": "form.json",
+                },
+                {
+                    "label": "If successful, how soon are you able to commence in this role with Envoy Global?",
+                    "normalized_label": "if successful how soon able commence role envoy global",
+                    "category": "availability",
+                    "automation_action": "auto_answer_from_memory",
+                    "sensitivity": "standard_preference",
+                    "required": True,
+                    "platform": "Greenhouse",
+                    "source_file": "form.json",
+                },
+                {
+                    "label": "Do you have 8+ years expertise in C#?",
+                    "normalized_label": "8 years expertise c",
+                    "category": "experience_years",
+                    "automation_action": "auto_answer_from_memory",
+                    "sensitivity": "standard_preference",
+                    "required": True,
+                    "platform": "Greenhouse",
                     "source_file": "form.json",
                 },
                 {
@@ -1392,7 +1505,7 @@ class JobApplyAgentTests(unittest.TestCase):
         report = build_answer_gap_report(research, profile=profile, answer_memory=None)
 
         self.assertEqual(report["blocking_prompt_count"], 0)
-        self.assertEqual(report["coverage_counts"]["covered_auto_answer"], 3)
+        self.assertEqual(report["coverage_counts"]["covered_auto_answer"], 5)
 
     def test_answer_gap_report_uses_standard_source_disclosure_and_age_answers(self) -> None:
         profile = CandidateProfile(
@@ -1423,6 +1536,16 @@ class JobApplyAgentTests(unittest.TestCase):
                 {
                     "label": "How did you hear about this job?",
                     "normalized_label": "how did hear about this job",
+                    "category": "referral_source",
+                    "automation_action": "auto_answer_from_memory",
+                    "sensitivity": "standard_preference",
+                    "required": True,
+                    "platform": "Greenhouse",
+                    "source_file": "form.json",
+                },
+                {
+                    "label": "Stack Overflow Jobs",
+                    "normalized_label": "stack overflow jobs",
                     "category": "referral_source",
                     "automation_action": "auto_answer_from_memory",
                     "sensitivity": "standard_preference",
@@ -1486,7 +1609,7 @@ class JobApplyAgentTests(unittest.TestCase):
         report = build_answer_gap_report(research, profile=profile, answer_memory=None)
 
         self.assertEqual(report["blocking_prompt_count"], 0)
-        self.assertEqual(report["coverage_counts"]["covered_auto_answer"], 6)
+        self.assertEqual(report["coverage_counts"]["covered_auto_answer"], 7)
 
     def test_answer_gap_report_uses_policy_and_english_profile_answers(self) -> None:
         profile = CandidateProfile(
@@ -1706,6 +1829,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 "apply_url": "https://job-boards.greenhouse.io/example/jobs/1",
                 "questions": [
                     "First Name",
+                    "Middle Name",
                     "Last Name",
                     "Email",
                     "LinkedIn Profile",
@@ -1718,6 +1842,7 @@ class JobApplyAgentTests(unittest.TestCase):
 
             research = build_application_research(temp_dir, position_target=100)
             required_by_label = {item["label"]: item["required"] for item in research["items"]}
+            self.assertFalse(required_by_label["Middle Name"])
             self.assertFalse(required_by_label["Website"])
             self.assertFalse(
                 required_by_label[
@@ -1726,6 +1851,7 @@ class JobApplyAgentTests(unittest.TestCase):
             )
             gaps = build_answer_gap_report(research, profile=profile, answer_memory=None)
             statuses = {item["label"]: item["coverage_status"] for item in gaps["prompt_statuses"]}
+            self.assertEqual(statuses["Middle Name"], "optional_missing_profile")
             self.assertEqual(statuses["Website"], "optional_missing_profile")
             self.assertEqual(statuses["If other, please specify"], "optional_missing_answer")
 
@@ -1782,6 +1908,15 @@ class JobApplyAgentTests(unittest.TestCase):
                             "Docker",
                             "SQL",
                             "Great, do my skills fit?",
+                            "Claude",
+                            "1 week per month",
+                            "Are You A Fit?",
+                            "ARM/Bicep",
+                            "He/him",
+                            "TS/SCI with CI Poly",
+                            "Use name only",
+                            "btn clear filters",
+                            "Prêt·e à passer au niveau supérieur sans renoncer à tes valeurs ?",
                             "Do you have blockchain/crypto experience?",
                         ],
                     }
@@ -1796,6 +1931,15 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertNotIn("Docker", labels)
             self.assertNotIn("SQL", labels)
             self.assertNotIn("Great, do my skills fit?", labels)
+            self.assertNotIn("Claude", labels)
+            self.assertNotIn("1 week per month", labels)
+            self.assertNotIn("Are You A Fit?", labels)
+            self.assertNotIn("ARM/Bicep", labels)
+            self.assertNotIn("He/him", labels)
+            self.assertNotIn("TS/SCI with CI Poly", labels)
+            self.assertNotIn("Use name only", labels)
+            self.assertNotIn("btn clear filters", labels)
+            self.assertNotIn("Prêt·e à passer au niveau supérieur sans renoncer à tes valeurs ?", labels)
             self.assertIn("Do you have blockchain/crypto experience?", labels)
 
     def test_question_export_xlsx_strips_invalid_xml_control_characters(self) -> None:
