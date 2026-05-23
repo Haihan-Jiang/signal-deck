@@ -1735,7 +1735,19 @@ class JobApplyAgentTests(unittest.TestCase):
             "do_not_store_sensitive",
         )
         self.assertEqual(
+            classify_application_prompt("White / Caucasian").automation_action,
+            "do_not_store_sensitive",
+        )
+        self.assertEqual(
             classify_application_prompt("Non-binary").automation_action,
+            "do_not_store_sensitive",
+        )
+        self.assertEqual(
+            classify_application_prompt("Do you identify as an Indigenous person?").category,
+            "eeoc_sensitive",
+        )
+        self.assertEqual(
+            classify_application_prompt("Indigenous person").automation_action,
             "do_not_store_sensitive",
         )
         self.assertEqual(
@@ -7152,6 +7164,8 @@ class JobApplyAgentTests(unittest.TestCase):
                     "high_risk": False,
                     "required_count": 4,
                     "platforms": ["Ashby"],
+                    "labels": ["Zip Code", "Postal Code"],
+                    "why_not_inferred": "Profile has a city but no exact ZIP/postal code.",
                 },
                 {
                     "input_id": "answer_memory_citizenship_status_default_policy",
@@ -7161,6 +7175,8 @@ class JobApplyAgentTests(unittest.TestCase):
                     "high_risk": True,
                     "required_count": 7,
                     "platforms": ["Greenhouse"],
+                    "labels": ["Are you a U.S. Citizen?", "Are you a U.S. Person?"],
+                    "why_not_inferred": "Work authorization exists but citizenship needs exact confirmation.",
                 },
             ]
         }
@@ -7195,6 +7211,9 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["summary"]["unconfirmed_high_risk_count"], 1)
         self.assertEqual(report["blockers"][0]["alias"], "citizenship_status")
         self.assertIn("answer_example_shape", report["blockers"][0])
+        self.assertEqual(report["blockers"][0]["observed_prompt_count"], 2)
+        self.assertIn("Are you a U.S. Citizen?", report["blockers"][0]["observed_prompt_examples"])
+        self.assertIn("why_not_inferred", report["blockers"][0])
         self.assertEqual(
             report["reply_template_lines"],
             ["citizenship_status\uff1a<fill>", "citizenship_status_confirmed\uff1a\u786e\u8ba4"],
@@ -7208,11 +7227,16 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Final Answer Blockers", markdown)
         self.assertIn("citizenship_status", markdown)
         self.assertIn("Example Shape", markdown)
+        self.assertIn("Why Not Inferred", markdown)
+        self.assertIn("Observed Prompt Examples", markdown)
+        self.assertIn("Are you a U.S. Citizen?", markdown)
         self.assertIn("## Reply Template", markdown)
         self.assertIn("citizenship_status\uff1a<fill>", markdown)
         self.assertIn("\u786e\u8ba4", markdown)
         self.assertIn("citizenship_status_confirmed\uff1a\u786e\u8ba4", reply_template_text)
         self.assertIn("citizenship_status shape:", reply_template_text)
+        self.assertIn("citizenship_status why not inferred:", reply_template_text)
+        self.assertIn("citizenship_status seen prompt:", reply_template_text)
         self.assertIn("Final answer reply template", reply_template_text)
         self.assertIn("Job automation needs final answers", alert)
         self.assertIn("citizenship_status", alert)

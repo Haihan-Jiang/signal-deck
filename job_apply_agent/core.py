@@ -1086,6 +1086,8 @@ def classify_application_prompt(
             "communities do you belong",
             "i identify as",
             "identify as indigenous",
+            "indigenous",
+            "indigenous person",
             "ethnic group",
             "lgbtq",
             "lgbtqqia",
@@ -1122,6 +1124,9 @@ def classify_application_prompt(
             "pacific islander",
             "non binary",
             "asian",
+            "white",
+            "caucasian",
+            "white caucasian",
             "indigenous peoples",
             "native american",
             "alaska native",
@@ -1157,6 +1162,7 @@ def classify_application_prompt(
         "southeast asian",
         "west asian",
         "white",
+        "white caucasian",
     }:
         return ApplicationPromptClassification(
             "eeoc_sensitive",
@@ -1277,7 +1283,7 @@ def classify_application_prompt(
             "country_specific_work_permit_requires_confirmation",
         )
     if any(
-        term in text
+        _normalized_contains_term(text, term)
         for term in [
             "u s citizen",
             "us citizen",
@@ -20584,6 +20590,11 @@ def build_final_answer_blocker_report(
             status = "ready"
             ready_count += 1
         if status != "ready":
+            labels = [
+                str(label).strip()
+                for label in field.get("labels") or []
+                if str(label).strip()
+            ]
             blocker_rows.append(
                 {
                     "alias": alias,
@@ -20597,6 +20608,10 @@ def build_final_answer_blocker_report(
                     "answer_specificity_hint": field.get("answer_specificity_hint"),
                     "answer_example_shape": field.get("answer_example_shape")
                     or _final_answer_intake_example_shape(alias),
+                    "required_user_response": field.get("required_user_response") or "",
+                    "why_not_inferred": field.get("why_not_inferred") or "",
+                    "observed_prompt_count": len(labels),
+                    "observed_prompt_examples": labels[:8],
                 }
             )
     summary = {
@@ -20624,6 +20639,9 @@ def build_final_answer_blocker_report(
             ((goal_audit or {}).get("blocker_summary") or {}).get(
                 "post_answer_synthetic_queue_rehearsal_ready"
             )
+        ),
+        "observed_prompt_example_count": sum(
+            len(row.get("observed_prompt_examples") or []) for row in blocker_rows
         ),
     }
     reply_template_lines = _final_answer_blocker_reply_template_lines(blocker_rows)
@@ -20698,12 +20716,18 @@ def render_final_answer_reply_template_text(report: dict[str, Any]) -> str:
             alias = _final_answer_reply_line_alias(text_line)
             blocker = blocker_by_alias.get(alias, {})
             if blocker:
+                why_not_inferred = blocker.get("why_not_inferred")
+                if why_not_inferred:
+                    lines.append(f"# {alias} why not inferred: {why_not_inferred}")
                 hint = blocker.get("answer_specificity_hint") or blocker.get("answer_format_hint")
                 example_shape = blocker.get("answer_example_shape")
                 if hint:
                     lines.append(f"# {alias} hint: {hint}")
                 if example_shape:
                     lines.append(f"# {alias} shape: {example_shape}")
+                observed_examples = blocker.get("observed_prompt_examples") or []
+                for example in observed_examples[:3]:
+                    lines.append(f"# {alias} seen prompt: {example}")
             lines.append(text_line)
     else:
         lines.append("# No final-answer blockers remain.")
@@ -20722,6 +20746,7 @@ def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
         f"Missing answers: {summary.get('missing_answer_count', 0)}",
         f"Unconfirmed high-risk answers: {summary.get('unconfirmed_high_risk_count', 0)}",
         f"Position answers remaining: {summary.get('position_execution_remaining_user_answers', 0)}",
+        f"Observed prompt examples: {summary.get('observed_prompt_example_count', 0)}",
         "",
         "## Blocking Questions",
         "",
@@ -20736,6 +20761,7 @@ def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
                     "High Risk",
                     "Required",
                     "Question",
+                    "Why Not Inferred",
                     "Specificity Hint",
                     "Example Shape",
                 ],
@@ -20746,6 +20772,7 @@ def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
                         str(bool(row.get("high_risk"))).lower(),
                         row.get("required_count"),
                         row.get("question"),
+                        row.get("why_not_inferred"),
                         row.get("answer_specificity_hint"),
                         row.get("answer_example_shape"),
                     ]
@@ -20753,6 +20780,25 @@ def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
                 ],
             )
         )
+    else:
+        lines.append("- None")
+    lines.extend(["", "## Observed Prompt Examples", ""])
+    if blockers:
+        for row in blockers:
+            examples = row.get("observed_prompt_examples") or []
+            platforms = ", ".join(str(platform) for platform in row.get("platforms") or [])
+            lines.append(
+                "- {alias} [{platforms}; observed={count}]".format(
+                    alias=row.get("alias"),
+                    platforms=platforms or "unknown platform",
+                    count=row.get("observed_prompt_count", len(examples)),
+                )
+            )
+            if examples:
+                for example in examples[:8]:
+                    lines.append(f"  - {example}")
+            else:
+                lines.append("  - No prompt examples captured")
     else:
         lines.append("- None")
     reply_template = str(report.get("reply_template") or "").strip()
