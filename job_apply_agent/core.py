@@ -21452,6 +21452,11 @@ def build_final_answer_blocker_report(
         },
         "next_validate_command": "python3 -m job_apply_agent resume-after-answers --reply-text '<filled final-answer lines>' --validate-only",
         "next_run_command": "python3 -m job_apply_agent resume-after-answers --reply-text '<filled final-answer lines>'",
+        "next_autopilot_reply_text_command": (
+            "python3 -m job_apply_agent final-answer-autopilot "
+            "--reply-text '<filled final-answer lines>' --apply --live-check "
+            "--include-values --fail-on-not-ready"
+        ),
         "policy": {
             "stores_answer_text": False,
             "sends_answer_text": False,
@@ -21477,9 +21482,11 @@ def build_final_answer_blocker_report(
         "next_commands": [
             "python3 -m job_apply_agent rehearse-after-answers",
             "python3 -m job_apply_agent resume-after-answers --reply-text '<filled final-answer lines>' --validate-only",
+            "python3 -m job_apply_agent final-answer-autopilot --reply-text '<filled final-answer lines>' --dry-run --fail-on-not-ready",
             f"python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --validate-only --fail-on-not-ready",
             "python3 -m job_apply_agent resume-after-answers",
             f"python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --run-post-answer-pipeline --fail-on-not-ready",
+            "python3 -m job_apply_agent final-answer-autopilot --reply-text '<filled final-answer lines>' --apply --live-check --include-values --fail-on-not-ready",
             f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --watch --fail-on-not-ready",
             f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --watch --apply --live-check --include-values --fail-on-not-ready",
             "python3 -m job_apply_agent final-answer-intake-server --open-browser --once --run-post-answer-pipeline --post-answer-apply --post-answer-live-check --post-answer-include-values",
@@ -21544,6 +21551,11 @@ def _final_answer_blocker_action_pack(
         "autopilot_command": (
             f"python3 -m job_apply_agent final-answer-autopilot --reply-file "
             f"{FINAL_ANSWER_REPLY_TEMPLATE_PATH} --watch --fail-on-not-ready"
+        ),
+        "autopilot_reply_text_command": (
+            "python3 -m job_apply_agent final-answer-autopilot "
+            "--reply-text '<filled final-answer lines>' --apply --live-check "
+            "--include-values --fail-on-not-ready"
         ),
         "autopilot_apply_command": (
             f"python3 -m job_apply_agent final-answer-autopilot --reply-file "
@@ -21736,6 +21748,7 @@ def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
             f"unknown {validation.get('unknown', 0)}",
             f"- validate command: `{automation.get('next_validate_command', '')}`",
             f"- run command: `{automation.get('next_run_command', '')}`",
+            f"- direct autopilot command: `{automation.get('next_autopilot_reply_text_command', '')}`",
         ]
     )
     action_pack = report.get("action_pack") if isinstance(report.get("action_pack"), dict) else {}
@@ -21753,6 +21766,7 @@ def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
                 f"- edit instruction: {action_pack.get('edit_instruction', '')}",
                 f"- validate without writing: `{action_pack.get('safe_validate_command', '')}`",
                 f"- run post-answer pipeline: `{action_pack.get('safe_run_command', '')}`",
+                f"- direct reply autopilot: `{action_pack.get('autopilot_reply_text_command', '')}`",
                 f"- watch and auto-run when filled: `{action_pack.get('autopilot_command', '')}`",
                 f"- watch, apply, live-check, and rebuild packet: `{action_pack.get('autopilot_apply_command', '')}`",
                 f"- watch, apply, live-check, rebuild, and open verified pages: `{action_pack.get('autopilot_open_command', '')}`",

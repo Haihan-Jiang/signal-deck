@@ -5,6 +5,7 @@ import json
 import shlex
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import webbrowser
@@ -1225,6 +1226,11 @@ def main() -> int:
     final_answer_autopilot_parser.add_argument(
         "--reply-file",
         default=str(DEFAULT_FINAL_ANSWER_REPLY_TEMPLATE_TEXT),
+    )
+    final_answer_autopilot_parser.add_argument(
+        "--reply-text",
+        default=None,
+        help="filled final-answer lines; when provided, it is used instead of --reply-file and is not stored in reports",
     )
     final_answer_autopilot_parser.add_argument(
         "--template",
@@ -4226,14 +4232,17 @@ def _final_answer_reply_placeholder_count(reply_text: str) -> int:
     return count
 
 
-def _final_answer_autopilot_validate_command(args: argparse.Namespace) -> list[str]:
+def _final_answer_autopilot_validate_command(
+    args: argparse.Namespace,
+    reply_file: str | Path | None = None,
+) -> list[str]:
     return [
         sys.executable,
         "-m",
         "job_apply_agent",
         "final-answer-reply",
         "--reply-file",
-        str(args.reply_file),
+        str(reply_file or args.reply_file),
         "--template",
         str(args.template),
         "--unblockers",
@@ -4243,14 +4252,17 @@ def _final_answer_autopilot_validate_command(args: argparse.Namespace) -> list[s
     ]
 
 
-def _final_answer_autopilot_pipeline_command(args: argparse.Namespace) -> list[str]:
+def _final_answer_autopilot_pipeline_command(
+    args: argparse.Namespace,
+    reply_file: str | Path | None = None,
+) -> list[str]:
     command = [
         sys.executable,
         "-m",
         "job_apply_agent",
         "final-answer-reply",
         "--reply-file",
-        str(args.reply_file),
+        str(reply_file or args.reply_file),
         "--template",
         str(args.template),
         "--unblockers",
@@ -4314,6 +4326,7 @@ def _render_final_answer_autopilot_markdown(report: dict[str, object]) -> str:
         "",
         f"Generated: {report.get('generated_at')}",
         f"Status: {report.get('status')}",
+        f"Reply source: {report.get('reply_source', 'reply_file')}",
         f"Reply file: `{report.get('reply_file')}`",
         f"Attempts: {report.get('attempt_count', 0)}",
         f"Placeholder lines remaining: {report.get('placeholder_line_count', 0)}",
@@ -4374,13 +4387,16 @@ def _final_answer_autopilot_base_report(
     pipeline_exit_code: int | None = None,
     final_audits: list[dict[str, object]] | None = None,
     reason: str = "",
+    reply_source: str = "reply_file",
+    reply_file_for_report: str | Path | None = None,
 ) -> dict[str, object]:
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source": "final_answer_autopilot",
         "status": status,
         "reason": reason,
-        "reply_file": str(args.reply_file),
+        "reply_source": reply_source,
+        "reply_file": str(reply_file_for_report or args.reply_file),
         "watch": bool(args.watch),
         "dry_run": bool(args.dry_run),
         "run_post_answer_pipeline": not bool(args.no_run_post_answer_pipeline),
@@ -4430,9 +4446,35 @@ def _run_final_answer_autopilot_final_audits() -> list[dict[str, object]]:
 
 
 def _run_final_answer_autopilot(args: argparse.Namespace) -> int:
-    reply_path = Path(args.reply_file)
-    validate_command = _final_answer_autopilot_validate_command(args)
-    pipeline_command = _final_answer_autopilot_pipeline_command(args)
+    if args.reply_text is not None:
+        if args.watch:
+            raise ValueError("--reply-text cannot be combined with --watch")
+        with tempfile.TemporaryDirectory(prefix="job_apply_final_answers_") as temp_dir:
+            reply_path = Path(temp_dir) / "reply.txt"
+            reply_path.write_text(str(args.reply_text), encoding="utf-8")
+            return _run_final_answer_autopilot_for_reply_path(
+                args,
+                reply_path,
+                reply_source="reply_text",
+                reply_file_for_report="<inline reply text redacted>",
+            )
+    return _run_final_answer_autopilot_for_reply_path(
+        args,
+        Path(args.reply_file),
+        reply_source="reply_file",
+        reply_file_for_report=args.reply_file,
+    )
+
+
+def _run_final_answer_autopilot_for_reply_path(
+    args: argparse.Namespace,
+    reply_path: Path,
+    *,
+    reply_source: str,
+    reply_file_for_report: str | Path,
+) -> int:
+    validate_command = _final_answer_autopilot_validate_command(args, reply_path)
+    pipeline_command = _final_answer_autopilot_pipeline_command(args, reply_path)
     start = time.monotonic()
     attempt_count = 0
     interval = max(float(args.interval or 0), 0.25)
@@ -4448,6 +4490,8 @@ def _run_final_answer_autopilot(args: argparse.Namespace) -> int:
                 validate_command=validate_command,
                 pipeline_command=pipeline_command,
                 reason="reply file does not exist",
+                reply_source=reply_source,
+                reply_file_for_report=reply_file_for_report,
             )
             _write_final_answer_autopilot_report(report, args.json_output, args.markdown_output)
             if not args.watch:
@@ -4465,6 +4509,8 @@ def _run_final_answer_autopilot(args: argparse.Namespace) -> int:
                     validate_command=validate_command,
                     pipeline_command=pipeline_command,
                     reason="reply file still contains <fill> placeholders",
+                    reply_source=reply_source,
+                    reply_file_for_report=reply_file_for_report,
                 )
                 _write_final_answer_autopilot_report(report, args.json_output, args.markdown_output)
                 if not args.watch:
@@ -4493,6 +4539,8 @@ def _run_final_answer_autopilot(args: argparse.Namespace) -> int:
                         pipeline_command=pipeline_command,
                         validate_exit_code=validate_result.returncode,
                         reason="filled reply did not pass final-answer validation",
+                        reply_source=reply_source,
+                        reply_file_for_report=reply_file_for_report,
                     )
                     _write_final_answer_autopilot_report(report, args.json_output, args.markdown_output)
                     print(f"Final answer autopilot: {report['status']}")
@@ -4507,6 +4555,8 @@ def _run_final_answer_autopilot(args: argparse.Namespace) -> int:
                         pipeline_command=pipeline_command,
                         validate_exit_code=validate_result.returncode,
                         reason="dry run or pipeline disabled",
+                        reply_source=reply_source,
+                        reply_file_for_report=reply_file_for_report,
                     )
                     _write_final_answer_autopilot_report(report, args.json_output, args.markdown_output)
                     print(f"Final answer autopilot: {report['status']}")
@@ -4543,6 +4593,8 @@ def _run_final_answer_autopilot(args: argparse.Namespace) -> int:
                     pipeline_exit_code=pipeline_result.returncode,
                     final_audits=final_audits,
                     reason="pipeline command finished",
+                    reply_source=reply_source,
+                    reply_file_for_report=reply_file_for_report,
                 )
                 _write_final_answer_autopilot_report(report, args.json_output, args.markdown_output)
                 print(f"Final answer autopilot: {report['status']}")

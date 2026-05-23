@@ -7480,6 +7480,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("--validate-only", report["action_pack"]["safe_validate_command"])
         self.assertIn("--run-post-answer-pipeline", report["action_pack"]["safe_run_command"])
         self.assertIn("final-answer-autopilot", report["action_pack"]["autopilot_command"])
+        self.assertIn("--reply-text", report["action_pack"]["autopilot_reply_text_command"])
+        self.assertIn("--apply --live-check --include-values", report["action_pack"]["autopilot_reply_text_command"])
         self.assertIn("--apply --live-check --include-values", report["action_pack"]["autopilot_apply_command"])
         self.assertIn("--open-browser --open-limit 100", report["action_pack"]["autopilot_open_command"])
         self.assertFalse(report["action_pack"]["stores_answer_text_in_report"])
@@ -7490,8 +7492,10 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("rehearse-after-answers", report["next_commands"][0])
         self.assertIn("resume-after-answers --reply-text", report["next_commands"][1])
         self.assertIn("--validate-only", report["next_commands"][1])
-        self.assertIn("--validate-only", report["next_commands"][2])
-        self.assertIn("resume-after-answers", report["next_commands"][3])
+        self.assertIn("final-answer-autopilot --reply-text", report["next_commands"][2])
+        self.assertIn("--dry-run", report["next_commands"][2])
+        self.assertIn("--validate-only", report["next_commands"][3])
+        self.assertIn("resume-after-answers", report["next_commands"][4])
         self.assertIn("Final Answer Blockers", markdown)
         self.assertIn("citizenship_status", markdown)
         self.assertIn("Example Shape", markdown)
@@ -7505,6 +7509,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("## One-Reply Action Pack", markdown)
         self.assertIn("run post-answer pipeline", markdown)
         self.assertIn("--run-post-answer-pipeline", markdown)
+        self.assertIn("direct reply autopilot", markdown)
+        self.assertIn("direct autopilot command", markdown)
         self.assertIn("watch and auto-run when filled", markdown)
         self.assertIn("watch, apply, live-check, and rebuild packet", markdown)
         self.assertIn("watch, apply, live-check, rebuild, and open verified pages", markdown)
@@ -7875,6 +7881,62 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertFalse(report["submits_real_applications"])
             self.assertNotIn("98004", report_text)
             self.assertNotIn("98004", markdown_path.read_text(encoding="utf-8"))
+
+    def test_final_answer_autopilot_accepts_reply_text_without_storing_answer_text(self) -> None:
+        unblockers = {
+            "unblockers": [
+                {
+                    "input_id": "profile_zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "high_risk": False,
+                    "required_count": 1,
+                }
+            ]
+        }
+        template = build_final_answer_intake_template(unblockers)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            template_path = root / "template.json"
+            unblockers_path = root / "unblockers.json"
+            report_path = root / "autopilot.json"
+            markdown_path = root / "autopilot.md"
+            template_path.write_text(json.dumps(template, ensure_ascii=True, indent=2), encoding="utf-8")
+            unblockers_path.write_text(json.dumps(unblockers, ensure_ascii=True, indent=2), encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "job_apply_agent",
+                    "final-answer-autopilot",
+                    "--reply-text",
+                    "zip_or_postal_code：98004",
+                    "--template",
+                    str(template_path),
+                    "--unblockers",
+                    str(unblockers_path),
+                    "--json-output",
+                    str(report_path),
+                    "--markdown-output",
+                    str(markdown_path),
+                    "--dry-run",
+                    "--fail-on-not-ready",
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report_text = report_path.read_text(encoding="utf-8")
+            markdown_text = markdown_path.read_text(encoding="utf-8")
+            report = json.loads(report_text)
+            self.assertEqual(report["status"], "validated_ready")
+            self.assertEqual(report["reply_source"], "reply_text")
+            self.assertEqual(report["reply_file"], "<inline reply text redacted>")
+            self.assertNotIn("98004", report_text)
+            self.assertNotIn("98004", markdown_text)
 
     def test_final_answer_reply_accepts_chinese_colon_and_confirmations(self) -> None:
         unblockers = {
