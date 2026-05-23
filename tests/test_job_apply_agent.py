@@ -6386,6 +6386,26 @@ class JobApplyAgentTests(unittest.TestCase):
             "remaining_manual_gate_count": 2,
             "learning_blockers_cleared": True,
         }
+        fake_critical_input_probe = {
+            "generated_at": "2026-05-22T00:00:00+00:00",
+            "source": "fake_critical_input_probe",
+            "real_platform_submission": False,
+            "writes_real_profile_or_memory": False,
+            "fake_candidate_only": True,
+            "input_count": 11,
+            "fake_answered_count": 10,
+            "ready_to_apply_count": 10,
+            "waiting_count": 0,
+            "supervised_only_count": 1,
+            "profile_ready_count": 1,
+            "resume_fact_ready_count": 1,
+            "answer_memory_ready_count": 8,
+            "high_risk_ready_count": 5,
+            "ready_for_apply_critical_inputs": True,
+            "ready_for_autofill_recheck": True,
+            "status_counts": {"ready_to_apply": 10, "supervised_only": 1},
+            "policy": {"dry_run_only": True, "final_submit_remains_supervised": True},
+        }
         fake_position_rehearsal = {
             "generated_at": "2026-05-22T00:00:00+00:00",
             "execution": "observed_prompt_local_browser_manifest_executor",
@@ -6437,6 +6457,7 @@ class JobApplyAgentTests(unittest.TestCase):
             source_artifacts=source_artifacts,
             synthetic_browser_execution=synthetic_browser_execution,
             fake_learning_probe=fake_learning_probe,
+            fake_critical_input_probe=fake_critical_input_probe,
             fake_position_rehearsal=fake_position_rehearsal,
             answer_memory=answer_memory,
             closed_jobs=closed_jobs,
@@ -6448,9 +6469,12 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Source Artifacts", html)
         self.assertIn("Synthetic Browser Execution", html)
         self.assertIn("Fake Learning Probe", html)
+        self.assertIn("Fake Critical Input Probe", html)
         self.assertIn("Fake Position Rehearsal", html)
         self.assertIn("observed_prompt_local_browser_manifest_executor", html)
         self.assertIn("learning_blockers_cleared", html)
+        self.assertIn("ready_for_autofill_recheck", html)
+        self.assertIn("writes_real_profile_or_memory", html)
         self.assertIn("Closed Posting Registry", html)
         self.assertIn("Answer Memory Index", html)
         self.assertIn("No longer accepting applications", html)
@@ -6479,6 +6503,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 source_artifacts=source_artifacts,
                 synthetic_browser_execution=synthetic_browser_execution,
                 fake_learning_probe=fake_learning_probe,
+                fake_critical_input_probe=fake_critical_input_probe,
                 fake_position_rehearsal=fake_position_rehearsal,
                 answer_memory=answer_memory,
                 closed_jobs=closed_jobs,
@@ -6490,6 +6515,7 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(result["summary"]["critical_input_count"], 1)
             self.assertEqual(result["learning_approval_critical_inputs"][0]["input_type"], "exact_prompt_answer")
             self.assertEqual(len(result["learning_approval_tasks"]), 1)
+            self.assertEqual(result["summary"]["fake_critical_input_ready_count"], 10)
             self.assertEqual(result["summary"]["answer_memory_count"], 1)
             self.assertEqual(result["summary"]["closed_posting_count"], 1)
             self.assertTrue(xlsx_output.exists())
@@ -6500,10 +6526,10 @@ class JobApplyAgentTests(unittest.TestCase):
                 self.assertIn("xl/worksheets/sheet1.xml", names)
                 self.assertIn("xl/worksheets/sheet2.xml", names)
                 self.assertIn("xl/worksheets/sheet8.xml", names)
-                self.assertIn("xl/worksheets/sheet20.xml", names)
                 self.assertIn("xl/worksheets/sheet21.xml", names)
                 self.assertIn("xl/worksheets/sheet22.xml", names)
                 self.assertIn("xl/worksheets/sheet23.xml", names)
+                self.assertIn("xl/worksheets/sheet24.xml", names)
                 critical_inputs = workbook.read("xl/worksheets/sheet2.xml").decode("utf-8")
                 self.assertIn("exact_prompt_answer", critical_inputs)
                 self.assertIn("user_answer", critical_inputs)
@@ -6513,19 +6539,22 @@ class JobApplyAgentTests(unittest.TestCase):
                 self.assertIn("local_synthetic_browser_action_executor", synthetic_sheet)
                 fake_probe = workbook.read("xl/worksheets/sheet7.xml").decode("utf-8")
                 self.assertIn("learning_blockers_cleared", fake_probe)
-                fake_position = workbook.read("xl/worksheets/sheet8.xml").decode("utf-8")
+                fake_critical_inputs = workbook.read("xl/worksheets/sheet8.xml").decode("utf-8")
+                self.assertIn("ready_for_autofill_recheck", fake_critical_inputs)
+                self.assertIn("writes_real_profile_or_memory", fake_critical_inputs)
+                fake_position = workbook.read("xl/worksheets/sheet9.xml").decode("utf-8")
                 self.assertIn("observed_prompt_local_browser_manifest_executor", fake_position)
-                problem_buckets = workbook.read("xl/worksheets/sheet9.xml").decode("utf-8")
+                problem_buckets = workbook.read("xl/worksheets/sheet10.xml").decode("utf-8")
                 self.assertIn("needs_user_confirmation", problem_buckets)
-                user_questions = workbook.read("xl/worksheets/sheet10.xml").decode("utf-8")
+                user_questions = workbook.read("xl/worksheets/sheet11.xml").decode("utf-8")
                 self.assertIn("Have you worked at DoorDash?", user_questions)
-                platform_shortfalls = workbook.read("xl/worksheets/sheet15.xml").decode("utf-8")
+                platform_shortfalls = workbook.read("xl/worksheets/sheet16.xml").decode("utf-8")
                 self.assertIn("Greenhouse", platform_shortfalls)
-                closed_postings = workbook.read("xl/worksheets/sheet20.xml").decode("utf-8")
+                closed_postings = workbook.read("xl/worksheets/sheet21.xml").decode("utf-8")
                 self.assertIn("No longer accepting applications", closed_postings)
-                approval_buckets = workbook.read("xl/worksheets/sheet21.xml").decode("utf-8")
+                approval_buckets = workbook.read("xl/worksheets/sheet22.xml").decode("utf-8")
                 self.assertIn("exact_prompt_answer", approval_buckets)
-                approval_tasks = workbook.read("xl/worksheets/sheet22.xml").decode("utf-8")
+                approval_tasks = workbook.read("xl/worksheets/sheet23.xml").decode("utf-8")
                 self.assertIn("Have you worked at DoorDash?", approval_tasks)
 
 

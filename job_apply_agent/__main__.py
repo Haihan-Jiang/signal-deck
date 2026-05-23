@@ -792,6 +792,7 @@ def main() -> int:
             ),
             synthetic_browser_execution=_load_optional_json(args.synthetic_browser_exec_json),
             fake_learning_probe=_load_optional_json(args.fake_learning_probe_json),
+            fake_critical_input_probe=_load_optional_json(args.fake_critical_input_probe_json),
             fake_position_rehearsal=_load_optional_json(args.fake_position_rehearsal_json),
             learning_approval_pack=_load_optional_json(args.learning_approval_pack_json),
             answer_memory=_load_optional_json(args.answer_memory_json),

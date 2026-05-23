@@ -6945,6 +6945,7 @@ def write_question_export(
     source_artifacts: list[dict[str, Any]] | None = None,
     synthetic_browser_execution: dict[str, Any] | None = None,
     fake_learning_probe: dict[str, Any] | None = None,
+    fake_critical_input_probe: dict[str, Any] | None = None,
     fake_position_rehearsal: dict[str, Any] | None = None,
     learning_approval_pack: dict[str, Any] | None = None,
     answer_memory: dict[str, Any] | None = None,
@@ -6959,6 +6960,7 @@ def write_question_export(
         source_artifacts=source_artifacts,
         synthetic_browser_execution=synthetic_browser_execution,
         fake_learning_probe=fake_learning_probe,
+        fake_critical_input_probe=fake_critical_input_probe,
         fake_position_rehearsal=fake_position_rehearsal,
         learning_approval_pack=learning_approval_pack,
         answer_memory=answer_memory,
@@ -6983,6 +6985,7 @@ def build_question_export(
     source_artifacts: list[dict[str, Any]] | None = None,
     synthetic_browser_execution: dict[str, Any] | None = None,
     fake_learning_probe: dict[str, Any] | None = None,
+    fake_critical_input_probe: dict[str, Any] | None = None,
     fake_position_rehearsal: dict[str, Any] | None = None,
     learning_approval_pack: dict[str, Any] | None = None,
     answer_memory: dict[str, Any] | None = None,
@@ -7019,6 +7022,7 @@ def build_question_export(
         "count",
     )
     fake_learning_probe_rows = _fake_learning_probe_export_rows(fake_learning_probe)
+    fake_critical_input_probe_rows = _fake_critical_input_probe_export_rows(fake_critical_input_probe)
     fake_position_rehearsal_rows = _fake_position_rehearsal_export_rows(fake_position_rehearsal)
     answer_memory_rows = _answer_memory_export_rows(answer_memory)
     closed_posting_rows = _closed_posting_export_rows(closed_jobs)
@@ -7104,6 +7108,22 @@ def build_question_export(
         "fake_learning_blockers_cleared": bool(
             (fake_learning_probe or {}).get("learning_blockers_cleared")
         ),
+        "fake_critical_input_count": int((fake_critical_input_probe or {}).get("input_count") or 0),
+        "fake_critical_input_ready_count": int(
+            (fake_critical_input_probe or {}).get("ready_to_apply_count") or 0
+        ),
+        "fake_critical_input_waiting_count": int(
+            (fake_critical_input_probe or {}).get("waiting_count") or 0
+        ),
+        "fake_critical_input_supervised_only_count": int(
+            (fake_critical_input_probe or {}).get("supervised_only_count") or 0
+        ),
+        "fake_critical_input_ready_for_autofill_recheck": bool(
+            (fake_critical_input_probe or {}).get("ready_for_autofill_recheck")
+        ),
+        "fake_critical_input_writes_real_profile_or_memory": bool(
+            (fake_critical_input_probe or {}).get("writes_real_profile_or_memory")
+        ),
         "fake_position_rehearsal_runs": int(
             (fake_position_rehearsal or {}).get("run_count") or 0
         ),
@@ -7134,6 +7154,7 @@ def build_question_export(
         "synthetic_policy_stops": synthetic_policy_stop_rows,
         "synthetic_platform_roles": synthetic_platform_role_rows,
         "fake_learning_probe": fake_learning_probe_rows,
+        "fake_critical_input_probe": fake_critical_input_probe_rows,
         "fake_position_rehearsal": fake_position_rehearsal_rows,
         "answer_memory": answer_memory_rows,
         "closed_postings": closed_posting_rows,
@@ -7226,6 +7247,25 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                 ],
                 ["Fake observed-position rehearsal runs", summary.get("fake_position_rehearsal_runs", 0)],
                 [
+                    "Fake critical inputs ready",
+                    "{ready} / {total}".format(
+                        ready=summary.get("fake_critical_input_ready_count", 0),
+                        total=summary.get("fake_critical_input_count", 0),
+                    ),
+                ],
+                [
+                    "Fake critical inputs waiting",
+                    summary.get("fake_critical_input_waiting_count", 0),
+                ],
+                [
+                    "Fake critical supervised-only",
+                    summary.get("fake_critical_input_supervised_only_count", 0),
+                ],
+                [
+                    "Fake critical recheck ready",
+                    _yes_no(summary.get("fake_critical_input_ready_for_autofill_recheck")),
+                ],
+                [
                     "Fake observed-position submit count",
                     "{count} / {target}".format(
                         count=summary.get("fake_position_rehearsal_submit_count", 0),
@@ -7276,6 +7316,12 @@ def render_question_export_html(export: dict[str, Any]) -> str:
         _html_table(
             ["Metric", "Value"],
             [[row.get("metric"), row.get("value")] for row in export.get("fake_learning_probe", [])],
+        ),
+        "</section>",
+        "<section><h2>Fake Critical Input Probe</h2>",
+        _html_table(
+            ["Metric", "Value"],
+            [[row.get("metric"), row.get("value")] for row in export.get("fake_critical_input_probe", [])],
         ),
         "</section>",
         "<section><h2>Fake Position Rehearsal</h2>",
@@ -14225,6 +14271,37 @@ def _fake_learning_probe_export_rows(fake_learning_probe: dict[str, Any] | None)
     return [{"metric": key, "value": value} for key, value in metrics.items()]
 
 
+def _fake_critical_input_probe_export_rows(
+    fake_critical_input_probe: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if not fake_critical_input_probe:
+        return []
+    metrics = {
+        "generated_at": fake_critical_input_probe.get("generated_at"),
+        "source": fake_critical_input_probe.get("source"),
+        "real_platform_submission": fake_critical_input_probe.get("real_platform_submission"),
+        "writes_real_profile_or_memory": fake_critical_input_probe.get("writes_real_profile_or_memory"),
+        "fake_candidate_only": fake_critical_input_probe.get("fake_candidate_only"),
+        "input_count": fake_critical_input_probe.get("input_count"),
+        "fake_answered_count": fake_critical_input_probe.get("fake_answered_count"),
+        "ready_to_apply_count": fake_critical_input_probe.get("ready_to_apply_count"),
+        "waiting_count": fake_critical_input_probe.get("waiting_count"),
+        "supervised_only_count": fake_critical_input_probe.get("supervised_only_count"),
+        "profile_ready_count": fake_critical_input_probe.get("profile_ready_count"),
+        "resume_fact_ready_count": fake_critical_input_probe.get("resume_fact_ready_count"),
+        "answer_memory_ready_count": fake_critical_input_probe.get("answer_memory_ready_count"),
+        "high_risk_ready_count": fake_critical_input_probe.get("high_risk_ready_count"),
+        "ready_for_apply_critical_inputs": fake_critical_input_probe.get("ready_for_apply_critical_inputs"),
+        "ready_for_autofill_recheck": fake_critical_input_probe.get("ready_for_autofill_recheck"),
+    }
+    rows = [{"metric": key, "value": value} for key, value in metrics.items()]
+    for key, value in sorted((fake_critical_input_probe.get("status_counts") or {}).items()):
+        rows.append({"metric": f"status_counts:{key}", "value": value})
+    for key, value in sorted((fake_critical_input_probe.get("policy") or {}).items()):
+        rows.append({"metric": f"policy:{key}", "value": value})
+    return rows
+
+
 def _fake_position_rehearsal_export_rows(fake_position_rehearsal: dict[str, Any] | None) -> list[dict[str, Any]]:
     if not fake_position_rehearsal:
         return []
@@ -14562,6 +14639,7 @@ def _write_question_export_xlsx(export: dict[str, Any], path: Path) -> None:
         ("Synthetic Stops", _table_rows(export.get("synthetic_policy_stops", []))),
         ("Synthetic Roles", _table_rows(export.get("synthetic_platform_roles", []))),
         ("Fake Learning Probe", _table_rows(export.get("fake_learning_probe", []))),
+        ("Fake Critical Inputs", _table_rows(export.get("fake_critical_input_probe", []))),
         ("Fake Position Rehearsal", _table_rows(export.get("fake_position_rehearsal", []))),
         ("Problem Buckets", _table_rows(export.get("problem_buckets", []))),
         ("User Questions", _table_rows(export.get("user_questions", []))),
