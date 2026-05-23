@@ -10,6 +10,7 @@ from pathlib import Path
 
 from job_apply_agent.core import (
     CandidateProfile,
+    DEFAULT_QUESTIONS,
     apply_learning_task_answers,
     build_answer_gap_report,
     build_apply_run_audit,
@@ -3786,6 +3787,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 {
                     "position_key": "linkedin:4410000001",
                     "label": "What is your expected compensation range?",
+                    "item_type": "inferred_question",
                     "category": "compensation",
                     "automation_action": "auto_answer_from_memory",
                     "required": True,
@@ -3835,6 +3837,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["excluded_closed_position_count"], 1)
         self.assertEqual(report["pre_synthetic_missing_input_count"], 0)
         self.assertEqual(report["selector_miss_count"], 0)
+        self.assertEqual(report["inferred_prompt_item_count"], 1)
+        self.assertEqual(report["inferred_prompt_position_count"], 1)
         self.assertEqual(report["actual_submit_count"], 1)
         self.assertTrue(report["eligible_submit_achieved"])
         self.assertEqual(report["policy_stop_counts"]["local_synthetic_submit_allowed"], 1)
@@ -4966,6 +4970,38 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(research["role_family_counts"].get("Cloud DevOps"), 1)
             self.assertEqual(research["role_family_counts"].get("Other"), 2)
 
+    def test_application_research_infers_standard_linkedin_prompts_when_guest_page_has_none(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            observed_path = Path(temp_dir) / "observed_candidates.jsonl"
+            observed_path.write_text(
+                json.dumps(
+                    {
+                        "status": "OBSERVED_CANDIDATE",
+                        "platform": "LinkedIn",
+                        "company": "Example",
+                        "title": "Platform Engineer",
+                        "role_family": "Platform Infrastructure",
+                        "apply_url": "https://www.linkedin.com/jobs/view/4410000001/",
+                        "questions": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            research = build_application_research(temp_dir, position_target=100)
+
+            self.assertEqual(research["positions_observed_total"], 1)
+            self.assertEqual(len(research["items"]), len(DEFAULT_QUESTIONS))
+            self.assertTrue(
+                all(item["item_type"] == "inferred_question" for item in research["items"])
+            )
+            self.assertEqual(
+                {item["source_file"] for item in research["items"]},
+                {"linkedin_standard_prompt_inference"},
+            )
+            self.assertIn("LinkedIn::Platform Infrastructure", research["coverage_groups"])
+
     def test_extract_live_job_page_metadata_finds_prompts(self) -> None:
         page = """
         <html>
@@ -5237,6 +5273,71 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(duplicate["status_counts"]["duplicate_observation"], 1)
             self.assertEqual(refreshed["observed_count"], 1)
             self.assertEqual(len(load_candidate_rows(observed_output)), 2)
+
+    def test_observe_candidate_pages_follows_lever_apply_form(self) -> None:
+        candidates = [
+            {
+                "company": "LeverCo",
+                "title": "Site Reliability Engineer",
+                "platform": "Lever",
+                "role_family": "Site Reliability",
+                "apply_url": "https://jobs.lever.co/leverco/sre-1",
+                "questions": ["What's in it for you?"],
+            }
+        ]
+        fetched: list[str] = []
+
+        def fake_fetcher(url: str, timeout: float) -> str:
+            fetched.append(url)
+            if url.endswith("/apply"):
+                return """
+                <html>
+                  <head><title>LeverCo - Site Reliability Engineer</title></head>
+                  <body>
+                    <label>Resume/CV</label>
+                    <label>Full name ✱</label>
+                    <label>Email ✱</label>
+                    <label>LinkedIn URL</label>
+                    <button>Submit application</button>
+                  </body>
+                </html>
+                """
+            return """
+            <html>
+              <head><title>LeverCo - Site Reliability Engineer</title></head>
+              <body>
+                <a class="postings-btn template-btn-submit" href="https://jobs.lever.co/leverco/sre-1/apply">
+                  apply for this job
+                </a>
+              </body>
+            </html>
+            """
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            observed_output = Path(temp_dir) / "observed_candidates.jsonl"
+            closed_path = Path(temp_dir) / "closed_jobs.json"
+
+            report = observe_candidate_pages(
+                candidates,
+                observed_output,
+                closed_path,
+                fetcher=fake_fetcher,
+                max_checks=1,
+                source="lever_apply_form_test",
+            )
+            rows = load_candidate_rows(observed_output)
+            research = build_application_research(temp_dir, position_target=100)
+
+            self.assertEqual(report["observed_count"], 1)
+            self.assertIn("https://jobs.lever.co/leverco/sre-1/apply", fetched)
+            self.assertEqual(rows[0]["apply_url"], "https://jobs.lever.co/leverco/sre-1")
+            self.assertIn("Resume/CV", rows[0]["questions"])
+            self.assertIn("Full name \u2731", rows[0]["questions"])
+            self.assertIn("What's in it for you?", rows[0]["questions"])
+            self.assertEqual(research["coverage_groups"]["Lever::Site Reliability"]["positions_observed"], 1)
+            labels = {item["label"] for item in research["items"]}
+            self.assertIn("Resume/CV", labels)
+            self.assertIn("Full name \u2731", labels)
 
     def test_observe_candidate_pages_records_404_as_closed(self) -> None:
         candidates = [

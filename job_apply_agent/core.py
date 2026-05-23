@@ -2193,6 +2193,7 @@ def build_application_research(
             elif row.get("status") in {"OPENED_FOR_REVIEW", "OBSERVED_CANDIDATE"}:
                 _register_research_position(path, row, positions, index=index)
 
+    _append_linkedin_standard_prompt_inferences(items, positions)
     summary = _summarize_application_research(items, positions, position_target)
     if max_items is not None and max_items >= 0:
         summary["items"] = summary["items"][:max_items]
@@ -4106,9 +4107,10 @@ def build_fake_position_rehearsal(
     executions: list[dict[str, Any]] = []
     for index, position in enumerate(selection["selected_positions"], start=1):
         position_key = str(position.get("position_key") or "")
+        position_items = items_by_position.get(position_key, [])
         snapshot = _observed_position_snapshot(
             position,
-            items_by_position.get(position_key, []),
+            position_items,
         )
         plan = build_form_fill_plan(
             snapshot,
@@ -4137,7 +4139,10 @@ def build_fake_position_rehearsal(
                 "role_variant": position.get("title"),
                 "role_family": position.get("role_family"),
                 "apply_url": position.get("apply_url"),
-                "prompt_count": len(items_by_position.get(position_key, [])),
+                "prompt_count": len(position_items),
+                "inferred_prompt_count": sum(
+                    1 for item in position_items if item.get("item_type") == "inferred_question"
+                ),
                 "manifest_status": manifest.get("status"),
                 "pre_synthetic_missing_input_count": pre_counts["missing_input_count"],
                 "pre_synthetic_manual_security_count": pre_counts["manual_security_count"],
@@ -4217,6 +4222,12 @@ def build_fake_position_rehearsal(
         "skipped_no_prompt_position_count": len(selection["skipped_no_prompt_positions"]),
         "source_position_count": len(research.get("positions", []) or []),
         "source_prompt_item_count": len(research.get("items", []) or []),
+        "inferred_prompt_item_count": sum(
+            int(item.get("inferred_prompt_count", 0)) for item in executions
+        ),
+        "inferred_prompt_position_count": sum(
+            1 for item in executions if int(item.get("inferred_prompt_count", 0)) > 0
+        ),
         "fake_answer_memory_entry_count": len(fake_memory.get("answers", [])),
         "fake_category_policy_count": answer_summary["category_policy_count"],
         "fake_profile_updates": profile_updates,
@@ -4301,6 +4312,8 @@ def render_fake_position_rehearsal_markdown(report: dict[str, Any]) -> str:
         f"Selector misses: {report.get('selector_miss_count', 0)}",
         f"Pre-synthetic missing inputs: {report.get('pre_synthetic_missing_input_count', 0)}",
         f"Manual security gates: {report.get('pre_synthetic_manual_security_count', 0)}",
+        f"Inferred prompt positions: {report.get('inferred_prompt_position_count', 0)}",
+        f"Inferred prompt items: {report.get('inferred_prompt_item_count', 0)}",
         f"Excluded closed positions: {report.get('excluded_closed_position_count', 0)}",
         f"Unexpected runs: {report.get('unexpected_run_count', 0)}",
         "",
@@ -6767,13 +6780,68 @@ def observe_candidate_pages(
             page_html,
             include_form_fields=str(platform or "").lower() != "linkedin",
         )
+        application_form_url = _application_form_url_from_page_html(
+            page_html,
+            short_url,
+            platform=str(platform or ""),
+        )
+        if application_form_url and application_form_url != short_url and not metadata.get("questions"):
+            try:
+                form_page_html = fetch_page(application_form_url, timeout)
+            except Exception as exc:  # noqa: BLE001 - keep original posting observation.
+                check["application_form_error"] = str(exc)
+            else:
+                form_page_text = _html_to_text(form_page_html)
+                form_live_match = closed_application_match({"page_text": form_page_text})
+                if form_live_match:
+                    record_closed_job(
+                        closed_jobs_path,
+                        {**candidate, "apply_url": short_url},
+                        reason=form_live_match.phrase,
+                        source=f"{source}:form_live_text",
+                    )
+                    closed_jobs = load_closed_jobs(closed_jobs_path)
+                    newly_closed_count += 1
+                    check.update(
+                        {
+                            "status": "closed_form_live_text",
+                            "closed": True,
+                            "reason": form_live_match.phrase,
+                            "closed_phrase": form_live_match.phrase,
+                            "closed_source_field": form_live_match.source_field,
+                            "closed_snippet": form_live_match.snippet,
+                            "application_form_url": application_form_url,
+                        }
+                    )
+                    checks.append(check)
+                    continue
+                form_metadata = extract_live_job_page_metadata(
+                    form_page_html,
+                    include_form_fields=True,
+                )
+                if form_metadata.get("questions"):
+                    metadata = {
+                        **metadata,
+                        "title": metadata.get("title") or form_metadata.get("title"),
+                        "company": metadata.get("company") or form_metadata.get("company"),
+                        "description": metadata.get("description") or form_metadata.get("description"),
+                        "page_excerpt": form_metadata.get("page_excerpt") or metadata.get("page_excerpt"),
+                        "questions": form_metadata.get("questions"),
+                    }
+                    check["application_form_url"] = application_form_url
+        questions = _unique_normalized_strings(
+            [
+                *_string_list(candidate.get("questions")),
+                *_string_list(metadata.get("questions")),
+            ]
+        )
         observation_input = {
             **candidate,
             "apply_url": short_url,
             "platform": platform,
             "company": candidate.get("company") or candidate.get("company_name") or metadata.get("company"),
             "title": candidate.get("title") or candidate.get("job_title") or metadata.get("title"),
-            "questions": candidate.get("questions") or metadata.get("questions"),
+            "questions": questions,
             "page_excerpt": candidate.get("page_excerpt") or metadata.get("page_excerpt"),
             "description": candidate.get("description") or metadata.get("description"),
         }
@@ -6894,6 +6962,39 @@ def extract_live_job_page_metadata(
         "description": _extract_html_meta(page_html, ["description", "og:description"]),
         "page_excerpt": page_text[:1200],
     }
+
+
+def _application_form_url_from_page_html(
+    page_html: str,
+    page_url: str,
+    platform: str = "",
+) -> str:
+    platform_text = _normalize(str(platform or infer_platform_from_url(page_url) or ""))
+    if platform_text != "lever":
+        return ""
+    for match in re.finditer(r"(?is)<a\b([^>]*)>(.*?)</a>", str(page_html or "")):
+        attrs = _html_attrs(match.group(1))
+        href = attrs.get("href")
+        if not href:
+            continue
+        text = _clean_html_text(match.group(2))
+        css_class = attrs.get("class", "")
+        href_text = urllib.parse.urljoin(str(page_url or ""), html.unescape(href).strip())
+        if not href_text:
+            continue
+        parsed = urllib.parse.urlparse(href_text)
+        if "jobs.lever.co" not in parsed.netloc.lower():
+            continue
+        if parsed.path.rstrip("/").endswith("/apply") and (
+            "apply" in _normalize(text) or "postings-btn" in css_class
+        ):
+            return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", "", ""))
+    parsed = urllib.parse.urlparse(str(page_url or ""))
+    if "jobs.lever.co" in parsed.netloc.lower() and not parsed.path.rstrip("/").endswith("/apply"):
+        return urllib.parse.urlunparse(
+            (parsed.scheme, parsed.netloc, parsed.path.rstrip("/") + "/apply", "", "", "")
+        )
+    return ""
 
 
 def _extract_company_from_html_title(title: str) -> str:
@@ -8712,6 +8813,41 @@ def _collect_submission_question_research(
                 required=_question_list_prompt_required(question, classification),
             )
         )
+
+
+def _append_linkedin_standard_prompt_inferences(
+    items: list[dict[str, Any]],
+    positions: dict[str, dict[str, Any]],
+) -> None:
+    positions_with_items = {
+        str(item.get("position_key") or "")
+        for item in items
+        if str(item.get("position_key") or "")
+    }
+    inference_path = Path("linkedin_standard_prompt_inference")
+    for position in positions.values():
+        position_key = str(position.get("position_key") or "")
+        if not position_key or position_key in positions_with_items:
+            continue
+        if str(position.get("platform") or "") != "LinkedIn":
+            continue
+        for question in DEFAULT_QUESTIONS:
+            classification = classify_application_prompt(question)
+            if _skip_low_signal_prompt(question, classification):
+                continue
+            items.append(
+                _research_item(
+                    inference_path,
+                    "LinkedIn",
+                    position.get("company"),
+                    position.get("title"),
+                    position_key,
+                    "inferred_question",
+                    question,
+                    classification,
+                    required=True,
+                )
+            )
 
 
 def _question_list_prompt_required(
@@ -12436,6 +12572,8 @@ def _fake_position_rehearsal_export_rows(fake_position_rehearsal: dict[str, Any]
         "excluded_closed_position_count": fake_position_rehearsal.get("excluded_closed_position_count"),
         "skipped_no_prompt_position_count": fake_position_rehearsal.get("skipped_no_prompt_position_count"),
         "unexpected_run_count": fake_position_rehearsal.get("unexpected_run_count"),
+        "inferred_prompt_position_count": fake_position_rehearsal.get("inferred_prompt_position_count"),
+        "inferred_prompt_item_count": fake_position_rehearsal.get("inferred_prompt_item_count"),
         "fake_answer_memory_entry_count": fake_position_rehearsal.get("fake_answer_memory_entry_count"),
         "fake_category_policy_count": fake_position_rehearsal.get("fake_category_policy_count"),
     }
