@@ -369,6 +369,13 @@ python3 -m job_apply_agent apply-learning \
   --memory job_apply_agent/outbox/answer_memory.json
 ```
 
+Learning tasks with `answer_scope: category_default_policy` record one approved
+default for a whole prompt category, such as prior-employer history or
+conflict-of-interest questions. These defaults can prefill future same-category
+prompts with different wording, but the real browser flow still keeps a human
+review gate before final submit. CAPTCHA/security checks, protected-class
+self-identification, and final submit are never converted into category defaults.
+
 For a captured Ashby or Greenhouse form snapshot, generate an offline fill plan:
 
 ```bash

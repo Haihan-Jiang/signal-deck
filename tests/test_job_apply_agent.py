@@ -289,6 +289,112 @@ class JobApplyAgentTests(unittest.TestCase):
             )
             self.assertIn("learned", draft.answer_sources[next(iter(draft.answer_sources))])
 
+    def test_category_default_policy_learning_covers_new_prompt_variants(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            template_path = Path(temp_dir) / "learning_tasks.json"
+            profile_path = Path(temp_dir) / "profile.json"
+            memory_path = Path(temp_dir) / "answer_memory.json"
+            template_path.write_text(
+                json.dumps(
+                    {
+                        "tasks": [
+                            {
+                                "group_key": "answer_memory:employment_history:default_policy",
+                                "question": "Should automation answer no to prior employer questions?",
+                                "recommended_storage": "answer_memory",
+                                "labels": ["Have you previously worked for Acme?"],
+                                "approved": True,
+                                "answer": "No",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            profile_path.write_text(
+                json.dumps(
+                    {
+                        "candidate": {"name": "Test User"},
+                        "preferences": {},
+                        "resume_facts": {},
+                        "question_answers": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = apply_learning_task_answers(template_path, profile_path, memory_path)
+
+            self.assertEqual(result["category_policy_updates"], ["employment_history"])
+            memory = load_answer_memory(memory_path)
+            category_entries = [
+                entry
+                for entry in memory["answers"]
+                if entry.get("match_scope") == "category_default_policy"
+            ]
+            self.assertEqual(len(category_entries), 1)
+            match = find_learned_answer(memory, "Have you ever interviewed at Stripe?")
+            self.assertIsNotNone(match)
+            self.assertEqual(match.answer, "No")
+            self.assertIn("learned_category_policy", match.source)
+
+    def test_category_default_policy_keeps_sensitive_prompts_uncovered(self) -> None:
+        memory = {
+            "answers": [
+                {
+                    "normalized_question": "category default policy conflict_of_interest",
+                    "sample_question": "Default policy for conflict_of_interest",
+                    "answer": "No",
+                    "approved_count": 1,
+                    "source": "test",
+                    "match_scope": "category_default_policy",
+                    "category": "conflict_of_interest",
+                    "group_key": "answer_memory:conflict_of_interest:default_policy",
+                }
+            ]
+        }
+
+        self.assertIsNone(find_learned_answer(memory, "Gender"))
+
+    def test_category_default_policy_covers_human_review_prompt_as_review_required(self) -> None:
+        memory = {
+            "answers": [
+                {
+                    "normalized_question": "category default policy conflict_of_interest",
+                    "sample_question": "Default policy for conflict_of_interest",
+                    "answer": "No",
+                    "approved_count": 1,
+                    "source": "test",
+                    "match_scope": "category_default_policy",
+                    "category": "conflict_of_interest",
+                    "group_key": "answer_memory:conflict_of_interest:default_policy",
+                }
+            ]
+        }
+        research = {
+            "generated_at": "2026-05-22T00:00:00+00:00",
+            "positions_observed_total": 1,
+            "items": [
+                {
+                    "label": "Do you know anyone currently at Glean?",
+                    "normalized_label": "do you know anyone currently at glean",
+                    "category": "conflict_of_interest",
+                    "automation_action": "human_review_required",
+                    "sensitivity": "policy",
+                    "required": True,
+                    "platform": "Greenhouse",
+                    "source_file": "glean.json",
+                }
+            ],
+        }
+
+        report = build_answer_gap_report(research, self.profile, memory)
+        status = report["prompt_statuses"][0]
+
+        self.assertEqual(status["coverage_status"], "covered_requires_review")
+        self.assertEqual(status["answer_source"], "learned_category_policy:test")
+        self.assertEqual(report["blocking_prompt_count"], 0)
+
     def test_unattended_submit_requires_explicit_flag_and_no_missing_facts(self) -> None:
         job = self.jobs[0]
         profile = CandidateProfile(
@@ -2190,6 +2296,16 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(tasks["answer_memory:conflict_of_interest:default_policy"]["related_prompt_count"], 2)
         self.assertIn("prior-employer", tasks["answer_memory:employment_history:default_policy"]["question"])
         self.assertIn("conflict-of-interest", tasks["answer_memory:conflict_of_interest:default_policy"]["question"])
+        template = build_learning_task_template(report)
+        template_tasks = {task["group_key"]: task for task in template["tasks"]}
+        self.assertEqual(
+            template_tasks["answer_memory:employment_history:default_policy"]["answer_scope"],
+            "category_default_policy",
+        )
+        self.assertIn(
+            "keep human review",
+            template_tasks["answer_memory:employment_history:default_policy"]["automation_behavior"],
+        )
 
     def test_write_position_readiness_report_outputs_json_and_markdown(self) -> None:
         research = {

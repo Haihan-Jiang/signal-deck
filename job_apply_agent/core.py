@@ -173,6 +173,24 @@ class ApplicationPromptClassification:
     reason: str
 
 
+_CATEGORY_DEFAULT_POLICY_CATEGORIES = {
+    "background_or_export_control",
+    "citizenship_status",
+    "conflict_of_interest",
+    "country_work_permit",
+    "device_policy",
+    "employment_history",
+    "government_employment",
+    "health_requirement",
+    "interview_recording_consent",
+    "language_ability",
+    "location_constraint",
+    "professional_license",
+    "schedule_constraint",
+    "security_clearance",
+}
+
+
 def load_profile(path: str | Path) -> CandidateProfile:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     return CandidateProfile.from_mapping(payload)
@@ -310,6 +328,51 @@ def learn_answers(
         )
     save_answer_memory(memory_path, memory)
     return memory
+
+
+def _learn_category_default_policy(
+    memory: dict[str, Any],
+    category: str,
+    answer: str,
+    sample_question: str,
+    source: str,
+) -> None:
+    category = str(category or "").strip()
+    answer = str(answer or "").strip()
+    if category not in _CATEGORY_DEFAULT_POLICY_CATEGORIES or not answer:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    entries = memory.setdefault("answers", [])
+    group_key = f"answer_memory:{category}:default_policy"
+    existing = next(
+        (
+            entry
+            for entry in entries
+            if entry.get("match_scope") == "category_default_policy"
+            and entry.get("category") == category
+            and entry.get("answer") == answer
+        ),
+        None,
+    )
+    if existing:
+        existing["approved_count"] = int(existing.get("approved_count", 0)) + 1
+        existing["last_seen_at"] = now
+        existing["source"] = source
+        return
+    entries.append(
+        {
+            "normalized_question": f"category default policy {category}",
+            "sample_question": sample_question,
+            "answer": answer,
+            "approved_count": 1,
+            "source": source,
+            "first_seen_at": now,
+            "last_seen_at": now,
+            "match_scope": "category_default_policy",
+            "category": category,
+            "group_key": group_key,
+        }
+    )
 
 
 def score_job(
@@ -544,6 +607,8 @@ def find_learned_answer(
     best_entry: dict[str, Any] | None = None
     best_overlap = 0.0
     for entry in answer_memory.get("answers", []):
+        if entry.get("match_scope") == "category_default_policy":
+            continue
         entry_question = str(entry.get("normalized_question", ""))
         if not entry_question:
             continue
@@ -558,6 +623,9 @@ def find_learned_answer(
         if overlap > best_overlap:
             best_overlap = overlap
             best_entry = entry
+    category_policy = _find_category_default_policy(answer_memory, question)
+    if category_policy:
+        return category_policy
     if best_entry and best_overlap >= 0.78:
         return AnswerMemoryMatch(
             answer=str(best_entry.get("answer", "")),
@@ -565,6 +633,42 @@ def find_learned_answer(
             source=f"learned_similar:{best_entry.get('source', 'manual')}",
         )
     return None
+
+
+def _find_category_default_policy(
+    answer_memory: dict[str, Any],
+    question: str,
+) -> AnswerMemoryMatch | None:
+    classification = classify_application_prompt(question)
+    category = classification.category
+    if category not in _CATEGORY_DEFAULT_POLICY_CATEGORIES:
+        return None
+    if classification.automation_action in {
+        "manual_security_step",
+        "do_not_store_sensitive",
+    } or category == "final_submit":
+        return None
+    best_entry: dict[str, Any] | None = None
+    best_count = -1
+    for entry in answer_memory.get("answers", []):
+        if (
+            entry.get("match_scope") != "category_default_policy"
+            or entry.get("category") != category
+            or not str(entry.get("answer") or "").strip()
+        ):
+            continue
+        approved_count = int(entry.get("approved_count") or 0)
+        if approved_count > best_count:
+            best_count = approved_count
+            best_entry = entry
+    if not best_entry:
+        return None
+    approved_count = max(int(best_entry.get("approved_count", 0)), 1)
+    return AnswerMemoryMatch(
+        answer=str(best_entry.get("answer", "")),
+        confidence=min(0.9, 0.7 + approved_count * 0.02),
+        source=f"learned_category_policy:{best_entry.get('source', 'manual')}",
+    )
 
 
 def assess_automation_readiness(
@@ -3629,11 +3733,14 @@ def build_learning_task_template(readiness_report: dict[str, Any]) -> dict[str, 
         if not isinstance(task, dict):
             continue
         storage = str(task.get("recommended_storage") or "")
+        group_key = str(task.get("group_key") or "")
         tasks.append(
             {
-                "group_key": task.get("group_key"),
+                "group_key": group_key,
                 "question": task.get("question"),
                 "recommended_storage": storage,
+                "answer_scope": _learning_task_answer_scope(group_key, storage),
+                "automation_behavior": _learning_task_automation_behavior(group_key, storage),
                 "labels": task.get("labels", []),
                 "platforms": task.get("platforms", []),
                 "approved": False,
@@ -3686,6 +3793,7 @@ def apply_learning_task_answers(
     profile_answers = profile_payload.setdefault("question_answers", {})
     profile_updates: dict[str, str] = {}
     answer_updates: dict[str, str] = {}
+    category_policy_updates: dict[str, str] = {}
     skipped: list[dict[str, Any]] = []
 
     for task in payload.get("tasks", []):
@@ -3708,6 +3816,9 @@ def apply_learning_task_answers(
             for label in labels:
                 if label.strip():
                     answer_updates[label] = answer
+            category = _category_default_policy_from_group_key(group_key)
+            if category:
+                category_policy_updates[category] = answer
         else:
             skipped.append(
                 {
@@ -3736,11 +3847,22 @@ def apply_learning_task_answers(
                 source=source,
             )
             memory = load_answer_memory(memory_path)
+        if category_policy_updates:
+            for category, answer in category_policy_updates.items():
+                _learn_category_default_policy(
+                    memory,
+                    category,
+                    answer,
+                    sample_question=f"Default policy for {category}",
+                    source=source,
+                )
+            save_answer_memory(memory_path, memory)
 
     return {
         "dry_run": dry_run,
         "profile_updates": sorted(profile_updates.keys()),
         "answer_memory_updates": sorted(answer_updates.keys()),
+        "category_policy_updates": sorted(category_policy_updates.keys()),
         "skipped": skipped,
         "answer_memory_count": len(memory.get("answers", [])),
     }
@@ -3773,6 +3895,10 @@ def render_learning_task_template_markdown(template: dict[str, Any]) -> str:
             )
         )
         lines.append(f"  group: {task.get('group_key')}")
+        if task.get("answer_scope"):
+            lines.append(f"  scope: {task.get('answer_scope')}")
+        if task.get("automation_behavior"):
+            lines.append(f"  automation: {task.get('automation_behavior')}")
         if task.get("platforms"):
             lines.append(f"  platforms: {', '.join(str(item) for item in task.get('platforms', []))}")
         if task.get("labels"):
@@ -5231,14 +5357,25 @@ def render_question_export_html(export: dict[str, Any]) -> str:
         "</section>",
         "<section><h2>Questions For User</h2>",
         _html_table(
-            ["Storage", "Question", "Platforms", "Related prompts", "Persist allowed", "Answer"],
+            [
+                "Storage",
+                "Scope",
+                "Question",
+                "Platforms",
+                "Related prompts",
+                "Persist allowed",
+                "Automation behavior",
+                "Answer",
+            ],
             [
                 [
                     row.get("recommended_storage"),
+                    row.get("answer_scope"),
                     row.get("question"),
                     row.get("platforms"),
                     row.get("related_prompt_count"),
                     _yes_no(row.get("persist_allowed")),
+                    row.get("automation_behavior"),
                     row.get("answer"),
                 ]
                 for row in export.get("user_questions", [])
@@ -8575,6 +8712,42 @@ def _minimal_learning_group_key(item: dict[str, Any]) -> str:
     return f"{storage}:{status}:{normalized_label or label}"
 
 
+def _category_default_policy_from_group_key(group_key: str) -> str:
+    match = re.fullmatch(r"answer_memory:([a-z0-9_]+):default_policy", str(group_key or ""))
+    if not match:
+        return ""
+    category = match.group(1)
+    return category if category in _CATEGORY_DEFAULT_POLICY_CATEGORIES else ""
+
+
+def _learning_task_answer_scope(group_key: str, storage: str) -> str:
+    if _category_default_policy_from_group_key(group_key):
+        return "category_default_policy"
+    if storage == "answer_memory":
+        return "exact_prompt_labels"
+    if storage == "profile":
+        return "profile_field"
+    if storage == "local_material":
+        return "local_file_path"
+    if storage == "resume_facts":
+        return "resume_fact"
+    return "supervised_only"
+
+
+def _learning_task_automation_behavior(group_key: str, storage: str) -> str:
+    if _category_default_policy_from_group_key(group_key):
+        return "Prefill future prompts in this category, but keep human review before real submit."
+    if storage == "answer_memory":
+        return "Autofill matching prompt labels after approval."
+    if storage == "profile":
+        return "Use as reusable profile data for form fields."
+    if storage == "local_material":
+        return "Use local file path for upload planning."
+    if storage == "resume_facts":
+        return "Use as verified resume fact for generated or filled answers."
+    return "Do not automate without supervised review."
+
+
 def _minimal_learning_question(item: dict[str, Any]) -> str:
     category = str(item.get("category") or "")
     storage = str(item.get("recommended_storage") or "")
@@ -11064,6 +11237,14 @@ def _learning_task_export_row(task: dict[str, Any]) -> dict[str, Any]:
         "recommended_storage": task.get("recommended_storage"),
         "question": task.get("question"),
         "group_key": task.get("group_key"),
+        "answer_scope": task.get("answer_scope") or _learning_task_answer_scope(
+            str(task.get("group_key") or ""),
+            str(task.get("recommended_storage") or ""),
+        ),
+        "automation_behavior": task.get("automation_behavior") or _learning_task_automation_behavior(
+            str(task.get("group_key") or ""),
+            str(task.get("recommended_storage") or ""),
+        ),
         "platforms": ", ".join(_string_list(task.get("platforms"))),
         "labels": "\n".join(labels),
         "related_prompt_count": task.get("related_prompt_count", len(labels)),
