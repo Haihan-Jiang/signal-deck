@@ -14364,6 +14364,8 @@ def build_goal_readiness_audit(
     post_answer = post_answer_pipeline or {}
     post_answer_policy = post_answer.get("policy") or {}
     post_answer_synthetic = post_answer.get("synthetic_queue_rehearsal") or {}
+    post_answer_intake_report = post_answer.get("final_answer_intake_report") or {}
+    post_answer_intake_summary = post_answer_intake_report.get("summary") or {}
     preflight = closed_preflight or {}
     playbook = platform_question_playbook or {}
     playbook_summary = playbook.get("summary") or {}
@@ -14509,6 +14511,24 @@ def build_goal_readiness_audit(
         and post_answer_synthetic_selector_misses == 0
         and post_answer_synthetic_final_submit_stops >= 100
         and not post_answer_synthetic_submits_real
+    )
+    post_answer_intake_answer_count = int(post_answer_intake_summary.get("answer_input_count") or 0)
+    post_answer_intake_missing = int(post_answer_intake_summary.get("missing_unblocker_count") or 0)
+    post_answer_intake_unconfirmed = int(
+        post_answer_intake_summary.get("unconfirmed_high_risk_count") or 0
+    )
+    post_answer_intake_needs_specificity = int(
+        post_answer_intake_summary.get("needs_more_specific_answer_count") or 0
+    )
+    post_answer_intake_unknown = int(post_answer_intake_summary.get("unknown_answer_count") or 0)
+    post_answer_text_reply_rehearsal_ready = bool(
+        post_answer.get("source") == "final_answer_reply_synthetic_rehearsal"
+        and post_answer_intake_answer_count >= 6
+        and post_answer_intake_missing == 0
+        and post_answer_intake_unconfirmed == 0
+        and post_answer_intake_needs_specificity == 0
+        and post_answer_intake_unknown == 0
+        and post_answer_synthetic_queue_ready
     )
     playbook_target_count = int(playbook_summary.get("target_platform_count") or 0)
     playbook_target_met_count = int(playbook_summary.get("target_platforms_at_100_count") or 0)
@@ -14695,6 +14715,24 @@ def build_goal_readiness_audit(
             },
         },
         {
+            "id": "final_answer_text_reply_rehearsal",
+            "requirement": "Prove a six-answer text reply can be parsed and can rebuild the 100-position supervised autofill queue locally.",
+            "status": "achieved" if post_answer_text_reply_rehearsal_ready else "needs_text_reply_rehearsal",
+            "evidence": {
+                "post_answer_source": post_answer.get("source", ""),
+                "parsed_answer_count": post_answer_intake_answer_count,
+                "missing_unblocker_count": post_answer_intake_missing,
+                "unconfirmed_high_risk_count": post_answer_intake_unconfirmed,
+                "needs_more_specific_answer_count": post_answer_intake_needs_specificity,
+                "unknown_answer_count": post_answer_intake_unknown,
+                "synthetic_queue_rehearsal_ready": post_answer_synthetic_queue_ready,
+                "synthetic_selected_count": post_answer_synthetic_selected,
+                "synthetic_selector_miss_count": post_answer_synthetic_selector_misses,
+                "synthetic_final_submit_stop_count": post_answer_synthetic_final_submit_stops,
+                "real_platform_submission": post_answer_synthetic_submits_real,
+            },
+        },
+        {
             "id": "question_summary",
             "requirement": "Summarize observed application questions and automation handling.",
             "status": "achieved" if int(gaps.get("unique_prompts_observed") or 0) > 0 else "missing_report",
@@ -14843,6 +14881,13 @@ def build_goal_readiness_audit(
                 unblocker_proof_summary.get("existing_draft_update_count") or 0
             ),
             "post_answer_pipeline_status": post_answer.get("status", ""),
+            "post_answer_pipeline_source": post_answer.get("source", ""),
+            "post_answer_text_reply_rehearsal_ready": post_answer_text_reply_rehearsal_ready,
+            "post_answer_intake_answer_count": post_answer_intake_answer_count,
+            "post_answer_intake_missing_unblocker_count": post_answer_intake_missing,
+            "post_answer_intake_unconfirmed_high_risk_count": post_answer_intake_unconfirmed,
+            "post_answer_intake_needs_more_specific_answer_count": post_answer_intake_needs_specificity,
+            "post_answer_intake_unknown_answer_count": post_answer_intake_unknown,
             "post_answer_synthetic_queue_rehearsal_ready": post_answer_synthetic_queue_ready,
             "post_answer_synthetic_autofill_selected_count": post_answer_synthetic_selected,
             "post_answer_synthetic_selector_miss_count": post_answer_synthetic_selector_misses,
@@ -15020,6 +15065,14 @@ def render_goal_readiness_audit_markdown(audit: dict[str, Any]) -> str:
             f"- synthetic final unblockers: {summary.get('synthetic_final_unblocker_update_count', 0)}",
             f"- synthetic unblocker data blockers after: {summary.get('synthetic_unblocker_data_blocking_prompts_after', 0)}",
             f"- post-answer pipeline status: {summary.get('post_answer_pipeline_status', '')}",
+            f"- post-answer pipeline source: {summary.get('post_answer_pipeline_source', '')}",
+            f"- post-answer text reply rehearsal ready: {str(bool(summary.get('post_answer_text_reply_rehearsal_ready'))).lower()}",
+            "- post-answer intake validation: "
+            f"answers {summary.get('post_answer_intake_answer_count', 0)}, "
+            f"missing {summary.get('post_answer_intake_missing_unblocker_count', 0)}, "
+            f"unconfirmed {summary.get('post_answer_intake_unconfirmed_high_risk_count', 0)}, "
+            f"specificity {summary.get('post_answer_intake_needs_more_specific_answer_count', 0)}, "
+            f"unknown {summary.get('post_answer_intake_unknown_answer_count', 0)}",
             f"- post-answer synthetic queue ready: {str(bool(summary.get('post_answer_synthetic_queue_rehearsal_ready'))).lower()}",
             "- post-answer synthetic selected: "
             f"{summary.get('post_answer_synthetic_autofill_selected_count', 0)}, "

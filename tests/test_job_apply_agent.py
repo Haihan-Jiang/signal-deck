@@ -9220,8 +9220,18 @@ class JobApplyAgentTests(unittest.TestCase):
         post_answer_pipeline = {
             "status": "synthetic_queue_rehearsal_ready",
             "ready_for_workflow": True,
+            "source": "final_answer_reply_synthetic_rehearsal",
             "synthetic_final_answers": True,
             "policy": {"submits_real_applications": False},
+            "final_answer_intake_report": {
+                "summary": {
+                    "answer_input_count": 6,
+                    "missing_unblocker_count": 0,
+                    "unconfirmed_high_risk_count": 0,
+                    "needs_more_specific_answer_count": 0,
+                    "unknown_answer_count": 0,
+                }
+            },
             "synthetic_queue_rehearsal": {
                 "ready_for_supervised_browser_autofill": True,
                 "submits_real_applications": False,
@@ -9334,6 +9344,14 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(audit["blocker_summary"]["post_answer_synthetic_selector_miss_count"], 0)
         self.assertEqual(audit["blocker_summary"]["post_answer_synthetic_final_submit_stop_count"], 100)
         self.assertFalse(audit["blocker_summary"]["post_answer_synthetic_submits_real_applications"])
+        self.assertEqual(
+            audit["blocker_summary"]["post_answer_pipeline_source"],
+            "final_answer_reply_synthetic_rehearsal",
+        )
+        self.assertTrue(audit["blocker_summary"]["post_answer_text_reply_rehearsal_ready"])
+        self.assertEqual(audit["blocker_summary"]["post_answer_intake_answer_count"], 6)
+        self.assertEqual(audit["blocker_summary"]["post_answer_intake_missing_unblocker_count"], 0)
+        self.assertEqual(audit["blocker_summary"]["post_answer_intake_unconfirmed_high_risk_count"], 0)
         self.assertTrue(audit["blocker_summary"]["fake_learning_blockers_cleared"])
         self.assertEqual(audit["blocker_summary"]["fake_learning_remaining_blockers"], 0)
         self.assertEqual(
@@ -9358,6 +9376,11 @@ class JobApplyAgentTests(unittest.TestCase):
         fake_learning_requirement = next(item for item in audit["requirements"] if item["id"] == "fake_learning_blocker_clearance")
         self.assertEqual(fake_learning_requirement["status"], "achieved")
         self.assertEqual(fake_learning_requirement["evidence"]["synthetic_blocker_clearance_added_count"], 4)
+        text_reply_requirement = next(
+            item for item in audit["requirements"] if item["id"] == "final_answer_text_reply_rehearsal"
+        )
+        self.assertEqual(text_reply_requirement["status"], "achieved")
+        self.assertEqual(text_reply_requirement["evidence"]["parsed_answer_count"], 6)
         playbook_requirement = next(item for item in audit["requirements"] if item["id"] == "platform_question_playbook")
         self.assertEqual(playbook_requirement["status"], "achieved")
         self.assertEqual(playbook_requirement["evidence"]["target_platforms_at_100"], "2/2")
@@ -9417,6 +9440,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("citizenship_status", markdown)
         self.assertIn("synthetic final unblocker proof complete: true", markdown)
         self.assertIn("post-answer synthetic queue ready: true", markdown)
+        self.assertIn("post-answer text reply rehearsal ready: true", markdown)
+        self.assertIn("post-answer intake validation: answers 6, missing 0, unconfirmed 0, specificity 0, unknown 0", markdown)
         self.assertIn("post-answer synthetic selected: 100, selector misses 0, final-submit stops 100", markdown)
         self.assertIn("fake learning blockers cleared: true", markdown)
         self.assertIn("fake learning remaining: 0 learnable, 132 manual gates, synthetic additions 4", markdown)
