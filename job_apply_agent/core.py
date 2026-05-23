@@ -5003,48 +5003,85 @@ FINAL_ANSWER_REPLY_ALIAS_SYNONYMS = {
         "zip code",
         "postal code",
         "zip/postal code",
+        "my zip",
+        "my zip code",
+        "my postal code",
         "\u90ae\u7f16",
         "\u90ae\u653f\u7f16\u7801",
         "\u90ae\u9012\u533a\u53f7",
+        "\u6211\u7684\u90ae\u7f16",
+        "\u5f53\u524d\u90ae\u7f16",
+        "\u5c45\u4f4f\u5730\u90ae\u7f16",
     ],
     "citizenship_status": [
         "citizenship",
         "citizenship status",
+        "citizen status",
         "us person",
         "u.s. person",
         "permanent resident",
+        "green card",
+        "restricted country",
+        "restricted-country status",
         "\u516c\u6c11\u8eab\u4efd",
+        "\u516c\u6c11\u72b6\u6001",
+        "\u8eab\u4efd\u72b6\u6001",
         "\u56fd\u7c4d",
+        "\u6700\u8fd1\u56fd\u7c4d",
         "\u7f8e\u56fd\u516c\u6c11",
+        "\u7f8e\u56fd\u4eba",
         "\u6c38\u4e45\u5c45\u6c11",
+        "\u7eff\u5361",
         "\u53d7\u9650\u56fd\u5bb6",
+        "\u53d7\u9650\u56fd\u5bb6\u8eab\u4efd",
     ],
     "background_or_export_control": [
         "background",
         "background check",
         "export control",
+        "export-control",
         "legal eligibility",
+        "legal background",
         "background/export control",
         "background export control",
         "background or export control",
         "background/export",
+        "felony",
+        "indictment",
+        "debarment",
         "\u80cc\u666f",
         "\u80cc\u8c03",
         "\u80cc\u666f\u8c03\u67e5",
         "\u51fa\u53e3\u7ba1\u5236",
+        "\u80cc\u666f\u51fa\u53e3\u7ba1\u5236",
         "\u80cc\u666f\u6216\u51fa\u53e3\u7ba1\u5236",
         "\u6cd5\u5f8b\u8d44\u683c",
+        "\u6cd5\u5f8b\u5408\u89c4",
+        "\u72af\u7f6a\u8bb0\u5f55",
+        "\u91cd\u7f6a",
+        "\u8d77\u8bc9",
+        "\u7981\u5165",
     ],
     "country_work_permit": [
         "work permit",
         "right to work",
         "work authorization",
+        "non-us work permit",
+        "non us work permit",
+        "other country work permit",
         "country work permit",
+        "visa",
         "\u5de5\u4f5c\u8bb8\u53ef",
         "\u5de5\u4f5c\u6743\u5229",
         "\u5de5\u4f5c\u6388\u6743",
         "\u975e\u7f8e\u5de5\u4f5c\u8bb8\u53ef",
+        "\u975e\u7f8e\u56fd\u5de5\u4f5c\u8bb8\u53ef",
+        "\u5176\u4ed6\u56fd\u5bb6\u5de5\u4f5c\u8bb8\u53ef",
         "\u56fd\u5bb6\u5de5\u4f5c\u8bb8\u53ef",
+        "\u5de5\u4f5c\u7b7e\u8bc1",
+        "\u7b7e\u8bc1",
+        "\u82f1\u56fd\u5de5\u4f5c\u8bb8\u53ef",
+        "\u52a0\u62ff\u5927\u5de5\u4f5c\u8bb8\u53ef",
     ],
     "interview_recording_consent": [
         "interview recording",
@@ -5052,11 +5089,19 @@ FINAL_ANSWER_REPLY_ALIAS_SYNONYMS = {
         "recording consent",
         "transcription",
         "ai notetaker",
+        "ai note taker",
         "notetaker",
         "interview analysis",
+        "metaview",
+        "gemini notetaker",
         "\u9762\u8bd5\u5f55\u97f3",
+        "\u5f55\u97f3",
+        "\u5f55\u50cf",
         "\u5f55\u97f3\u540c\u610f",
         "\u9762\u8bd5\u5f55\u97f3\u540c\u610f",
+        "\u8f6c\u5f55",
+        "\u9762\u8bd5\u8f6c\u5f55",
+        "\u7b14\u8bb0\u5de5\u5177",
         "ai\u7b14\u8bb0",
         "\u9762\u8bd5\u5206\u6790",
     ],
@@ -5068,7 +5113,11 @@ FINAL_ANSWER_REPLY_ALIAS_SYNONYMS = {
         "\u5065\u5eb7\u8981\u6c42",
         "\u5065\u5eb7",
         "\u75ab\u82d7",
+        "\u75ab\u82d7\u8981\u6c42",
         "\u63a5\u79cd",
+        "\u4f53\u68c0",
+        "\u5065\u5eb7\u6216\u75ab\u82d7",
+        "\u5065\u5eb7\u75ab\u82d7",
         "\u5ba2\u6237\u73b0\u573a\u5065\u5eb7\u8981\u6c42",
     ],
 }
@@ -5082,6 +5131,9 @@ FINAL_ANSWER_REPLY_GLOBAL_CONFIRM_KEYS = {
     "confirm_all_high_risk",
     "\u5168\u90e8\u786e\u8ba4",
     "\u786e\u8ba4\u5168\u90e8",
+    "\u4ee5\u4e0a\u786e\u8ba4",
+    "\u6211\u786e\u8ba4\u4ee5\u4e0a",
+    "\u4ee5\u4e0a\u5c5e\u5b9e",
     "\u9ad8\u98ce\u9669\u786e\u8ba4",
     "\u786e\u8ba4\u9ad8\u98ce\u9669",
 }
@@ -5675,6 +5727,18 @@ def _split_final_answer_reply_line(
     )
     if prefix_key:
         return prefix_key, prefix_value
+    if known_prefix_keys:
+        known_normalized_keys = {
+            _final_answer_reply_key(known_key)
+            for known_key in known_prefix_keys
+            if str(known_key or "").strip()
+        }
+        normalized_cleaned = _final_answer_reply_key(cleaned)
+        if normalized_cleaned in known_normalized_keys and (
+            normalized_cleaned in _final_answer_reply_global_confirm_keys()
+            or any(token in normalized_cleaned for token in ["confirm", "confirmed", "\u786e\u8ba4"])
+        ):
+            return cleaned, "yes"
     return "", ""
 
 
@@ -5682,8 +5746,9 @@ def _split_final_answer_reply_prefix_line(
     cleaned: str,
     known_prefix_keys: Iterable[str],
 ) -> tuple[str, str]:
+    leading_context = r"(?:my\s+|the\s+|default\s+|answer\s+for\s+|\u6211\u7684|\u6211|\u9ed8\u8ba4|\u5173\u4e8e)?"
     connector_pattern = (
-        r"(?:\s*(?:is|are|use|uses|using|=>|->|-|是|为|填|填写|使用)\s*|\s+)"
+        r"(?:\s*(?:is|are|use|uses|using|=>|->|-|是|为|填|填写|使用|应该用|可以用)\s*|\s+)"
     )
     for raw_key in sorted(
         {str(key).strip() for key in known_prefix_keys if str(key or "").strip()},
@@ -5692,6 +5757,7 @@ def _split_final_answer_reply_prefix_line(
     ):
         pattern = (
             r"^\s*[`\"']?"
+            + leading_context
             + re.escape(raw_key)
             + r"[`\"']?"
             + connector_pattern
@@ -6470,7 +6536,8 @@ def _final_answer_intake_answer_specificity(
         return True, ""
     if alias == "citizenship_status":
         if len(answer) < 12 or not re.search(
-            r"\b(citizen|citizenship|permanent|resident|green card|u\.s\.|us person|restricted|country|countries)\b",
+            r"\b(citizen|citizenship|permanent|resident|green card|u\.s\.|us person|restricted|country|countries)\b"
+            r"|公民|国籍|永久居民|绿卡|美国人|受限国家|限制国家",
             normalized,
         ):
             return False, "citizenship answer must mention citizenship/residency/restricted-country status"
@@ -6478,7 +6545,8 @@ def _final_answer_intake_answer_specificity(
         if len(answer) < 20:
             return False, "answer must include default and exceptions"
         if alias == "country_work_permit" and not re.search(
-            r"\b(us|u\.s\.|united states|canada|uk|united kingdom|australia|singapore|china|taiwan|country|countries|permit|visa|work authorization)\b",
+            r"\b(us|u\.s\.|united states|canada|uk|united kingdom|australia|singapore|china|taiwan|country|countries|permit|visa|work authorization)\b"
+            r"|美国|加拿大|英国|澳大利亚|新加坡|中国|台湾|国家|工作许可|工作授权|签证",
             normalized,
         ):
             return False, "country work permit answer must name country, permit, visa, or work authorization scope"
@@ -21826,6 +21894,7 @@ def render_final_answer_reply_template_text(report: dict[str, Any]) -> str:
         "# For high-risk confirmations, keep 确认 only when the answer is exact and truthful.",
         "# English : and Chinese ： separators are both accepted by final-answer-reply.",
         "# Short label syntax is also accepted, e.g. 邮编是[ZIP_CODE] or recording Yes, I consent...",
+        "# Natural Chinese phrasing is accepted, e.g. 我的邮编是[ZIP_CODE]; use 以上确认 to confirm all high-risk answers.",
         "# Common labels accepted: ZIP/邮编, citizenship/公民身份, background-export/背景或出口管制, work permit/工作许可, recording/面试录音同意, health/健康要求.",
         "",
     ]
@@ -22005,7 +22074,7 @@ def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
         lines.append(
             "Parser note: confirmation values may be `yes` or `\u786e\u8ba4`; "
             "English `:` and Chinese `\uff1a` separators are both accepted; short label syntax "
-            "such as `\u90ae\u7f16\u662f[ZIP_CODE]` is also accepted."
+            "such as `\u90ae\u7f16\u662f[ZIP_CODE]` is also accepted; `\u4ee5\u4e0a\u786e\u8ba4` can confirm all high-risk answers."
         )
     else:
         lines.append("- None")
@@ -22062,7 +22131,7 @@ def build_telegram_final_answer_blocker_alert(
         if len(reply_template_lines) > max_items * 2:
             lines.append("... full template in job_apply_agent/outbox/final_answer_blockers_latest.md")
         lines.append("Confirm values can be yes or \u786e\u8ba4; : and \uff1a both work.")
-        lines.append("Short labels also work, e.g. \u90ae\u7f16\u662f[ZIP_CODE] or recording Yes/No...")
+        lines.append("Short labels also work, e.g. \u6211\u7684\u90ae\u7f16\u662f[ZIP_CODE] or recording Yes/No; \u4ee5\u4e0a\u786e\u8ba4 confirms all high-risk answers...")
         lines.append(
             f"Validate locally: python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --validate-only --fail-on-not-ready"
         )

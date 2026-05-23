@@ -8306,6 +8306,75 @@ class JobApplyAgentTests(unittest.TestCase):
         )
         self.assertTrue(intake_report["ready_for_finalize"])
 
+    def test_final_answer_reply_accepts_natural_chinese_labels_and_global_confirmation(self) -> None:
+        unblockers = {
+            "unblockers": [
+                {
+                    "input_id": "profile_zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "high_risk": False,
+                    "required_count": 56,
+                },
+                {
+                    "input_id": "answer_memory_citizenship_status_default_policy",
+                    "input_type": "high_risk_exact_confirmation",
+                    "question": "What citizenship answers should automation use?",
+                    "high_risk": True,
+                    "required_count": 57,
+                },
+                {
+                    "input_id": "answer_memory_background_or_export_control_default_policy",
+                    "input_type": "high_risk_exact_confirmation",
+                    "question": "What background/export-control answers should automation use?",
+                    "high_risk": True,
+                    "required_count": 31,
+                },
+                {
+                    "input_id": "answer_memory_country_work_permit_default_policy",
+                    "input_type": "high_risk_exact_confirmation",
+                    "question": "What country work permit answers should automation use?",
+                    "high_risk": True,
+                    "required_count": 28,
+                },
+                {
+                    "input_id": "answer_memory_interview_recording_consent_default_policy",
+                    "input_type": "high_risk_exact_confirmation",
+                    "question": "Should automation consent to interview recording?",
+                    "high_risk": True,
+                    "required_count": 18,
+                },
+                {
+                    "input_id": "answer_memory_health_requirement_default_policy",
+                    "input_type": "high_risk_exact_confirmation",
+                    "question": "What health requirement answer should automation use?",
+                    "high_risk": True,
+                    "required_count": 2,
+                },
+            ]
+        }
+        template = build_final_answer_intake_template(unblockers)
+        reply_text = "\n".join(
+            [
+                "我的邮编是98004",
+                "我的公民身份是我是美国公民和 U.S. person；没有受限国家国籍或永久居民身份。",
+                "背景出口管制为没有背景调查、出口管制、起诉、禁入、重罪或法律资格问题；例外：无。",
+                "其他国家工作许可为只有美国工作授权；不要假设加拿大、英国或其他国家工作许可；例外：无。",
+                "面试录音是同意面试录音、转录、AI 笔记工具和面试分析；例外：无。",
+                "健康疫苗是可以遵守标准健康、疫苗或客户现场要求；例外：无。",
+                "以上确认",
+            ]
+        )
+
+        reply_report = build_final_answer_reply_intake(template, reply_text)
+        intake_report = build_final_answer_intake_update(unblockers, reply_report["intake_payload"])
+
+        self.assertEqual(reply_report["answer_count"], 6)
+        self.assertEqual(reply_report["unknown_key_count"], 0)
+        self.assertEqual(reply_report["ignored_line_count"], 0)
+        self.assertTrue(reply_report["global_confirm_high_risk"])
+        self.assertEqual(len(reply_report["confirmed_high_risk_aliases"]), 5)
+        self.assertTrue(intake_report["ready_for_finalize"])
+
     def test_final_answer_reply_template_placeholders_do_not_finalize(self) -> None:
         unblockers = {
             "unblockers": [
