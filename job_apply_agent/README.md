@@ -379,6 +379,17 @@ The template also includes `suggested_answer`, `suggested_answer_source`,
 `suggestion_confidence`, and `approval_risk` fields so you can review proposed
 defaults without treating them as approved answers.
 
+To test the same learning path without using the real profile or writing real
+answer memory, run the fake-learning probe:
+
+```bash
+python3 -m job_apply_agent fake-learning-probe
+```
+
+This uses a synthetic candidate and fake answers only, then reports whether all
+learning blockers would clear while final submit, CAPTCHA/security, and
+sensitive self-identification gates remain blocked.
+
 For a captured Ashby or Greenhouse form snapshot, generate an offline fill plan:
 
 ```bash

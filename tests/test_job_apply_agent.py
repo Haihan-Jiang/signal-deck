@@ -24,6 +24,7 @@ from job_apply_agent.core import (
     build_browser_dom_runner_script,
     build_browser_review_record,
     build_form_fill_plan,
+    build_fake_learning_probe,
     build_learning_task_template,
     build_pre_submit_review,
     build_position_readiness_report,
@@ -69,6 +70,7 @@ from job_apply_agent.core import (
     render_closed_posting_preflight_markdown,
     render_browser_dom_execution_plan_markdown,
     render_form_fill_plan_markdown,
+    render_fake_learning_probe_markdown,
     render_learning_task_template_markdown,
     render_pre_submit_review_markdown,
     render_position_readiness_markdown,
@@ -96,6 +98,7 @@ from job_apply_agent.core import (
     write_question_export,
     write_browser_dom_harness,
     write_form_fill_plan,
+    write_fake_learning_probe,
     write_learning_task_template,
     write_pre_submit_review,
     write_position_readiness_report,
@@ -3606,6 +3609,143 @@ class JobApplyAgentTests(unittest.TestCase):
             markdown = render_learning_task_template_markdown(build_learning_task_template(readiness))
             self.assertIn("Learning Task Template", markdown)
 
+    def test_fake_learning_probe_clears_learning_blockers_without_real_submission(self) -> None:
+        research = {
+            "generated_at": "2026-05-22T00:00:00+00:00",
+            "positions_observed_total": 1,
+            "positions": [{"position_key": "greenhouse:1", "platform": "Greenhouse"}],
+            "items": [
+                {
+                    "label": "Have you previously worked at ExampleCo?",
+                    "normalized_label": "have previously worked at exampleco",
+                    "category": "employment_history",
+                    "automation_action": "human_review_required",
+                    "sensitivity": "profile",
+                    "required": True,
+                    "platform": "Greenhouse",
+                    "source_file": "example.json",
+                },
+                {
+                    "label": "Resume",
+                    "normalized_label": "resume",
+                    "category": "resume_upload",
+                    "automation_action": "auto_fill_from_profile",
+                    "sensitivity": "document",
+                    "required": True,
+                    "platform": "Greenhouse",
+                    "source_file": "example.json",
+                },
+                {
+                    "label": "Submit application",
+                    "normalized_label": "submit application",
+                    "category": "final_submit",
+                    "automation_action": "human_review_required",
+                    "sensitivity": "submission_control",
+                    "required": False,
+                    "platform": "Greenhouse",
+                    "source_file": "example.json",
+                },
+                {
+                    "label": "Candidate Personal Data Disclosure",
+                    "normalized_label": "candidate personal data disclosure",
+                    "category": "policy_acknowledgement",
+                    "automation_action": "human_review_required",
+                    "sensitivity": "policy",
+                    "required": True,
+                    "platform": "Greenhouse",
+                    "source_file": "example.json",
+                },
+            ],
+        }
+        learning_tasks = {
+            "task_count": 3,
+            "tasks": [
+                {
+                    "group_key": "answer_memory:employment_history:default_policy",
+                    "question": "Should automation answer no to prior-employer questions?",
+                    "recommended_storage": "answer_memory",
+                    "answer_scope": "category_default_policy",
+                    "labels": ["Have you previously worked at ExampleCo?"],
+                    "suggested_answer": "No",
+                },
+                {
+                    "group_key": "local_material:resume_file",
+                    "question": "Which approved resume file should automation upload?",
+                    "recommended_storage": "local_material",
+                    "answer_scope": "local_file_path",
+                    "labels": ["Resume"],
+                },
+                {
+                    "group_key": "supervised_confirmation:policy_acknowledgement",
+                    "question": "May automation acknowledge reviewed policies in a fake run?",
+                    "recommended_storage": "supervised_confirmation",
+                    "answer_scope": "supervised_only",
+                    "labels": ["Candidate Personal Data Disclosure"],
+                },
+            ],
+        }
+        baseline = {"blocking_prompt_count": 3, "coverage_counts": {"needs_user_confirmation": 2}}
+
+        report = build_fake_learning_probe(research, learning_tasks, baseline_gaps=baseline)
+
+        self.assertFalse(report["real_platform_submission"])
+        self.assertEqual(report["fake_answered_task_count"], 2)
+        self.assertEqual(report["remaining_learning_blocker_count"], 0)
+        self.assertTrue(report["learning_blockers_cleared"])
+        self.assertEqual(report["remaining_manual_gate_count"], 1)
+        self.assertEqual(
+            report["after_fake_learning"]["coverage_counts"]["final_submit_confirmation"],
+            1,
+        )
+        self.assertIn("Fake Learning Probe", render_fake_learning_probe_markdown(report))
+
+    def test_write_fake_learning_probe_outputs_reports(self) -> None:
+        research = {
+            "generated_at": "2026-05-22T00:00:00+00:00",
+            "positions_observed_total": 1,
+            "positions": [{"position_key": "greenhouse:1", "platform": "Greenhouse"}],
+            "items": [
+                {
+                    "label": "Do you know anyone currently at ExampleCo?",
+                    "normalized_label": "do you know anyone currently at exampleco",
+                    "category": "conflict_of_interest",
+                    "automation_action": "human_review_required",
+                    "sensitivity": "policy",
+                    "required": True,
+                    "platform": "Greenhouse",
+                    "source_file": "example.json",
+                }
+            ],
+        }
+        learning_tasks = {
+            "task_count": 1,
+            "tasks": [
+                {
+                    "group_key": "answer_memory:conflict_of_interest:default_policy",
+                    "question": "Should automation answer no to conflict questions?",
+                    "recommended_storage": "answer_memory",
+                    "answer_scope": "category_default_policy",
+                    "labels": ["Do you know anyone currently at ExampleCo?"],
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            json_output = Path(temp_dir) / "probe.json"
+            markdown_output = Path(temp_dir) / "probe.md"
+
+            report = write_fake_learning_probe(
+                research,
+                learning_tasks,
+                baseline_gaps=None,
+                json_output=json_output,
+                markdown_output=markdown_output,
+            )
+
+            self.assertTrue(json_output.exists())
+            self.assertTrue(markdown_output.exists())
+            self.assertEqual(report["remaining_learning_blocker_count"], 0)
+            self.assertIn("Fake Learning Probe", markdown_output.read_text())
+
     def test_synthetic_application_simulation_never_submits_real_applications(self) -> None:
         report = run_synthetic_application_simulation(count=20)
 
@@ -5131,6 +5271,19 @@ class JobApplyAgentTests(unittest.TestCase):
             "policy_stop_counts": {"local_synthetic_submit_allowed": 150},
             "platform_role_counts": {"Greenhouse | Software Backend": 100},
         }
+        fake_learning_probe = {
+            "generated_at": "2026-05-22T00:00:00+00:00",
+            "real_platform_submission": False,
+            "input_task_count": 10,
+            "fake_answered_task_count": 10,
+            "fake_answer_memory_entry_count": 20,
+            "fake_category_policy_count": 3,
+            "baseline": {"blocking_prompt_count": 8},
+            "after_fake_learning": {"blocking_prompt_count": 2},
+            "remaining_learning_blocker_count": 0,
+            "remaining_manual_gate_count": 2,
+            "learning_blockers_cleared": True,
+        }
         answer_memory = {
             "answers": [
                 {
@@ -5165,6 +5318,7 @@ class JobApplyAgentTests(unittest.TestCase):
             learning_tasks,
             source_artifacts=source_artifacts,
             synthetic_browser_execution=synthetic_browser_execution,
+            fake_learning_probe=fake_learning_probe,
             answer_memory=answer_memory,
             closed_jobs=closed_jobs,
         )
@@ -5174,6 +5328,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Have you worked at DoorDash?", html)
         self.assertIn("Source Artifacts", html)
         self.assertIn("Synthetic Browser Execution", html)
+        self.assertIn("Fake Learning Probe", html)
+        self.assertIn("learning_blockers_cleared", html)
         self.assertIn("Closed Posting Registry", html)
         self.assertIn("Answer Memory Index", html)
         self.assertIn("No longer accepting applications", html)
@@ -5197,6 +5353,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 html_output,
                 source_artifacts=source_artifacts,
                 synthetic_browser_execution=synthetic_browser_execution,
+                fake_learning_probe=fake_learning_probe,
                 answer_memory=answer_memory,
                 closed_jobs=closed_jobs,
             )
@@ -5212,19 +5369,21 @@ class JobApplyAgentTests(unittest.TestCase):
                 self.assertIn("xl/workbook.xml", names)
                 self.assertIn("xl/worksheets/sheet1.xml", names)
                 self.assertIn("xl/worksheets/sheet2.xml", names)
-                self.assertIn("xl/worksheets/sheet6.xml", names)
-                self.assertIn("xl/worksheets/sheet17.xml", names)
+                self.assertIn("xl/worksheets/sheet7.xml", names)
+                self.assertIn("xl/worksheets/sheet18.xml", names)
                 source_sheet = workbook.read("xl/worksheets/sheet2.xml").decode("utf-8")
                 self.assertIn("Answer gaps", source_sheet)
                 synthetic_sheet = workbook.read("xl/worksheets/sheet3.xml").decode("utf-8")
                 self.assertIn("local_synthetic_browser_action_executor", synthetic_sheet)
-                problem_buckets = workbook.read("xl/worksheets/sheet6.xml").decode("utf-8")
+                fake_probe = workbook.read("xl/worksheets/sheet6.xml").decode("utf-8")
+                self.assertIn("learning_blockers_cleared", fake_probe)
+                problem_buckets = workbook.read("xl/worksheets/sheet7.xml").decode("utf-8")
                 self.assertIn("needs_user_confirmation", problem_buckets)
-                user_questions = workbook.read("xl/worksheets/sheet7.xml").decode("utf-8")
+                user_questions = workbook.read("xl/worksheets/sheet8.xml").decode("utf-8")
                 self.assertIn("Have you worked at DoorDash?", user_questions)
-                platform_shortfalls = workbook.read("xl/worksheets/sheet12.xml").decode("utf-8")
+                platform_shortfalls = workbook.read("xl/worksheets/sheet13.xml").decode("utf-8")
                 self.assertIn("Greenhouse", platform_shortfalls)
-                closed_postings = workbook.read("xl/worksheets/sheet17.xml").decode("utf-8")
+                closed_postings = workbook.read("xl/worksheets/sheet18.xml").decode("utf-8")
                 self.assertIn("No longer accepting applications", closed_postings)
 
 

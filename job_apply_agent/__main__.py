@@ -36,6 +36,7 @@ from .core import (
     write_closed_posting_preflight,
     write_collection_plan,
     write_form_fill_plan,
+    write_fake_learning_probe,
     write_learning_task_template,
     write_pre_submit_review,
     write_question_export,
@@ -75,6 +76,8 @@ DEFAULT_PRE_SUBMIT_REVIEW_JSON = Path(__file__).with_name("outbox") / "pre_submi
 DEFAULT_PRE_SUBMIT_REVIEW_MARKDOWN = Path(__file__).with_name("outbox") / "pre_submit_review_latest.md"
 DEFAULT_LEARNING_TASKS_JSON = Path(__file__).with_name("outbox") / "learning_tasks_latest.json"
 DEFAULT_LEARNING_TASKS_MARKDOWN = Path(__file__).with_name("outbox") / "learning_tasks_latest.md"
+DEFAULT_FAKE_LEARNING_PROBE_JSON = Path(__file__).with_name("outbox") / "fake_learning_probe_latest.json"
+DEFAULT_FAKE_LEARNING_PROBE_MARKDOWN = Path(__file__).with_name("outbox") / "fake_learning_probe_latest.md"
 DEFAULT_SYNTHETIC_JSON = Path(__file__).with_name("outbox") / "synthetic_100_run_latest.json"
 DEFAULT_SYNTHETIC_MARKDOWN = Path(__file__).with_name("outbox") / "synthetic_100_run_latest.md"
 DEFAULT_SYNTHETIC_EXEC_JSON = Path(__file__).with_name("outbox") / "synthetic_apply_execution_latest.json"
@@ -349,6 +352,16 @@ def main() -> int:
     apply_learning_parser.add_argument("--source", default="learning_task_template")
     apply_learning_parser.add_argument("--dry-run", action="store_true")
 
+    fake_learning_probe_parser = subparsers.add_parser(
+        "fake-learning-probe",
+        help="apply fake non-user learning answers in memory and report remaining blockers",
+    )
+    fake_learning_probe_parser.add_argument("--research-json", default=str(DEFAULT_RESEARCH_JSON))
+    fake_learning_probe_parser.add_argument("--learning-tasks-json", default=str(DEFAULT_LEARNING_TASKS_JSON))
+    fake_learning_probe_parser.add_argument("--baseline-gaps-json", default=str(DEFAULT_GAPS_JSON))
+    fake_learning_probe_parser.add_argument("--json-output", default=str(DEFAULT_FAKE_LEARNING_PROBE_JSON))
+    fake_learning_probe_parser.add_argument("--markdown-output", default=str(DEFAULT_FAKE_LEARNING_PROBE_MARKDOWN))
+
     synthetic_parser = subparsers.add_parser(
         "synthetic-run",
         help="run offline fake-candidate application simulations without real submissions",
@@ -510,6 +523,7 @@ def main() -> int:
         "--synthetic-browser-exec-json",
         default=str(DEFAULT_SYNTHETIC_BROWSER_EXEC_JSON),
     )
+    export_questions_parser.add_argument("--fake-learning-probe-json", default=str(DEFAULT_FAKE_LEARNING_PROBE_JSON))
     export_questions_parser.add_argument("--answer-memory-json", default=str(DEFAULT_MEMORY))
     export_questions_parser.add_argument("--closed-jobs-json", default=str(DEFAULT_CLOSED_JOBS))
     export_questions_parser.add_argument("--xlsx-output", default=str(DEFAULT_QUESTION_EXPORT_XLSX))
@@ -645,11 +659,13 @@ def main() -> int:
                     "Collection plan": args.collection_plan_json,
                     "Learning tasks": args.learning_tasks_json,
                     "Synthetic browser execution": args.synthetic_browser_exec_json,
+                    "Fake learning probe": args.fake_learning_probe_json,
                     "Answer memory": args.answer_memory_json,
                     "Closed postings": args.closed_jobs_json,
                 }
             ),
             synthetic_browser_execution=_load_optional_json(args.synthetic_browser_exec_json),
+            fake_learning_probe=_load_optional_json(args.fake_learning_probe_json),
             answer_memory=_load_optional_json(args.answer_memory_json),
             closed_jobs=_load_optional_json(args.closed_jobs_json),
         )
@@ -895,6 +911,27 @@ def main() -> int:
         print(f"Profile updates: {len(result.get('profile_updates', []))}")
         print(f"Answer memory updates: {len(result.get('answer_memory_updates', []))}")
         print(f"Skipped: {len(result.get('skipped', []))}")
+        return 0
+
+    if args.command == "fake-learning-probe":
+        research_path = Path(args.research_json)
+        tasks_path = Path(args.learning_tasks_json)
+        if not research_path.exists():
+            raise FileNotFoundError(f"research report not found: {args.research_json}")
+        if not tasks_path.exists():
+            raise FileNotFoundError(f"learning tasks not found: {args.learning_tasks_json}")
+        report = write_fake_learning_probe(
+            json.loads(research_path.read_text(encoding="utf-8")),
+            json.loads(tasks_path.read_text(encoding="utf-8")),
+            _load_optional_json(args.baseline_gaps_json),
+            args.json_output,
+            args.markdown_output,
+        )
+        print(f"Wrote fake learning probe JSON to {args.json_output}")
+        print(f"Wrote fake learning probe Markdown to {args.markdown_output}")
+        print(f"Fake answered tasks: {report.get('fake_answered_task_count', 0)}")
+        print(f"Remaining learning blockers: {report.get('remaining_learning_blocker_count', 0)}")
+        print(f"Remaining manual gates: {report.get('remaining_manual_gate_count', 0)}")
         return 0
 
     if args.command == "synthetic-run":

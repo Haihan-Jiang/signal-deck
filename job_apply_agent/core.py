@@ -3939,6 +3939,323 @@ def render_learning_task_template_markdown(template: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def build_fake_learning_probe(
+    research: dict[str, Any],
+    learning_tasks: dict[str, Any],
+    baseline_gaps: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    fake_profile, profile_updates = _fake_profile_for_learning_tasks(learning_tasks)
+    fake_memory, answer_summary = _fake_answer_memory_for_learning_tasks(learning_tasks)
+    fake_gaps = build_answer_gap_report(
+        research,
+        profile=fake_profile,
+        answer_memory=fake_memory,
+    )
+    fake_readiness = build_position_readiness_report(research, fake_gaps)
+    remaining_learning = [
+        _fake_probe_prompt_row(item)
+        for item in fake_gaps.get("blocking_prompts", [])
+        if item.get("coverage_status") in _LEARNING_BLOCKER_STATUSES
+    ]
+    remaining_manual = [
+        _fake_probe_prompt_row(item)
+        for item in fake_gaps.get("blocking_prompts", [])
+        if item.get("coverage_status") in _MANUAL_GATE_STATUSES
+    ]
+    baseline_blocking = int((baseline_gaps or {}).get("blocking_prompt_count") or 0)
+    fake_blocking = int(fake_gaps.get("blocking_prompt_count") or 0)
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "fake_learning_probe",
+        "real_platform_submission": False,
+        "fake_candidate": {
+            "name": fake_profile.name,
+            "email_domain": fake_profile.email.split("@")[-1] if "@" in fake_profile.email else "",
+            "profile": "synthetic test profile only",
+        },
+        "input_task_count": int(learning_tasks.get("task_count") or len(learning_tasks.get("tasks", []))),
+        "fake_answered_task_count": answer_summary["answered_task_count"],
+        "fake_answer_memory_entry_count": len(fake_memory.get("answers", [])),
+        "fake_category_policy_count": answer_summary["category_policy_count"],
+        "fake_profile_updates": profile_updates,
+        "fake_answer_scope_counts": answer_summary["answer_scope_counts"],
+        "baseline": {
+            "blocking_prompt_count": baseline_blocking,
+            "coverage_counts": (baseline_gaps or {}).get("coverage_counts", {}),
+        },
+        "after_fake_learning": {
+            "blocking_prompt_count": fake_blocking,
+            "blocking_prompt_delta": fake_blocking - baseline_blocking,
+            "ready_prompt_count": int(fake_gaps.get("ready_prompt_count") or 0),
+            "coverage_counts": fake_gaps.get("coverage_counts", {}),
+            "learning_queue_count": int(fake_readiness.get("learning_queue_count") or 0),
+            "minimal_learning_task_count": int(fake_readiness.get("minimal_learning_task_count") or 0),
+            "manual_gate_count": int(fake_readiness.get("manual_gate_count") or 0),
+            "readiness_counts": fake_readiness.get("readiness_counts", {}),
+        },
+        "remaining_learning_blocker_count": len(remaining_learning),
+        "remaining_manual_gate_count": len(remaining_manual),
+        "learning_blockers_cleared": len(remaining_learning) == 0,
+        "remaining_learning_blockers": remaining_learning[:100],
+        "remaining_manual_gates": remaining_manual[:100],
+        "policy": {
+            "uses_fake_candidate_only": True,
+            "writes_real_profile_or_memory": False,
+            "submits_real_applications": False,
+            "sensitive_final_and_security_gates_remain_blocking": True,
+        },
+    }
+
+
+def write_fake_learning_probe(
+    research: dict[str, Any],
+    learning_tasks: dict[str, Any],
+    baseline_gaps: dict[str, Any] | None,
+    json_output: str | Path,
+    markdown_output: str | Path,
+) -> dict[str, Any]:
+    report = build_fake_learning_probe(
+        research,
+        learning_tasks,
+        baseline_gaps=baseline_gaps,
+    )
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2), encoding="utf-8")
+    markdown_path.write_text(render_fake_learning_probe_markdown(report), encoding="utf-8")
+    return report
+
+
+def render_fake_learning_probe_markdown(report: dict[str, Any]) -> str:
+    after = report.get("after_fake_learning") or {}
+    lines = [
+        "# Fake Learning Probe",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        f"Real platform submission: {str(bool(report.get('real_platform_submission'))).lower()}",
+        f"Input learning tasks: {report.get('input_task_count', 0)}",
+        f"Fake answered tasks: {report.get('fake_answered_task_count', 0)}",
+        f"Fake answer memory entries: {report.get('fake_answer_memory_entry_count', 0)}",
+        f"Fake category policies: {report.get('fake_category_policy_count', 0)}",
+        f"Baseline blockers: {(report.get('baseline') or {}).get('blocking_prompt_count', 0)}",
+        f"After fake learning blockers: {after.get('blocking_prompt_count', 0)}",
+        f"Remaining learning blockers: {report.get('remaining_learning_blocker_count', 0)}",
+        f"Remaining manual gates: {report.get('remaining_manual_gate_count', 0)}",
+        f"Learning blockers cleared: {str(bool(report.get('learning_blockers_cleared'))).lower()}",
+        "",
+        "## Coverage Counts",
+        "",
+    ]
+    for key, value in sorted((after.get("coverage_counts") or {}).items()):
+        lines.append(f"- {key}: {value}")
+    if report.get("remaining_learning_blockers"):
+        lines.extend(["", "## Remaining Learning Blockers", ""])
+        for item in report.get("remaining_learning_blockers", [])[:20]:
+            lines.append(
+                "- {status}: {label} ({category}; observed {count}x)".format(
+                    status=item.get("coverage_status"),
+                    label=item.get("label"),
+                    category=item.get("category"),
+                    count=item.get("observed_count"),
+                )
+            )
+    if report.get("remaining_manual_gates"):
+        lines.extend(["", "## Remaining Manual Gates", ""])
+        for item in report.get("remaining_manual_gates", [])[:20]:
+            lines.append(
+                "- {status}: {label} ({category}; observed {count}x)".format(
+                    status=item.get("coverage_status"),
+                    label=item.get("label"),
+                    category=item.get("category"),
+                    count=item.get("observed_count"),
+                )
+            )
+    return "\n".join(lines) + "\n"
+
+
+def _fake_profile_for_learning_tasks(
+    learning_tasks: dict[str, Any],
+) -> tuple[CandidateProfile, list[str]]:
+    profile = build_synthetic_candidate_profile()
+    question_answers = dict(profile.question_answers)
+    resume_facts = dict(profile.resume_facts)
+    updates: list[str] = []
+    for task in learning_tasks.get("tasks", []):
+        if not isinstance(task, dict):
+            continue
+        group_key = str(task.get("group_key") or "")
+        storage = str(task.get("recommended_storage") or "")
+        if group_key == "profile:zip_or_postal_code":
+            question_answers["zip_code"] = "98101"
+            updates.append("question_answers.zip_code")
+        elif group_key == "profile:profile_links":
+            question_answers.setdefault(
+                "linkedin_profile",
+                "https://www.linkedin.com/in/fake-synthetic-candidate/",
+            )
+            updates.append("question_answers.linkedin_profile")
+        elif group_key == "local_material:resume_file":
+            question_answers["resume_path"] = "/tmp/fake-synthetic-resume.pdf"
+            updates.append("question_answers.resume_path")
+        elif storage == "resume_facts":
+            if group_key == "resume_facts:education_grading":
+                resume_facts["grading_system"] = "Not applicable for synthetic candidate."
+                updates.append("resume_facts.grading_system")
+            else:
+                normalized = _normalize(group_key)
+                key = normalized.replace(" ", "_")[:60] or "synthetic_resume_fact"
+                resume_facts[key] = "Synthetic candidate has the requested resume fact."
+                updates.append(f"resume_facts.{key}")
+    return (
+        CandidateProfile(
+            name=profile.name,
+            email=profile.email,
+            phone=profile.phone,
+            location=profile.location,
+            target_titles=profile.target_titles,
+            target_locations=profile.target_locations,
+            remote_ok=profile.remote_ok,
+            keywords=profile.keywords,
+            blocklist=profile.blocklist,
+            min_score=profile.min_score,
+            resume_facts=resume_facts,
+            question_answers=question_answers,
+        ),
+        sorted(set(updates)),
+    )
+
+
+def _fake_answer_memory_for_learning_tasks(
+    learning_tasks: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    memory: dict[str, Any] = {"version": 1, "answers": []}
+    answered_task_count = 0
+    category_policy_count = 0
+    answer_scope_counts: dict[str, int] = {}
+    for task in learning_tasks.get("tasks", []):
+        if not isinstance(task, dict):
+            continue
+        storage = str(task.get("recommended_storage") or "")
+        if storage not in {"answer_memory", "supervised_confirmation"}:
+            continue
+        answer = _fake_learning_answer_for_task(task)
+        if not answer:
+            continue
+        answered_task_count += 1
+        scope = str(task.get("answer_scope") or _learning_task_answer_scope(str(task.get("group_key") or ""), storage))
+        answer_scope_counts[scope] = answer_scope_counts.get(scope, 0) + 1
+        group_key = str(task.get("group_key") or "")
+        category = _category_default_policy_from_group_key(group_key)
+        if category:
+            _learn_category_default_policy(
+                memory,
+                category,
+                answer,
+                sample_question=f"Synthetic default policy for {category}",
+                source="fake_learning_probe",
+            )
+            category_policy_count += 1
+        labels = [str(label) for label in _string_list(task.get("labels")) if str(label).strip()]
+        if not labels:
+            labels = [str(task.get("question") or "")]
+        for label in labels:
+            _append_fake_answer_memory_entry(memory, label, answer)
+    return (
+        memory,
+        {
+            "answered_task_count": answered_task_count,
+            "category_policy_count": category_policy_count,
+            "answer_scope_counts": dict(sorted(answer_scope_counts.items())),
+        },
+    )
+
+
+def _append_fake_answer_memory_entry(
+    memory: dict[str, Any],
+    question: str,
+    answer: str,
+) -> None:
+    normalized = _normalize_question(question)
+    if not normalized or not str(answer).strip():
+        return
+    entries = memory.setdefault("answers", [])
+    if any(
+        entry.get("normalized_question") == normalized
+        and entry.get("answer") == str(answer).strip()
+        for entry in entries
+    ):
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    entries.append(
+        {
+            "normalized_question": normalized,
+            "sample_question": question,
+            "answer": str(answer).strip(),
+            "approved_count": 1,
+            "source": "fake_learning_probe",
+            "first_seen_at": now,
+            "last_seen_at": now,
+            "example_job": {
+                "platform": "synthetic",
+                "company": "Fake Learning Probe",
+                "title": "Synthetic automation verification",
+                "job_id": "fake-learning-probe",
+            },
+        }
+    )
+
+
+def _fake_learning_answer_for_task(task: dict[str, Any]) -> str:
+    suggested = str(task.get("suggested_answer") or "").strip()
+    if suggested:
+        return suggested
+    group_key = str(task.get("group_key") or "")
+    category = _category_default_policy_from_group_key(group_key)
+    if category:
+        category_answers = {
+            "background_or_export_control": "Synthetic candidate has no disqualifying background or export-control issues.",
+            "citizenship_status": "Synthetic candidate is a U.S. citizen and U.S. person where required.",
+            "country_work_permit": "Synthetic candidate is authorized to work in the country for this synthetic role.",
+            "health_requirement": "Synthetic candidate can meet job-related health or vaccination requirements.",
+            "interview_recording_consent": "Yes, synthetic candidate consents to interview recording for recruiting review.",
+        }
+        if category in category_answers:
+            return category_answers[category]
+        return _category_default_policy_suggestion(category, {}, None).get(
+            "suggested_answer",
+            "Synthetic candidate default answer.",
+        )
+    label = " ".join([str(task.get("question") or ""), *(_string_list(task.get("labels"))[:3])])
+    classification = classify_application_prompt(label)
+    if classification.category == "policy_acknowledgement":
+        return "Yes, synthetic candidate acknowledges this policy or disclosure for test purposes."
+    if classification.category in {"skills_experience", "technical_experience"}:
+        return "Yes, synthetic candidate has four years of relevant hands-on experience."
+    if classification.category == "language_ability":
+        return "English."
+    if classification.category in {"compensation", "salary"}:
+        return "$100,000+ base salary."
+    text = _normalize(label)
+    if "yes" in text or "do you" in text or "have you" in text or "are you" in text:
+        return "Yes, for this synthetic candidate."
+    return "Synthetic candidate test answer."
+
+
+def _fake_probe_prompt_row(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "coverage_status": item.get("coverage_status"),
+        "label": item.get("label"),
+        "category": item.get("category"),
+        "automation_action": item.get("automation_action"),
+        "observed_count": item.get("observed_count", 0),
+        "required_count": item.get("required_count", 0),
+        "platforms": item.get("platforms", []),
+        "next_action": item.get("next_action"),
+    }
+
+
 def build_synthetic_candidate_profile() -> CandidateProfile:
     return CandidateProfile(
         name="Morgan Test",
@@ -3984,6 +4301,14 @@ def build_synthetic_candidate_profile() -> CandidateProfile:
                 "incident response for production services"
             ),
             "education": "B.S. Computer Science",
+            "graduation_date": "2021-06",
+            "grading_system": "Not applicable for synthetic candidate.",
+            "current_role": "Site Reliability Engineer at Synthetic Infrastructure Labs",
+            "employment_dates": "2021-07 to Present",
+            "current_role_start_month": "July",
+            "current_role_start_year": "2021",
+            "current_role_end_month": "Present",
+            "current_role_end_year": "Present",
             "cloud_experience": (
                 "Hands-on experience operating services on AWS, Azure, and GCP, "
                 "with Kubernetes-based infrastructure"
@@ -4001,6 +4326,16 @@ def build_synthetic_candidate_profile() -> CandidateProfile:
             "relocation": "Yes, I am open to relocation for the right role.",
             "years_experience": "4 years",
             "cloud_provider_general": "I have experience across AWS, Azure, and GCP.",
+            "compensation_currency": "USD",
+            "age_over_18": "Yes",
+            "ai_application_disclosure": "Yes",
+            "referral_source": "LinkedIn",
+            "referral_contact": "N/A - no specific employee referral.",
+            "remote_preference": "Very remote-friendly.",
+            "onsite_hybrid": "Yes, open to onsite or hybrid work for the right role.",
+            "communication_consent": "Yes, recruiting teams may contact me by SMS or WhatsApp.",
+            "policy_acknowledgement": "Yes, I acknowledge.",
+            "english_level": "Professional working proficiency in English.",
             "linkedin_profile": "https://www.linkedin.com/in/fake-synthetic-candidate/",
             "resume_path": "/tmp/fake-synthetic-resume.pdf",
         },
@@ -5126,6 +5461,7 @@ def write_question_export(
     html_output: str | Path,
     source_artifacts: list[dict[str, Any]] | None = None,
     synthetic_browser_execution: dict[str, Any] | None = None,
+    fake_learning_probe: dict[str, Any] | None = None,
     answer_memory: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -5137,6 +5473,7 @@ def write_question_export(
         learning_tasks,
         source_artifacts=source_artifacts,
         synthetic_browser_execution=synthetic_browser_execution,
+        fake_learning_probe=fake_learning_probe,
         answer_memory=answer_memory,
         closed_jobs=closed_jobs,
     )
@@ -5158,6 +5495,7 @@ def build_question_export(
     learning_tasks: dict[str, Any],
     source_artifacts: list[dict[str, Any]] | None = None,
     synthetic_browser_execution: dict[str, Any] | None = None,
+    fake_learning_probe: dict[str, Any] | None = None,
     answer_memory: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -5183,6 +5521,7 @@ def build_question_export(
         "platform_role",
         "count",
     )
+    fake_learning_probe_rows = _fake_learning_probe_export_rows(fake_learning_probe)
     answer_memory_rows = _answer_memory_export_rows(answer_memory)
     closed_posting_rows = _closed_posting_export_rows(closed_jobs)
     collection_targets = [
@@ -5233,6 +5572,15 @@ def build_question_export(
         "expected_synthetic_blocker_count": int(
             (coverage_gate.get("synthetic") or {}).get("expected_blocker_count") or 0
         ),
+        "fake_learning_remaining_blockers": int(
+            (fake_learning_probe or {}).get("remaining_learning_blocker_count") or 0
+        ),
+        "fake_learning_manual_gates": int(
+            (fake_learning_probe or {}).get("remaining_manual_gate_count") or 0
+        ),
+        "fake_learning_blockers_cleared": bool(
+            (fake_learning_probe or {}).get("learning_blockers_cleared")
+        ),
         "real_submit_count": 0,
         "answer_memory_count": len(answer_memory_rows),
         "closed_posting_count": len(closed_posting_rows),
@@ -5244,6 +5592,7 @@ def build_question_export(
         "synthetic_execution": synthetic_execution_rows,
         "synthetic_policy_stops": synthetic_policy_stop_rows,
         "synthetic_platform_roles": synthetic_platform_role_rows,
+        "fake_learning_probe": fake_learning_probe_rows,
         "answer_memory": answer_memory_rows,
         "closed_postings": closed_posting_rows,
         "coverage_counts": gaps.get("coverage_counts", {}),
@@ -5355,6 +5704,12 @@ def render_question_export_html(export: dict[str, Any]) -> str:
         _html_table(
             ["Platform role", "Count"],
             [[row.get("platform_role"), row.get("count")] for row in export.get("synthetic_platform_roles", [])],
+        ),
+        "</section>",
+        "<section><h2>Fake Learning Probe</h2>",
+        _html_table(
+            ["Metric", "Value"],
+            [[row.get("metric"), row.get("value")] for row in export.get("fake_learning_probe", [])],
         ),
         "</section>",
         "<section><h2>Problem Buckets</h2>",
@@ -11400,6 +11755,27 @@ def _mapping_dict_rows(values: dict[str, Any], key_name: str, value_name: str) -
     ]
 
 
+def _fake_learning_probe_export_rows(fake_learning_probe: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not fake_learning_probe:
+        return []
+    after = fake_learning_probe.get("after_fake_learning") or {}
+    baseline = fake_learning_probe.get("baseline") or {}
+    metrics = {
+        "generated_at": fake_learning_probe.get("generated_at"),
+        "real_platform_submission": fake_learning_probe.get("real_platform_submission"),
+        "input_task_count": fake_learning_probe.get("input_task_count"),
+        "fake_answered_task_count": fake_learning_probe.get("fake_answered_task_count"),
+        "fake_answer_memory_entry_count": fake_learning_probe.get("fake_answer_memory_entry_count"),
+        "fake_category_policy_count": fake_learning_probe.get("fake_category_policy_count"),
+        "baseline_blocking_prompt_count": baseline.get("blocking_prompt_count"),
+        "after_fake_learning_blocking_prompt_count": after.get("blocking_prompt_count"),
+        "remaining_learning_blocker_count": fake_learning_probe.get("remaining_learning_blocker_count"),
+        "remaining_manual_gate_count": fake_learning_probe.get("remaining_manual_gate_count"),
+        "learning_blockers_cleared": fake_learning_probe.get("learning_blockers_cleared"),
+    }
+    return [{"metric": key, "value": value} for key, value in metrics.items()]
+
+
 def _answer_memory_export_rows(answer_memory: dict[str, Any] | None) -> list[dict[str, Any]]:
     if not answer_memory:
         return []
@@ -11580,6 +11956,7 @@ def _write_question_export_xlsx(export: dict[str, Any], path: Path) -> None:
         ("Synthetic Execution", _table_rows(export.get("synthetic_execution", []))),
         ("Synthetic Stops", _table_rows(export.get("synthetic_policy_stops", []))),
         ("Synthetic Roles", _table_rows(export.get("synthetic_platform_roles", []))),
+        ("Fake Learning Probe", _table_rows(export.get("fake_learning_probe", []))),
         ("Problem Buckets", _table_rows(export.get("problem_buckets", []))),
         ("User Questions", _table_rows(export.get("user_questions", []))),
         ("Blocking Prompts", _table_rows(export.get("blocker_rows", []))),
