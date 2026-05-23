@@ -21235,6 +21235,414 @@ def _browser_review_url_reason(value: str, field_path: str) -> dict[str, str] | 
     return None
 
 
+def build_submission_safety_audit(
+    fake_position_rehearsal: dict[str, Any] | None = None,
+    post_answer_pipeline: dict[str, Any] | None = None,
+    apply_queue_autofill_packet: dict[str, Any] | None = None,
+    browser_review_queue_audit: dict[str, Any] | None = None,
+    pre_submit_review: dict[str, Any] | None = None,
+    goal_readiness_audit: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    checks: list[dict[str, Any]] = []
+    issues: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+
+    def add_check(check_id: str, label: str, passed: bool, evidence: dict[str, Any], reason: str = "") -> None:
+        check = {
+            "id": check_id,
+            "label": label,
+            "status": "pass" if passed else "fail",
+            "evidence": evidence,
+        }
+        if reason and not passed:
+            check["reason"] = reason
+        checks.append(check)
+        if not passed:
+            issues.append({"id": check_id, "message": reason or label, "evidence": evidence})
+
+    def add_warning(warning_id: str, message: str, evidence: dict[str, Any] | None = None) -> None:
+        warning = {"id": warning_id, "message": message, "evidence": evidence or {}}
+        warnings.append(warning)
+
+    required_artifacts = [
+        ("fake_position_rehearsal", fake_position_rehearsal),
+        ("post_answer_pipeline", post_answer_pipeline),
+        ("apply_queue_autofill_packet", apply_queue_autofill_packet),
+        ("browser_review_queue_audit", browser_review_queue_audit),
+    ]
+    for name, artifact in required_artifacts:
+        add_check(
+            f"{name}_present",
+            f"{name} artifact is present",
+            isinstance(artifact, dict) and bool(artifact),
+            {"present": isinstance(artifact, dict) and bool(artifact)},
+            f"missing required safety evidence: {name}",
+        )
+    for name, artifact in [
+        ("pre_submit_review", pre_submit_review),
+        ("goal_readiness_audit", goal_readiness_audit),
+    ]:
+        if not isinstance(artifact, dict) or not artifact:
+            add_warning(f"{name}_missing", f"optional artifact missing: {name}")
+
+    fake = fake_position_rehearsal if isinstance(fake_position_rehearsal, dict) else {}
+    fake_policy = fake.get("policy") if isinstance(fake.get("policy"), dict) else {}
+    fake_bad = bool(fake.get("real_platform_submission")) or bool(fake_policy.get("real_platform_submission")) or bool(
+        fake_policy.get("fake_data_real_submission_allowed")
+    )
+    add_check(
+        "fake_position_rehearsal_local_only",
+        "fake position rehearsal only submits inside local synthetic forms",
+        not fake_bad,
+        {
+            "real_platform_submission": bool(fake.get("real_platform_submission")),
+            "policy_real_platform_submission": bool(fake_policy.get("real_platform_submission")),
+            "fake_data_real_submission_allowed": bool(fake_policy.get("fake_data_real_submission_allowed")),
+            "local_synthetic_submit_allowed": bool(fake.get("local_synthetic_submit_allowed")),
+            "actual_submit_count": _submission_safety_int(fake.get("actual_submit_count")),
+            "eligible_submit_count": _submission_safety_int(fake.get("eligible_submit_count")),
+            "selector_miss_count": _submission_safety_int(fake.get("selector_miss_count")),
+        },
+        "fake rehearsal indicates a real-platform submission path",
+    )
+
+    post_answer = post_answer_pipeline if isinstance(post_answer_pipeline, dict) else {}
+    post_policy = post_answer.get("policy") if isinstance(post_answer.get("policy"), dict) else {}
+    synthetic_queue = (
+        post_answer.get("synthetic_queue_rehearsal")
+        if isinstance(post_answer.get("synthetic_queue_rehearsal"), dict)
+        else {}
+    )
+    synthetic_controls_bad = False
+    if bool(post_answer.get("synthetic_final_answers")):
+        synthetic_controls_bad = any(
+            bool(post_answer.get(key)) for key in ["apply_requested", "live_check_requested", "open_browser_requested"]
+        ) or not bool(post_policy.get("synthetic_answers_never_written_to_real_profile_or_memory", True))
+    synthetic_queue_bad = any(
+        bool(synthetic_queue.get(key))
+        for key in [
+            "writes_real_profile_or_memory",
+            "submits_real_applications",
+            "opens_browser",
+            "runs_live_check",
+        ]
+    )
+    post_bad = bool(post_policy.get("submits_real_applications")) or synthetic_controls_bad or synthetic_queue_bad
+    add_check(
+        "post_answer_synthetic_controls",
+        "synthetic final-answer pipeline cannot write real profile data, live-check, open pages, or submit",
+        not post_bad,
+        {
+            "status": post_answer.get("status"),
+            "synthetic_final_answers": bool(post_answer.get("synthetic_final_answers")),
+            "apply_requested": bool(post_answer.get("apply_requested")),
+            "live_check_requested": bool(post_answer.get("live_check_requested")),
+            "open_browser_requested": bool(post_answer.get("open_browser_requested")),
+            "policy_submits_real_applications": bool(post_policy.get("submits_real_applications")),
+            "synthetic_queue_writes_real_profile_or_memory": bool(
+                synthetic_queue.get("writes_real_profile_or_memory")
+            ),
+            "synthetic_queue_submits_real_applications": bool(synthetic_queue.get("submits_real_applications")),
+            "synthetic_queue_opens_browser": bool(synthetic_queue.get("opens_browser")),
+            "synthetic_queue_runs_live_check": bool(synthetic_queue.get("runs_live_check")),
+            "autofill_packet_selected": _submission_safety_int(synthetic_queue.get("autofill_packet_selected")),
+            "autofill_packet_final_submit_stops": _submission_safety_int(
+                synthetic_queue.get("autofill_packet_final_submit_stops")
+            ),
+            "autofill_packet_selector_misses": _submission_safety_int(
+                synthetic_queue.get("autofill_packet_selector_misses")
+            ),
+        },
+        "synthetic post-answer path is allowed to touch real profile/browser/submission side effects",
+    )
+
+    packet = apply_queue_autofill_packet if isinstance(apply_queue_autofill_packet, dict) else {}
+    packet_summary = packet.get("summary") if isinstance(packet.get("summary"), dict) else {}
+    packet_positions = [row for row in packet.get("positions", []) if isinstance(row, dict)]
+    position_real_submit_count = sum(1 for row in packet_positions if bool(row.get("real_platform_submission")))
+    position_would_submit_count = sum(1 for row in packet_positions if bool(row.get("would_submit")))
+    position_final_submit_allowed_count = sum(1 for row in packet_positions if bool(row.get("final_submit_allowed")))
+    selected_count = _submission_safety_int(
+        packet.get("selected_count") or packet_summary.get("selected_count") or len(packet_positions)
+    )
+    target_count = _submission_safety_int(packet.get("target_count") or packet_summary.get("target_count"))
+    final_submit_stop_count = _submission_safety_int(
+        packet_summary.get("final_submit_stop_count")
+        or sum(1 for row in packet_positions if _submission_safety_has_final_submit_stop(row))
+    )
+    packet_bad = any(
+        [
+            bool(packet.get("real_platform_submission")),
+            bool(packet.get("ready_for_unattended_real_submit")),
+            position_real_submit_count > 0,
+            position_would_submit_count > 0,
+            position_final_submit_allowed_count > 0,
+        ]
+    )
+    add_check(
+        "apply_queue_no_unattended_real_submit",
+        "100-position autofill packet stops before every real employer final submit",
+        not packet_bad,
+        {
+            "status": packet.get("status"),
+            "real_platform_submission": bool(packet.get("real_platform_submission")),
+            "ready_for_unattended_real_submit": bool(packet.get("ready_for_unattended_real_submit")),
+            "selected_count": selected_count,
+            "target_count": target_count,
+            "position_real_submit_count": position_real_submit_count,
+            "position_would_submit_count": position_would_submit_count,
+            "position_final_submit_allowed_count": position_final_submit_allowed_count,
+            "final_submit_stop_count": final_submit_stop_count,
+            "selector_miss_count": _submission_safety_int(packet_summary.get("selector_miss_count")),
+            "local_synthetic_submit_count": _submission_safety_int(packet_summary.get("local_synthetic_submit_count")),
+        },
+        "autofill packet exposes an unattended real-submit path",
+    )
+    stop_coverage_ok = selected_count == 0 or final_submit_stop_count >= selected_count
+    add_check(
+        "apply_queue_final_submit_stop_coverage",
+        "selected positions all have a final-submit stop",
+        stop_coverage_ok,
+        {"selected_count": selected_count, "final_submit_stop_count": final_submit_stop_count},
+        "not every selected position has a final-submit stop",
+    )
+    if target_count and selected_count < target_count:
+        add_warning(
+            "apply_queue_below_target",
+            "autofill packet is below target count; this is a completeness warning, not a safety failure",
+            {"selected_count": selected_count, "target_count": target_count},
+        )
+
+    browser_audit = browser_review_queue_audit if isinstance(browser_review_queue_audit, dict) else {}
+    browser_bad = not bool(browser_audit.get("safe")) or _submission_safety_int(
+        browser_audit.get("real_platform_submission_true_count")
+    ) > 0
+    add_check(
+        "browser_review_queue_safe",
+        "browser review queue stores only sparse review records and no submitted-application rows",
+        not browser_bad,
+        {
+            "safe": bool(browser_audit.get("safe")),
+            "row_count": _submission_safety_int(browser_audit.get("row_count")),
+            "real_platform_submission_true_count": _submission_safety_int(
+                browser_audit.get("real_platform_submission_true_count")
+            ),
+            "parse_error_count": _submission_safety_int(browser_audit.get("parse_error_count")),
+        },
+        "browser review queue audit is unsafe or contains real-platform submission rows",
+    )
+
+    pre_submit = pre_submit_review if isinstance(pre_submit_review, dict) else {}
+    if pre_submit:
+        pre_submit_bad = any(
+            [
+                bool(pre_submit.get("real_platform_submission")),
+                bool(pre_submit.get("final_submit_allowed")),
+                bool(pre_submit.get("would_submit")),
+                _submission_safety_int(pre_submit.get("actual_submit_count")) > 0,
+            ]
+        )
+        add_check(
+            "pre_submit_review_no_real_submit",
+            "pre-submit review blocks final submit and has zero actual real submits",
+            not pre_submit_bad,
+            {
+                "generated_at": pre_submit.get("generated_at"),
+                "real_platform_submission": bool(pre_submit.get("real_platform_submission")),
+                "final_submit_allowed": bool(pre_submit.get("final_submit_allowed")),
+                "would_submit": bool(pre_submit.get("would_submit")),
+                "actual_submit_count": _submission_safety_int(pre_submit.get("actual_submit_count")),
+            },
+            "pre-submit review indicates real submit was allowed or performed",
+        )
+
+    goal = goal_readiness_audit if isinstance(goal_readiness_audit, dict) else {}
+    blocker_summary = goal.get("blocker_summary") if isinstance(goal.get("blocker_summary"), dict) else {}
+    final_answer_waiting_count = _submission_safety_int(
+        blocker_summary.get("final_answer_waiting_count_after_drafts")
+    )
+    if final_answer_waiting_count:
+        add_warning(
+            "goal_needs_user_answers",
+            "goal still needs truthful user answers before unattended real application flow can be considered",
+            {
+                "status": goal.get("status"),
+                "final_answer_waiting_count_after_drafts": final_answer_waiting_count,
+                "final_answer_waiting_high_risk_count_after_drafts": _submission_safety_int(
+                    blocker_summary.get("final_answer_waiting_high_risk_count_after_drafts")
+                ),
+            },
+        )
+
+    safe = not issues
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "submission_safety_audit",
+        "status": "safe" if safe else "unsafe",
+        "safe": safe,
+        "issue_count": len(issues),
+        "warning_count": len(warnings),
+        "summary": {
+            "fake_position_rehearsal_runs": _submission_safety_int(fake.get("run_count")),
+            "fake_position_local_synthetic_submit_count": _submission_safety_int(fake.get("actual_submit_count")),
+            "fake_position_selector_miss_count": _submission_safety_int(fake.get("selector_miss_count")),
+            "post_answer_status": post_answer.get("status"),
+            "post_answer_synthetic_final_answers": bool(post_answer.get("synthetic_final_answers")),
+            "post_answer_synthetic_autofill_selected_count": _submission_safety_int(
+                synthetic_queue.get("autofill_packet_selected")
+            ),
+            "post_answer_synthetic_final_submit_stop_count": _submission_safety_int(
+                synthetic_queue.get("autofill_packet_final_submit_stops")
+            ),
+            "apply_packet_status": packet.get("status"),
+            "apply_packet_selected_count": selected_count,
+            "apply_packet_target_count": target_count,
+            "apply_packet_local_synthetic_submit_count": _submission_safety_int(
+                packet_summary.get("local_synthetic_submit_count")
+            ),
+            "apply_packet_selector_miss_count": _submission_safety_int(packet_summary.get("selector_miss_count")),
+            "apply_packet_final_submit_stop_count": final_submit_stop_count,
+            "browser_review_queue_safe": bool(browser_audit.get("safe")),
+            "browser_review_queue_row_count": _submission_safety_int(browser_audit.get("row_count")),
+            "pre_submit_actual_submit_count": _submission_safety_int(pre_submit.get("actual_submit_count")),
+            "goal_status": goal.get("status"),
+            "final_answer_waiting_count_after_drafts": final_answer_waiting_count,
+        },
+        "checks": checks,
+        "issues": issues,
+        "warnings": warnings,
+        "policy": {
+            "fake_data_local_only": True,
+            "real_employer_final_submit_supervised": True,
+            "synthetic_answers_never_written_to_real_profile_or_memory": True,
+            "browser_review_queue_stores_sparse_records_only": True,
+            "closed_or_unavailable_jobs_excluded_before_open": True,
+        },
+    }
+
+
+def write_submission_safety_audit(
+    json_output: str | Path,
+    markdown_output: str | Path,
+    fake_position_rehearsal: dict[str, Any] | None = None,
+    post_answer_pipeline: dict[str, Any] | None = None,
+    apply_queue_autofill_packet: dict[str, Any] | None = None,
+    browser_review_queue_audit: dict[str, Any] | None = None,
+    pre_submit_review: dict[str, Any] | None = None,
+    goal_readiness_audit: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    audit = build_submission_safety_audit(
+        fake_position_rehearsal=fake_position_rehearsal,
+        post_answer_pipeline=post_answer_pipeline,
+        apply_queue_autofill_packet=apply_queue_autofill_packet,
+        browser_review_queue_audit=browser_review_queue_audit,
+        pre_submit_review=pre_submit_review,
+        goal_readiness_audit=goal_readiness_audit,
+    )
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(audit, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(render_submission_safety_audit_markdown(audit), encoding="utf-8")
+    return audit
+
+
+def render_submission_safety_audit_markdown(audit: dict[str, Any]) -> str:
+    summary = audit.get("summary") if isinstance(audit.get("summary"), dict) else {}
+    lines = [
+        "# Submission Safety Audit",
+        "",
+        f"Generated: {audit.get('generated_at')}",
+        f"Status: {audit.get('status')}",
+        f"Safe: {str(bool(audit.get('safe'))).lower()}",
+        f"Issues: {audit.get('issue_count', 0)}",
+        f"Warnings: {audit.get('warning_count', 0)}",
+        "",
+        "## Summary",
+        "",
+        f"- fake rehearsal local synthetic submits: {summary.get('fake_position_local_synthetic_submit_count', 0)}",
+        f"- fake rehearsal selector misses: {summary.get('fake_position_selector_miss_count', 0)}",
+        f"- post-answer status: {summary.get('post_answer_status') or 'missing'}",
+        f"- post-answer synthetic selected: {summary.get('post_answer_synthetic_autofill_selected_count', 0)}",
+        f"- post-answer final-submit stops: {summary.get('post_answer_synthetic_final_submit_stop_count', 0)}",
+        f"- apply packet status: {summary.get('apply_packet_status') or 'missing'}",
+        f"- apply packet selected: {summary.get('apply_packet_selected_count', 0)} / {summary.get('apply_packet_target_count', 0)}",
+        f"- apply packet local synthetic submits: {summary.get('apply_packet_local_synthetic_submit_count', 0)}",
+        f"- apply packet selector misses: {summary.get('apply_packet_selector_miss_count', 0)}",
+        f"- apply packet final-submit stops: {summary.get('apply_packet_final_submit_stop_count', 0)}",
+        f"- browser review queue safe: {str(bool(summary.get('browser_review_queue_safe'))).lower()}",
+        f"- browser review queue rows: {summary.get('browser_review_queue_row_count', 0)}",
+        f"- pre-submit actual submits: {summary.get('pre_submit_actual_submit_count', 0)}",
+        f"- goal status: {summary.get('goal_status') or 'missing'}",
+        f"- final-answer blanks after drafts: {summary.get('final_answer_waiting_count_after_drafts', 0)}",
+        "",
+        "## Checks",
+        "",
+    ]
+    checks = audit.get("checks") or []
+    if checks:
+        lines.extend(
+            _simple_markdown_table(
+                ["ID", "Status", "Evidence"],
+                [
+                    [
+                        check.get("id"),
+                        check.get("status"),
+                        _submission_safety_markdown_evidence(check.get("evidence")),
+                    ]
+                    for check in checks
+                ],
+            )
+        )
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Issues", ""])
+    issues = audit.get("issues") or []
+    if issues:
+        for issue in issues:
+            lines.append(f"- {issue.get('id')}: {issue.get('message')}")
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Warnings", ""])
+    warnings = audit.get("warnings") or []
+    if warnings:
+        for warning in warnings:
+            lines.append(f"- {warning.get('id')}: {warning.get('message')}")
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Policy", ""])
+    for key, value in sorted((audit.get("policy") or {}).items()):
+        lines.append(f"- {key.replace('_', ' ')}: {str(bool(value)).lower()}")
+    return "\n".join(lines) + "\n"
+
+
+def _submission_safety_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _submission_safety_has_final_submit_stop(position: dict[str, Any]) -> bool:
+    for action in position.get("stop_actions") or []:
+        if not isinstance(action, dict):
+            continue
+        if action.get("category") == "final_submit" or action.get("status") == "final_submit_confirmation":
+            return True
+    return False
+
+
+def _submission_safety_markdown_evidence(value: Any) -> str:
+    text = json.dumps(value or {}, ensure_ascii=True, sort_keys=True)
+    if len(text) > 360:
+        return text[:357] + "..."
+    return text
+
+
 def job_registry_key(job: dict[str, Any]) -> str:
     apply_url = str(
         job.get("apply_url") or job.get("short_apply_url") or job.get("url") or ""

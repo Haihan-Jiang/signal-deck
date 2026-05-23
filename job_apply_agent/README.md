@@ -898,6 +898,19 @@ python3 -m job_apply_agent position-execution-audit
 
 This writes `position_execution_audit_latest.{json,md,html}`.
 
+To prove that fake-data rehearsal stayed local and that no real employer final
+submit path was enabled, run:
+
+```bash
+python3 -m job_apply_agent submission-safety-audit
+```
+
+This writes `submission_safety_audit_latest.{json,md}` by combining the fake
+position rehearsal, post-answer synthetic queue, apply-queue autofill packet,
+browser review queue audit, pre-submit review, and goal audit. A safe report can
+still warn that final user answers are missing; that warning blocks unattended
+real submission, not local fake rehearsal.
+
 To see the per-platform question handling summary for the 100-position rehearsal,
 write the platform playbook:
 
