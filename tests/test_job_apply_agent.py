@@ -4217,6 +4217,7 @@ class JobApplyAgentTests(unittest.TestCase):
         pack = build_learning_approval_pack(learning_tasks, {})
         template = build_critical_input_answer_template(pack)
         self.assertEqual(template["answer_count"], 2)
+        self.assertEqual(len(template["critical_inputs"]), 2)
         self.assertEqual(template["answers"][0]["approval_decision"], "")
         markdown = render_critical_input_answer_template_markdown(template)
         self.assertIn("Critical Input Answer Template", markdown)
@@ -4267,6 +4268,14 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(profile["question_answers"]["zip_code"], "94105")
             memory = load_answer_memory(memory_path)
             self.assertIsNotNone(find_learned_answer(memory, "What's your favorite junk food?"))
+
+            critical_inputs_payload = json.loads(json.dumps(build_critical_input_answer_template(pack)))
+            for answer in critical_inputs_payload["critical_inputs"]:
+                if answer["group_key"] == "profile:zip_or_postal_code":
+                    answer["user_answer"] = "94105"
+                    answer["approval_decision"] = "approved"
+            status = build_critical_input_status_report(pack, critical_inputs_payload)
+            self.assertEqual(status["summary"]["ready_to_apply_count"], 1)
 
     def test_critical_input_status_report_groups_waiting_ready_and_supervised(self) -> None:
         learning_tasks = {

@@ -4153,9 +4153,11 @@ def build_critical_input_answer_template(approval_pack: dict[str, Any]) -> dict[
         "source": "learning_approval_pack.critical_inputs",
         "answer_count": len(answers),
         "instructions": (
-            "Fill user_answer and set approval_decision=approved only for truthful reusable answers. "
+            "Fill critical_inputs.user_answer and set approval_decision=approved only for truthful reusable answers. "
+            "The answers field is a legacy mirror; editing either critical_inputs or answers is accepted. "
             "Leave supervised_browser_review_only rows blank; they stay browser-supervised."
         ),
+        "critical_inputs": answers,
         "answers": answers,
     }
 
@@ -4167,7 +4169,7 @@ def build_fake_critical_input_probe(approval_pack: dict[str, Any]) -> dict[str, 
     fake_answers["instructions"] = (
         "Synthetic answers for dry-run verification only. Do not apply to a real profile."
     )
-    for item in fake_answers.get("answers", []):
+    for item in fake_answers.get("critical_inputs") or fake_answers.get("answers") or []:
         if not isinstance(item, dict):
             continue
         if item.get("input_type") == "supervised_browser_review_only":
@@ -4309,7 +4311,7 @@ def render_critical_input_answer_template_markdown(template: dict[str, Any]) -> 
         "## Answers",
         "",
     ]
-    answers = template.get("answers") or []
+    answers = _critical_input_answer_rows(template)
     if not answers:
         lines.append("- None")
         return "\n".join(lines) + "\n"
@@ -4664,11 +4666,7 @@ def _approval_pack_with_answer_template(
         **approval_pack,
         "critical_inputs": [dict(item) for item in approval_pack.get("critical_inputs", []) if isinstance(item, dict)],
     }
-    answer_rows = answers_payload.get("answers")
-    if not isinstance(answer_rows, list):
-        answer_rows = answers_payload.get("critical_inputs")
-    if not isinstance(answer_rows, list):
-        answer_rows = []
+    answer_rows = _critical_input_answer_rows(answers_payload)
     answer_index: dict[str, dict[str, Any]] = {}
     for index, row in enumerate(answer_rows, start=1):
         if not isinstance(row, dict):
@@ -4696,6 +4694,31 @@ def _approval_pack_with_answer_template(
         if "user_answer" in answer:
             item["user_answer"] = answer.get("user_answer")
     return merged
+
+
+def _critical_input_answer_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    rows_by_key: dict[str, dict[str, Any]] = {}
+    ordered_keys: list[str] = []
+    for rows in [payload.get("answers"), payload.get("critical_inputs")]:
+        if not isinstance(rows, list):
+            continue
+        for index, row in enumerate(rows, start=1):
+            if not isinstance(row, dict):
+                continue
+            key = _critical_input_answer_id(row, index)
+            if key not in rows_by_key:
+                rows_by_key[key] = dict(row)
+                ordered_keys.append(key)
+                continue
+            existing = rows_by_key[key]
+            for field in ["approval_decision", "user_answer"]:
+                value = row.get(field)
+                if str(value or "").strip():
+                    existing[field] = value
+            for field, value in row.items():
+                if field not in existing:
+                    existing[field] = value
+    return [rows_by_key[key] for key in ordered_keys]
 
 
 def _critical_input_answer_id(item: dict[str, Any], index: int) -> str:

@@ -396,9 +396,11 @@ job_apply_agent/outbox/critical_input_answers_latest.json
 job_apply_agent/outbox/critical_input_answers_latest.md
 ```
 
-After filling `user_answer` and setting `approval_decision` to `approved` for
-truthful reusable rows in `critical_input_answers_latest.json`, check what is
-ready versus still waiting:
+After filling `critical_inputs[].user_answer` and setting
+`approval_decision` to `approved` for truthful reusable rows in
+`critical_input_answers_latest.json`, check what is ready versus still waiting.
+The `answers` field is kept as a legacy mirror; the status and apply commands
+accept edits made in either list.
 
 ```bash
 python3 -m job_apply_agent critical-inputs-status
