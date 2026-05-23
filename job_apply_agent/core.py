@@ -14651,7 +14651,7 @@ def _goal_next_actions(
         if unblocker_proof_complete:
             blank_count = final_answer_waiting_count or critical_waiting_count
             actions.append(
-                f"Fill the {blank_count} final-answer lines in {FINAL_ANSWER_REPLY_TEMPLATE_PATH}, then run `python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --run-post-answer-pipeline --post-answer-apply --post-answer-live-check --post-answer-include-values --fail-on-not-ready`."
+                f"Fill the {blank_count} final-answer lines in {FINAL_ANSWER_REPLY_TEMPLATE_PATH}, then run `python3 -m job_apply_agent resume-after-answers`."
             )
             actions.append(
                 "If you want the compact prompt again, run `python3 -m job_apply_agent final-answer-blockers --notify-telegram --telegram-dry-run` before filling the reply file."
@@ -15421,14 +15421,14 @@ def _automation_handoff_confirmed_answer_runbook(summary: dict[str, Any]) -> lis
             "step": 4,
             "name": "Apply approved answers and live-check",
             "status": "ready_after_confirmation" if final_blanks else "ready",
-            "action": f"python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --run-post-answer-pipeline --post-answer-apply --post-answer-live-check --post-answer-include-values --fail-on-not-ready",
+            "action": "python3 -m job_apply_agent resume-after-answers",
             "expected_result": "Approved answers are written to profile/memory, live closed-posting preflight runs, and the supervised autofill packet is rebuilt.",
         },
         {
             "step": 5,
             "name": "Open verified pages",
             "status": "ready_after_confirmation" if final_blanks else "ready",
-            "action": f"python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --run-post-answer-pipeline --post-answer-apply --post-answer-live-check --post-answer-include-values --post-answer-open-browser --post-answer-open-limit 100 --fail-on-not-ready",
+            "action": "python3 -m job_apply_agent resume-after-answers --open-browser --open-limit 100",
             "expected_result": "Only live-verified pages open; final submit stays supervised.",
         },
         {
@@ -15475,8 +15475,8 @@ def _automation_handoff_next_commands(summary: dict[str, Any]) -> list[str]:
         "python3 -m job_apply_agent final-answer-blockers --notify-telegram --telegram-dry-run",
         "python3 -m job_apply_agent final-answer-reply --reply-file /path/to/fake-reply.txt --synthetic-rehearse-queue --fail-on-not-ready",
         f"python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --run-post-answer-pipeline --fail-on-not-ready",
-        f"python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --run-post-answer-pipeline --post-answer-apply --post-answer-live-check --post-answer-include-values --fail-on-not-ready",
-        f"python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --run-post-answer-pipeline --post-answer-apply --post-answer-live-check --post-answer-include-values --post-answer-open-browser --post-answer-open-limit 100 --fail-on-not-ready",
+        "python3 -m job_apply_agent resume-after-answers",
+        "python3 -m job_apply_agent resume-after-answers --open-browser --open-limit 100",
         "python3 -m job_apply_agent post-answer-pipeline --synthetic-final-answers --synthetic-rehearse-queue --fail-on-not-ready",
         "python3 -m job_apply_agent post-answer-pipeline --fail-on-not-ready",
         "python3 -m job_apply_agent post-answer-pipeline --apply --live-check --include-values",
@@ -15501,24 +15501,17 @@ def _automation_handoff_one_command_resume(
     open_browser: bool = False,
 ) -> str:
     command = [
-        "python3 -m job_apply_agent final-answer-reply",
-        "--reply-file",
-        FINAL_ANSWER_REPLY_TEMPLATE_PATH,
-        "--run-post-answer-pipeline",
-        "--post-answer-apply",
-        "--post-answer-live-check",
-        "--post-answer-live-check-limit",
+        "python3 -m job_apply_agent resume-after-answers",
+        "--live-check-limit",
         str(max(100, int(summary.get("apply_queue_open_after_answers_count") or 0))),
-        "--post-answer-live-check-timeout",
+        "--live-check-timeout",
         "25",
-        "--post-answer-include-values",
-        "--fail-on-not-ready",
     ]
     if open_browser:
         command.extend(
             [
-                "--post-answer-open-browser",
-                "--post-answer-open-limit",
+                "--open-browser",
+                "--open-limit",
                 str(max(100, int(summary.get("apply_queue_open_after_answers_count") or 0))),
             ]
         )
@@ -20290,7 +20283,7 @@ def build_final_answer_blocker_report(
         "next_commands": [
             "python3 -m job_apply_agent final-answer-reply --reply-file /path/to/fake-reply.txt --synthetic-rehearse-queue --fail-on-not-ready",
             f"python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --run-post-answer-pipeline --fail-on-not-ready",
-            f"python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --run-post-answer-pipeline --post-answer-apply --post-answer-live-check --post-answer-include-values --fail-on-not-ready",
+            "python3 -m job_apply_agent resume-after-answers",
             "python3 -m job_apply_agent final-answer-intake-server --open-browser --once --run-post-answer-pipeline --post-answer-apply --post-answer-live-check --post-answer-include-values",
         ],
         "policy": {

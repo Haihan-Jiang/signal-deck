@@ -1152,6 +1152,20 @@ def main() -> int:
     )
     final_answer_reply_parser.add_argument("--fail-on-not-ready", action="store_true")
 
+    resume_after_answers_parser = subparsers.add_parser(
+        "resume-after-answers",
+        help="after filling the default final-answer template, apply confirmed answers, live-check, and rebuild the 100-job supervised autofill packet",
+    )
+    resume_after_answers_parser.add_argument(
+        "--reply-file",
+        default=str(DEFAULT_FINAL_ANSWER_REPLY_TEMPLATE_TEXT),
+    )
+    resume_after_answers_parser.add_argument("--live-check-limit", type=int, default=100)
+    resume_after_answers_parser.add_argument("--live-check-timeout", type=float, default=25.0)
+    resume_after_answers_parser.add_argument("--open-browser", action="store_true")
+    resume_after_answers_parser.add_argument("--open-limit", type=int, default=100)
+    resume_after_answers_parser.add_argument("--review-log", default=str(DEFAULT_REVIEW_LOG))
+
     post_answer_pipeline_parser = subparsers.add_parser(
         "post-answer-pipeline",
         help="validate final answers, optionally apply them, refresh the 100-job queue, and prepare supervised autofill",
@@ -2892,6 +2906,36 @@ def main() -> int:
             if args.telegram_dry_run:
                 print(result["message"])
         return 0
+
+    if args.command == "resume-after-answers":
+        args.command = "final-answer-reply"
+        args.template = str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON)
+        args.unblockers = str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_JSON)
+        args.reply_text = None
+        args.json_output = str(DEFAULT_FINAL_ANSWER_REPLY_JSON)
+        args.markdown_output = str(DEFAULT_FINAL_ANSWER_REPLY_MARKDOWN)
+        args.intake_output = str(DEFAULT_FINAL_ANSWER_REPLY_PAYLOAD_JSON)
+        args.compact_updates_output = str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_UPDATES_JSON)
+        args.final_answer_intake_report_json = str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_JSON)
+        args.final_answer_intake_report_markdown = str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_MARKDOWN)
+        args.full_template = str(DEFAULT_CRITICAL_INPUT_FULL_UPDATES_JSON)
+        args.confirmed_updates_output = str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_JSON)
+        args.confirmed_report_json_output = str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_JSON)
+        args.confirmed_report_markdown_output = str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_MARKDOWN)
+        args.confirm_high_risk = False
+        args.finalize = False
+        args.run_post_answer_pipeline = True
+        args.synthetic_rehearse_queue = False
+        args.post_answer_apply = True
+        args.post_answer_live_check = True
+        args.post_answer_live_check_limit = args.live_check_limit
+        args.post_answer_live_check_timeout = args.live_check_timeout
+        args.post_answer_include_values = True
+        args.post_answer_open_browser = bool(args.open_browser)
+        args.post_answer_open_limit = args.open_limit
+        args.post_answer_json_output = str(DEFAULT_POST_ANSWER_PIPELINE_JSON)
+        args.post_answer_markdown_output = str(DEFAULT_POST_ANSWER_PIPELINE_MARKDOWN)
+        args.fail_on_not_ready = True
 
     if args.command == "final-answer-reply":
         if bool(args.reply_text) == bool(args.reply_file):
