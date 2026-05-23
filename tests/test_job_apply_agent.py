@@ -7316,6 +7316,91 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(reply_report["confirmed_high_risk_aliases"], ["health_requirement"])
         self.assertTrue(intake_report["ready_for_finalize"])
 
+    def test_final_answer_reply_accepts_chinese_labels_and_common_short_labels(self) -> None:
+        unblockers = {
+            "unblockers": [
+                {
+                    "input_id": "profile_zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "high_risk": False,
+                    "required_count": 56,
+                },
+                {
+                    "input_id": "answer_memory_citizenship_status_default_policy",
+                    "input_type": "high_risk_exact_confirmation",
+                    "question": "What citizenship answers should automation use?",
+                    "high_risk": True,
+                    "required_count": 57,
+                },
+                {
+                    "input_id": "answer_memory_background_or_export_control_default_policy",
+                    "input_type": "high_risk_exact_confirmation",
+                    "question": "What background/export-control answers should automation use?",
+                    "high_risk": True,
+                    "required_count": 31,
+                },
+                {
+                    "input_id": "answer_memory_country_work_permit_default_policy",
+                    "input_type": "high_risk_exact_confirmation",
+                    "question": "What country work permit answers should automation use?",
+                    "high_risk": True,
+                    "required_count": 28,
+                },
+                {
+                    "input_id": "answer_memory_interview_recording_consent_default_policy",
+                    "input_type": "high_risk_exact_confirmation",
+                    "question": "Should automation consent to interview recording?",
+                    "high_risk": True,
+                    "required_count": 18,
+                },
+                {
+                    "input_id": "answer_memory_health_requirement_default_policy",
+                    "input_type": "high_risk_exact_confirmation",
+                    "question": "What health requirement answer should automation use?",
+                    "high_risk": True,
+                    "required_count": 2,
+                },
+            ]
+        }
+        template = build_final_answer_intake_template(unblockers)
+        blocker_report = build_final_answer_blocker_report(template)
+        reply_template_text = render_final_answer_reply_template_text(blocker_report)
+        reply_text = "\n".join(
+            [
+                "postal code\uff1a98004",
+                "\u516c\u6c11\u8eab\u4efd\uff1aU.S. citizen; no restricted-country citizenship or permanent residency.",
+                "\u516c\u6c11\u8eab\u4efd\u786e\u8ba4\uff1a\u786e\u8ba4",
+                "\u80cc\u666f\u6216\u51fa\u53e3\u7ba1\u5236\uff1aNo disqualifying background, export-control, indictment, debarment, substance, firearm, felony, or legal-eligibility issues; no exceptions.",
+                "\u80cc\u666f\u6216\u51fa\u53e3\u7ba1\u5236\u786e\u8ba4\uff1a\u786e\u8ba4",
+                "work authorization\uff1aAuthorized to work in the United States; no non-U.S. country work permits or visa sponsorship exceptions should be assumed.",
+                "\u5de5\u4f5c\u8bb8\u53ef\u786e\u8ba4\uff1a\u786e\u8ba4",
+                "\u9762\u8bd5\u5f55\u97f3\u540c\u610f\uff1aYes, I consent to interview recording, transcription, AI notetakers, and interview analysis.",
+                "\u9762\u8bd5\u5f55\u97f3\u540c\u610f\u786e\u8ba4\uff1a\u786e\u8ba4",
+                "health\uff1aI can comply with standard health or vaccination requirements for client-site access; no exceptions.",
+                "\u5065\u5eb7\u8981\u6c42\u786e\u8ba4\uff1a\u786e\u8ba4",
+            ]
+        )
+
+        reply_report = build_final_answer_reply_intake(template, reply_text)
+        intake_report = build_final_answer_intake_update(unblockers, reply_report["intake_payload"])
+
+        self.assertIn("ZIP/\u90ae\u7f16", reply_template_text)
+        self.assertEqual(reply_report["answer_count"], 6)
+        self.assertEqual(reply_report["unknown_key_count"], 0)
+        self.assertEqual(len(reply_report["confirmed_high_risk_aliases"]), 5)
+        self.assertEqual(
+            reply_report["parsed_aliases"],
+            [
+                "background_or_export_control",
+                "citizenship_status",
+                "country_work_permit",
+                "health_requirement",
+                "interview_recording_consent",
+                "zip_or_postal_code",
+            ],
+        )
+        self.assertTrue(intake_report["ready_for_finalize"])
+
     def test_final_answer_reply_template_placeholders_do_not_finalize(self) -> None:
         unblockers = {
             "unblockers": [

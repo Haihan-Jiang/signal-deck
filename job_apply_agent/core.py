@@ -4957,6 +4957,91 @@ FINAL_ANSWER_INTAKE_ALIASES = {
 }
 
 
+FINAL_ANSWER_REPLY_ALIAS_SYNONYMS = {
+    "zip_or_postal_code": [
+        "zip",
+        "zipcode",
+        "zip code",
+        "postal code",
+        "zip/postal code",
+        "\u90ae\u7f16",
+        "\u90ae\u653f\u7f16\u7801",
+        "\u90ae\u9012\u533a\u53f7",
+    ],
+    "citizenship_status": [
+        "citizenship",
+        "citizenship status",
+        "us person",
+        "u.s. person",
+        "permanent resident",
+        "\u516c\u6c11\u8eab\u4efd",
+        "\u56fd\u7c4d",
+        "\u7f8e\u56fd\u516c\u6c11",
+        "\u6c38\u4e45\u5c45\u6c11",
+        "\u53d7\u9650\u56fd\u5bb6",
+    ],
+    "background_or_export_control": [
+        "background",
+        "background check",
+        "export control",
+        "legal eligibility",
+        "background/export control",
+        "\u80cc\u666f",
+        "\u80cc\u8c03",
+        "\u80cc\u666f\u8c03\u67e5",
+        "\u51fa\u53e3\u7ba1\u5236",
+        "\u80cc\u666f\u6216\u51fa\u53e3\u7ba1\u5236",
+        "\u6cd5\u5f8b\u8d44\u683c",
+    ],
+    "country_work_permit": [
+        "work permit",
+        "right to work",
+        "work authorization",
+        "country work permit",
+        "\u5de5\u4f5c\u8bb8\u53ef",
+        "\u5de5\u4f5c\u6743\u5229",
+        "\u5de5\u4f5c\u6388\u6743",
+        "\u975e\u7f8e\u5de5\u4f5c\u8bb8\u53ef",
+        "\u56fd\u5bb6\u5de5\u4f5c\u8bb8\u53ef",
+    ],
+    "interview_recording_consent": [
+        "interview recording",
+        "recording consent",
+        "ai notetaker",
+        "interview analysis",
+        "\u9762\u8bd5\u5f55\u97f3",
+        "\u5f55\u97f3\u540c\u610f",
+        "\u9762\u8bd5\u5f55\u97f3\u540c\u610f",
+        "ai\u7b14\u8bb0",
+        "\u9762\u8bd5\u5206\u6790",
+    ],
+    "health_requirement": [
+        "health",
+        "health requirement",
+        "vaccination",
+        "vaccine",
+        "\u5065\u5eb7\u8981\u6c42",
+        "\u5065\u5eb7",
+        "\u75ab\u82d7",
+        "\u63a5\u79cd",
+        "\u5ba2\u6237\u73b0\u573a\u5065\u5eb7\u8981\u6c42",
+    ],
+}
+
+
+FINAL_ANSWER_REPLY_GLOBAL_CONFIRM_KEYS = {
+    "confirm_high_risk",
+    "high_risk_user_confirmed",
+    "confirmed",
+    "confirm_all",
+    "confirm_all_high_risk",
+    "\u5168\u90e8\u786e\u8ba4",
+    "\u786e\u8ba4\u5168\u90e8",
+    "\u9ad8\u98ce\u9669\u786e\u8ba4",
+    "\u786e\u8ba4\u9ad8\u98ce\u9669",
+}
+
+
 FINAL_ANSWER_INTAKE_FORMAT_HINTS = {
     "zip_or_postal_code": "Enter the exact ZIP or postal code automation should reuse for profile and remote-work fields.",
     "citizenship_status": (
@@ -5264,7 +5349,11 @@ def build_final_answer_reply_intake(
         if not alias:
             continue
         field_by_alias[alias] = field
-        for key in {alias, input_id, str(field.get("question") or "")}:
+        for key in _final_answer_reply_alias_lookup_keys(
+            alias,
+            input_id,
+            str(field.get("question") or ""),
+        ):
             normalized = _final_answer_reply_key(key)
             if normalized:
                 alias_lookup[normalized] = alias
@@ -5289,7 +5378,7 @@ def build_final_answer_reply_intake(
             ignored_lines.append(raw_line)
             continue
         normalized_key = _final_answer_reply_key(key)
-        if normalized_key in {"confirm_high_risk", "high_risk_user_confirmed", "confirmed"}:
+        if normalized_key in _final_answer_reply_global_confirm_keys():
             global_confirm_high_risk = _final_answer_reply_truthy(value)
             parsed_line_count += 1
             continue
@@ -5448,8 +5537,22 @@ def _split_final_answer_reply_line(line: str) -> tuple[str, str]:
 
 def _final_answer_reply_key(key: str) -> str:
     text = re.sub(r"[`\"']", "", str(key or "").strip().lower())
-    text = re.sub(r"[^a-z0-9]+", "_", text)
+    text = re.sub(r"[^\w]+", "_", text)
     return text.strip("_")
+
+
+def _final_answer_reply_alias_lookup_keys(alias: str, input_id: str, question: str) -> list[str]:
+    keys = [alias, input_id, question]
+    keys.extend(FINAL_ANSWER_REPLY_ALIAS_SYNONYMS.get(alias, []))
+    return [key for key in keys if str(key or "").strip()]
+
+
+def _final_answer_reply_global_confirm_keys() -> set[str]:
+    return {
+        normalized
+        for key in FINAL_ANSWER_REPLY_GLOBAL_CONFIRM_KEYS
+        if (normalized := _final_answer_reply_key(key))
+    }
 
 
 def _final_answer_reply_confirmation_alias(normalized_key: str, alias_lookup: dict[str, str]) -> str:
@@ -5457,9 +5560,15 @@ def _final_answer_reply_confirmation_alias(normalized_key: str, alias_lookup: di
     for suffix in ["_confirmed", "_confirm", "_high_risk_user_confirmed", "_explicitly_confirmed"]:
         if normalized_key.endswith(suffix):
             candidates.append(normalized_key[: -len(suffix)])
+    for suffix in ["\u5df2\u786e\u8ba4", "\u786e\u8ba4"]:
+        if normalized_key.endswith(suffix):
+            candidates.append(normalized_key[: -len(suffix)].strip("_"))
     for prefix in ["confirm_", "confirmed_"]:
         if normalized_key.startswith(prefix):
             candidates.append(normalized_key[len(prefix) :])
+    for prefix in ["\u5df2\u786e\u8ba4", "\u786e\u8ba4"]:
+        if normalized_key.startswith(prefix):
+            candidates.append(normalized_key[len(prefix) :].strip("_"))
     for candidate in candidates:
         alias = alias_lookup.get(candidate)
         if alias:
@@ -20415,6 +20524,7 @@ def render_final_answer_reply_template_text(report: dict[str, Any]) -> str:
         "# Fill the <fill> values with truthful reusable answers.",
         "# For high-risk confirmations, keep 确认 only when the answer is exact and truthful.",
         "# English : and Chinese ： separators are both accepted by final-answer-reply.",
+        "# Common labels accepted: ZIP/邮编, citizenship/公民身份, background-export/背景或出口管制, work permit/工作许可, recording/面试录音同意, health/健康要求.",
         "",
     ]
     reply_lines = report.get("reply_template_lines") or []
