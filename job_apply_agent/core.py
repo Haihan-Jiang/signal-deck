@@ -21481,6 +21481,7 @@ def build_final_answer_blocker_report(
             "python3 -m job_apply_agent resume-after-answers",
             f"python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --run-post-answer-pipeline --fail-on-not-ready",
             f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --watch --fail-on-not-ready",
+            f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --watch --apply --live-check --include-values --fail-on-not-ready",
             "python3 -m job_apply_agent final-answer-intake-server --open-browser --once --run-post-answer-pipeline --post-answer-apply --post-answer-live-check --post-answer-include-values",
         ],
         "policy": {
@@ -21543,6 +21544,16 @@ def _final_answer_blocker_action_pack(
         "autopilot_command": (
             f"python3 -m job_apply_agent final-answer-autopilot --reply-file "
             f"{FINAL_ANSWER_REPLY_TEMPLATE_PATH} --watch --fail-on-not-ready"
+        ),
+        "autopilot_apply_command": (
+            f"python3 -m job_apply_agent final-answer-autopilot --reply-file "
+            f"{FINAL_ANSWER_REPLY_TEMPLATE_PATH} --watch --apply --live-check "
+            "--include-values --fail-on-not-ready"
+        ),
+        "autopilot_open_command": (
+            f"python3 -m job_apply_agent final-answer-autopilot --reply-file "
+            f"{FINAL_ANSWER_REPLY_TEMPLATE_PATH} --watch --apply --live-check "
+            "--include-values --open-browser --open-limit 100 --fail-on-not-ready"
         ),
         "open_after_answers_command": (
             "python3 -m job_apply_agent resume-after-answers "
@@ -21743,6 +21754,8 @@ def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
                 f"- validate without writing: `{action_pack.get('safe_validate_command', '')}`",
                 f"- run post-answer pipeline: `{action_pack.get('safe_run_command', '')}`",
                 f"- watch and auto-run when filled: `{action_pack.get('autopilot_command', '')}`",
+                f"- watch, apply, live-check, and rebuild packet: `{action_pack.get('autopilot_apply_command', '')}`",
+                f"- watch, apply, live-check, rebuild, and open verified pages: `{action_pack.get('autopilot_open_command', '')}`",
                 f"- open after answers: `{action_pack.get('open_after_answers_command', '')}`",
                 f"- stores answer text in report: {str(bool(action_pack.get('stores_answer_text_in_report'))).lower()}",
                 f"- sends answer text to Telegram: {str(bool(action_pack.get('sends_answer_text_to_telegram'))).lower()}",
