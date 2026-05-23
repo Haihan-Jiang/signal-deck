@@ -13999,6 +13999,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Job Application Question Export", html)
         self.assertIn("Have you worked at DoorDash?", html)
         self.assertIn("Source Artifacts", html)
+        self.assertIn("Goal Evidence Matrix", html)
+        self.assertIn("Truthful user answers learned for real applications", html)
         self.assertIn("Synthetic Browser Execution", html)
         self.assertIn("Goal Readiness Audit", html)
         self.assertIn("needs_user_answers", html)
@@ -14088,6 +14090,15 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(len(result["question_rows"]), 2)
             self.assertEqual(result["problem_buckets"][0]["coverage_status"], "needs_user_confirmation")
             self.assertEqual(result["summary"]["approval_pack_task_count"], 1)
+            self.assertGreaterEqual(len(result["goal_evidence"]), 6)
+            self.assertEqual(
+                next(
+                    row
+                    for row in result["goal_evidence"]
+                    if row["requirement"] == "Truthful user answers learned for real applications"
+                )["status"],
+                "needs_user_answers",
+            )
             self.assertEqual(result["summary"]["critical_input_count"], 1)
             self.assertEqual(result["learning_approval_critical_inputs"][0]["input_type"], "exact_prompt_answer")
             self.assertEqual(len(result["learning_approval_tasks"]), 1)
@@ -14131,6 +14142,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 self.assertIn("xl/worksheets/sheet44.xml", names)
                 self.assertIn("xl/worksheets/sheet45.xml", names)
                 self.assertIn("xl/worksheets/sheet46.xml", names)
+                self.assertIn("xl/worksheets/sheet47.xml", names)
                 critical_inputs = workbook.read("xl/worksheets/sheet2.xml").decode("utf-8")
                 self.assertIn("exact_prompt_answer", critical_inputs)
                 self.assertIn("user_answer", critical_inputs)
@@ -14204,6 +14216,9 @@ class JobApplyAgentTests(unittest.TestCase):
                 self.assertIn("zip_or_postal_code", final_answer_intake)
                 self.assertIn("waiting_for_answer", final_answer_intake)
                 self.assertIn("[ZIP_CODE]", final_answer_intake)
+                goal_evidence = workbook.read("xl/worksheets/sheet47.xml").decode("utf-8")
+                self.assertIn("Truthful user answers learned for real applications", goal_evidence)
+                self.assertIn("needs_user_answers", goal_evidence)
 
     def test_platform_question_playbook_summarizes_research_and_rehearsal(self) -> None:
         research = {

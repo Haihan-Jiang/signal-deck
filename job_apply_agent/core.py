@@ -18968,9 +18968,15 @@ def build_question_export(
         "automation_handoff_answer_queue_count": len(automation_handoff_answer_rows),
         "automation_handoff_missing_profile_input_count": len(automation_handoff_profile_rows),
     }
+    goal_evidence_rows = _goal_evidence_export_rows(
+        summary,
+        coverage_gate=coverage_gate,
+        automation_handoff=automation_handoff or {},
+    )
     return {
         "generated_at": summary["generated_at"],
         "summary": summary,
+        "goal_evidence": goal_evidence_rows,
         "source_artifacts": source_artifact_rows,
         "synthetic_execution": synthetic_execution_rows,
         "synthetic_policy_stops": synthetic_policy_stop_rows,
@@ -19083,6 +19089,20 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                     row.get("updated_at"),
                 ]
                 for row in export.get("source_artifacts", [])
+            ],
+        ),
+        "</section>",
+        "<section><h2>Goal Evidence Matrix</h2>",
+        _html_table(
+            ["Requirement", "Status", "Evidence", "Next action"],
+            [
+                [
+                    row.get("requirement"),
+                    row.get("status"),
+                    row.get("evidence"),
+                    row.get("next_action"),
+                ]
+                for row in export.get("goal_evidence", [])
             ],
         ),
         "</section>",
@@ -29620,6 +29640,7 @@ def _write_question_export_xlsx(export: dict[str, Any], path: Path) -> None:
         ("Final Unblockers", _table_rows(export.get("critical_input_unblockers", []))),
         ("Post Answer Pipeline", _table_rows(export.get("post_answer_pipeline", []))),
         ("Final Answer Intake", _table_rows(export.get("final_answer_intake", []))),
+        ("Goal Evidence", _table_rows(export.get("goal_evidence", []))),
     ]
     sheet_names = [_safe_sheet_name(name) for name, _rows in sheets]
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -29765,6 +29786,145 @@ def _question_export_summary_rows(export: dict[str, Any]) -> list[list[Any]]:
     rows.extend([[], ["Policy", "Rule"]])
     for key, value in sorted((export.get("policy") or {}).items()):
         rows.append([key, value])
+    return rows
+
+
+def _goal_evidence_export_rows(
+    summary: dict[str, Any],
+    *,
+    coverage_gate: dict[str, Any],
+    automation_handoff: dict[str, Any],
+) -> list[dict[str, Any]]:
+    automation_summary = (
+        automation_handoff.get("summary") if isinstance(automation_handoff.get("summary"), dict) else {}
+    )
+    completion_ids = _string_list(automation_summary.get("goal_completion_blocking_requirement_ids"))
+    final_missing = int(summary.get("final_answer_intake_count") or 0)
+    if automation_summary:
+        final_missing = int(automation_summary.get("final_answer_intake_missing_count") or final_missing)
+    latest_preflight_stale = bool(automation_summary.get("latest_preflight_stale"))
+    open_after_answers = int(
+        automation_summary.get("apply_queue_open_after_answers_count")
+        or summary.get("apply_queue_handoff_open_after_answers_count")
+        or 0
+    )
+    manual_live_checks = int(
+        automation_summary.get("apply_queue_manual_live_check_count")
+        or summary.get("apply_queue_handoff_manual_live_check_count")
+        or 0
+    )
+    selected_count = int(
+        automation_summary.get("autofill_packet_selected_count")
+        or summary.get("autofill_batch_selected_count")
+        or 0
+    )
+    selector_misses = int(
+        automation_summary.get("autofill_packet_selector_miss_count")
+        or summary.get("autofill_batch_selector_miss_count")
+        or 0
+    )
+    final_submit_stops = int(automation_summary.get("autofill_packet_final_submit_stop_count") or 0)
+    execution_audited = int(automation_summary.get("position_execution_audited_count") or 0)
+    execution_ready_after = int(
+        automation_summary.get("position_execution_ready_after_answers_count") or 0
+    )
+    submission_safe = str(automation_summary.get("submission_safety_status") or "").lower() == "safe"
+    submission_issues = int(automation_summary.get("submission_safety_issue_count") or 0)
+    playbook_target_text = str(
+        automation_summary.get("platform_playbook_target_platforms_at_100")
+        or ""
+    )
+    rows = [
+        {
+            "requirement": "Research real platforms and roles at 100-position depth",
+            "status": "achieved"
+            if bool(coverage_gate.get("real_platform_target_achieved"))
+            and bool(coverage_gate.get("real_platform_role_target_achieved"))
+            else "incomplete",
+            "evidence": (
+                f"observed={summary.get('positions_observed_total', 0)}; "
+                f"real_platform_target={bool(coverage_gate.get('real_platform_target_achieved'))}; "
+                f"real_platform_role_target={bool(coverage_gate.get('real_platform_role_target_achieved'))}; "
+                f"target={coverage_gate.get('position_target', 100)}"
+            ),
+            "next_action": "none"
+            if bool(coverage_gate.get("real_platform_role_target_achieved"))
+            else "collect more platform/role examples",
+        },
+        {
+            "requirement": "Summarize encountered application questions and blockers",
+            "status": "achieved"
+            if int(summary.get("unique_prompts_observed") or 0) > 0
+            and int(summary.get("blocking_prompt_count") or 0) >= 0
+            else "incomplete",
+            "evidence": (
+                f"unique_prompts={summary.get('unique_prompts_observed', 0)}; "
+                f"blocking_prompts={summary.get('blocking_prompt_count', 0)}; "
+                f"learning_tasks={summary.get('learning_task_count', 0)}; "
+                f"critical_inputs={summary.get('critical_input_count', 0)}"
+            ),
+            "next_action": "none",
+        },
+        {
+            "requirement": "Exclude closed or No longer accepting postings before opening/applying",
+            "status": "achieved" if not latest_preflight_stale and manual_live_checks == 0 else "needs_refresh",
+            "evidence": (
+                f"closed_registry={summary.get('closed_posting_count', 0)}; "
+                f"latest_preflight_stale={latest_preflight_stale}; "
+                f"manual_live_checks={manual_live_checks}; open_after_answers={open_after_answers}"
+            ),
+            "next_action": "rerun live closed-preflight" if latest_preflight_stale or manual_live_checks else "none",
+        },
+        {
+            "requirement": "Prepare selected 100-position supervised autofill queue",
+            "status": "waiting_for_user_answers"
+            if final_missing
+            else "achieved"
+            if selected_count >= 100 and selector_misses == 0
+            else "incomplete",
+            "evidence": (
+                f"selected={selected_count}; open_after_answers={open_after_answers}; "
+                f"selector_misses={selector_misses}; final_answer_missing={final_missing}"
+            ),
+            "next_action": "fill final-answer reply" if final_missing else "open supervised autofill queue",
+        },
+        {
+            "requirement": "Run local fake-candidate rehearsal without real submissions",
+            "status": "achieved"
+            if execution_audited >= 100
+            and execution_ready_after >= 100
+            and selector_misses == 0
+            and final_submit_stops >= 100
+            else "incomplete",
+            "evidence": (
+                f"positions_audited={execution_audited}; ready_after_answers={execution_ready_after}; "
+                f"local_synthetic_submits={automation_summary.get('autofill_packet_local_synthetic_submit_count', summary.get('local_synthetic_submit_count', 0))}; "
+                f"final_submit_stops={final_submit_stops}; selector_misses={selector_misses}"
+            ),
+            "next_action": "none",
+        },
+        {
+            "requirement": "Keep fake data local and real employer final submit supervised",
+            "status": "achieved" if submission_safe and submission_issues == 0 else "blocked",
+            "evidence": (
+                f"submission_safety={automation_summary.get('submission_safety_status', '')}; "
+                f"issues={submission_issues}; real_submit_count={summary.get('real_submit_count', 0)}"
+            ),
+            "next_action": "fix submission safety issues" if submission_issues else "none",
+        },
+        {
+            "requirement": "Truthful user answers learned for real applications",
+            "status": "needs_user_answers" if final_missing else "achieved",
+            "evidence": (
+                f"missing_final_answers={final_missing}; "
+                f"blocking_ids={', '.join(completion_ids) or 'none'}; "
+                f"playbook_targets={playbook_target_text or 'not_reported'}"
+            ),
+            "next_action": "fill zip, citizenship, export-control, work-permit, recording, and health/vaccine answers"
+            if final_missing
+            else "none",
+        },
+    ]
     return rows
 
 
