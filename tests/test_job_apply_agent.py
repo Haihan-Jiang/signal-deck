@@ -7812,6 +7812,30 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(post_answer_report["ready_for_workflow"])
             self.assertFalse(post_answer_report["apply_requested"])
             self.assertIn("Wrote final answer intake payload JSON", cli_result.stdout)
+            stdin_validate_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "job_apply_agent",
+                    "final-answer-reply",
+                    "--template",
+                    str(template_path),
+                    "--unblockers",
+                    str(unblockers_path),
+                    "--reply-stdin",
+                    "--validate-only",
+                    "--fail-on-not-ready",
+                ],
+                cwd=ROOT,
+                input=reply_text,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(stdin_validate_result.returncode, 0, stdin_validate_result.stderr)
+            self.assertIn("Parsed answers: 6", stdin_validate_result.stdout)
+            self.assertNotIn("98004", stdin_validate_result.stdout)
+            self.assertNotIn("U.S. citizen", stdin_validate_result.stdout)
 
             resume_help = subprocess.run(
                 [sys.executable, "-m", "job_apply_agent", "resume-after-answers", "--help"],
@@ -7823,6 +7847,7 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(resume_help.returncode, 0, resume_help.stderr)
             self.assertIn("--reply-text", resume_help.stdout)
             self.assertIn("--reply-file", resume_help.stdout)
+            self.assertIn("--reply-stdin", resume_help.stdout)
             self.assertIn("--validate-only", resume_help.stdout)
 
     def test_final_answer_autopilot_waits_for_unfilled_reply_template(self) -> None:
@@ -7992,6 +8017,43 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(report["reply_file"], "<inline reply text redacted>")
             self.assertNotIn("98004", report_text)
             self.assertNotIn("98004", markdown_text)
+
+            stdin_report_path = root / "autopilot_stdin.json"
+            stdin_markdown_path = root / "autopilot_stdin.md"
+            stdin_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "job_apply_agent",
+                    "final-answer-autopilot",
+                    "--reply-stdin",
+                    "--template",
+                    str(template_path),
+                    "--unblockers",
+                    str(unblockers_path),
+                    "--json-output",
+                    str(stdin_report_path),
+                    "--markdown-output",
+                    str(stdin_markdown_path),
+                    "--dry-run",
+                    "--fail-on-not-ready",
+                ],
+                cwd=ROOT,
+                input="zip_or_postal_code\uff1a98004",
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(stdin_result.returncode, 0, stdin_result.stderr)
+            stdin_report_text = stdin_report_path.read_text(encoding="utf-8")
+            stdin_markdown_text = stdin_markdown_path.read_text(encoding="utf-8")
+            stdin_report = json.loads(stdin_report_text)
+            self.assertEqual(stdin_report["status"], "validated_ready")
+            self.assertEqual(stdin_report["reply_source"], "reply_stdin")
+            self.assertEqual(stdin_report["reply_file"], "<stdin reply text redacted>")
+            self.assertNotIn("98004", stdin_report_text)
+            self.assertNotIn("98004", stdin_markdown_text)
 
     def test_final_answer_reply_accepts_chinese_colon_and_confirmations(self) -> None:
         unblockers = {

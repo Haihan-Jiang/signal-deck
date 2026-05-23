@@ -1164,6 +1164,11 @@ def main() -> int:
     )
     final_answer_reply_parser.add_argument("--reply-text", default=None)
     final_answer_reply_parser.add_argument("--reply-file", default=None)
+    final_answer_reply_parser.add_argument(
+        "--reply-stdin",
+        action="store_true",
+        help="read filled final-answer lines from stdin",
+    )
     final_answer_reply_parser.add_argument("--json-output", default=str(DEFAULT_FINAL_ANSWER_REPLY_JSON))
     final_answer_reply_parser.add_argument("--markdown-output", default=str(DEFAULT_FINAL_ANSWER_REPLY_MARKDOWN))
     final_answer_reply_parser.add_argument("--intake-output", default=str(DEFAULT_FINAL_ANSWER_REPLY_PAYLOAD_JSON))
@@ -1238,6 +1243,11 @@ def main() -> int:
         help="filled final-answer lines; when provided, it is used instead of --reply-file and is not stored in reports",
     )
     final_answer_autopilot_parser.add_argument(
+        "--reply-stdin",
+        action="store_true",
+        help="read filled final-answer lines from stdin instead of --reply-file",
+    )
+    final_answer_autopilot_parser.add_argument(
         "--template",
         default=str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON),
     )
@@ -1295,6 +1305,11 @@ def main() -> int:
         "--reply-text",
         default=None,
         help="filled final-answer lines; when provided, it is used instead of --reply-file",
+    )
+    resume_after_answers_parser.add_argument(
+        "--reply-stdin",
+        action="store_true",
+        help="read filled final-answer lines from stdin instead of --reply-file",
     )
     resume_after_answers_parser.add_argument("--live-check-limit", type=int, default=100)
     resume_after_answers_parser.add_argument("--live-check-timeout", type=float, default=25.0)
@@ -3220,14 +3235,20 @@ def main() -> int:
         return 0
 
     if args.command == "resume-after-answers":
+        if bool(getattr(args, "reply_stdin", False)) and args.reply_text is not None:
+            raise ValueError("--reply-stdin cannot be combined with --reply-text")
         resume_reply_text = getattr(args, "reply_text", None)
-        resume_reply_file = None if resume_reply_text else args.reply_file
+        resume_reply_from_stdin = bool(getattr(args, "reply_stdin", False))
+        if bool(getattr(args, "reply_stdin", False)):
+            resume_reply_text = sys.stdin.read()
+        resume_reply_file = None if (resume_reply_text is not None or resume_reply_from_stdin) else args.reply_file
         resume_validate_only = bool(getattr(args, "validate_only", False))
         args.command = "final-answer-reply"
         args.template = str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON)
         args.unblockers = str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_JSON)
         args.reply_text = resume_reply_text
         args.reply_file = resume_reply_file
+        args.reply_stdin = False
         args.json_output = str(DEFAULT_FINAL_ANSWER_REPLY_JSON)
         args.markdown_output = str(DEFAULT_FINAL_ANSWER_REPLY_MARKDOWN)
         args.intake_output = str(DEFAULT_FINAL_ANSWER_REPLY_PAYLOAD_JSON)
@@ -3282,8 +3303,13 @@ def main() -> int:
         return _run_final_answer_autopilot(args)
 
     if args.command == "final-answer-reply":
-        if bool(args.reply_text) == bool(args.reply_file):
-            raise ValueError("provide exactly one of --reply-text or --reply-file")
+        reply_source_count = (
+            int(args.reply_text is not None)
+            + int(bool(args.reply_file))
+            + int(bool(getattr(args, "reply_stdin", False)))
+        )
+        if reply_source_count != 1:
+            raise ValueError("provide exactly one of --reply-text, --reply-file, or --reply-stdin")
         _validate_final_answer_intake_server_post_answer_args(args)
         synthetic_reply_rehearsal = bool(args.synthetic_rehearse_queue)
         reply_json_output = _synthetic_default_path(
@@ -3344,7 +3370,9 @@ def main() -> int:
         if not template_path.exists():
             raise FileNotFoundError(f"final answer intake template not found: {args.template}")
         reply_text = args.reply_text
-        if args.reply_file:
+        if bool(getattr(args, "reply_stdin", False)):
+            reply_text = sys.stdin.read()
+        elif args.reply_file:
             reply_path = Path(args.reply_file)
             if not reply_path.exists():
                 raise FileNotFoundError(f"final answer reply file not found: {args.reply_file}")
@@ -4509,6 +4537,8 @@ def _run_final_answer_autopilot_final_audits() -> list[dict[str, object]]:
 
 
 def _run_final_answer_autopilot(args: argparse.Namespace) -> int:
+    if args.reply_text is not None and bool(getattr(args, "reply_stdin", False)):
+        raise ValueError("--reply-stdin cannot be combined with --reply-text")
     if args.reply_text is not None:
         if args.watch:
             raise ValueError("--reply-text cannot be combined with --watch")
@@ -4520,6 +4550,18 @@ def _run_final_answer_autopilot(args: argparse.Namespace) -> int:
                 reply_path,
                 reply_source="reply_text",
                 reply_file_for_report="<inline reply text redacted>",
+            )
+    if bool(getattr(args, "reply_stdin", False)):
+        if args.watch:
+            raise ValueError("--reply-stdin cannot be combined with --watch")
+        with tempfile.TemporaryDirectory(prefix="job_apply_final_answers_") as temp_dir:
+            reply_path = Path(temp_dir) / "reply.txt"
+            reply_path.write_text(sys.stdin.read(), encoding="utf-8")
+            return _run_final_answer_autopilot_for_reply_path(
+                args,
+                reply_path,
+                reply_source="reply_stdin",
+                reply_file_for_report="<stdin reply text redacted>",
             )
     return _run_final_answer_autopilot_for_reply_path(
         args,

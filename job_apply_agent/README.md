@@ -797,10 +797,20 @@ For the plain-text reply template, validate the filled text before writing any
 main outbox artifacts:
 
 ```bash
+python3 -m job_apply_agent final-answer-blockers --print-minimal-reply
+```
+
+That command writes the blocker reports and prints only the shortest reply
+shape to stdout. After filling the values, validate through stdin without shell
+quoting a multi-line `--reply-text` value:
+
+```bash
 python3 -m job_apply_agent resume-after-answers \
-  --reply-file job_apply_agent/outbox/final_answer_reply_template_latest.txt \
+  --reply-stdin \
   --validate-only \
-  --fail-on-not-ready
+  --fail-on-not-ready <<'EOF'
+<filled final-answer lines>
+EOF
 ```
 
 This prints the missing, unconfirmed, or too-vague aliases and does not write
