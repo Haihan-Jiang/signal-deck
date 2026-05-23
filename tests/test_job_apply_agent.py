@@ -39,6 +39,7 @@ from job_apply_agent.core import (
     build_synthetic_unblocker_proof,
     build_question_export,
     build_browser_action_manifest,
+    build_browser_review_queue_audit,
     build_closed_posting_preflight,
     build_browser_dom_execution_plan,
     build_browser_dom_runner_script,
@@ -107,6 +108,7 @@ from job_apply_agent.core import (
     render_application_research_markdown,
     render_collection_plan_markdown,
     render_browser_action_manifest_markdown,
+    render_browser_review_queue_audit_markdown,
     render_closed_posting_preflight_markdown,
     render_critical_input_answer_template_markdown,
     render_critical_input_answer_workflow_markdown,
@@ -161,6 +163,7 @@ from job_apply_agent.core import (
     write_automation_handoff_report,
     write_autofill_batch_plan,
     write_browser_action_manifest,
+    write_browser_review_queue_audit,
     write_candidate_observation_report,
     write_candidate_discovery_report,
     write_candidate_topup_selection_report,
@@ -815,6 +818,77 @@ class JobApplyAgentTests(unittest.TestCase):
             recorded_text = review_log.read_text(encoding="utf-8")
             self.assertNotIn(self.profile.email, recorded_text)
             self.assertNotIn("trk=search", recorded_text)
+
+    def test_browser_review_queue_audit_blocks_sensitive_review_records(self) -> None:
+        safe_record = build_browser_review_record(
+            {
+                "submission_id": "sub-1",
+                "platform": "LinkedIn",
+                "job_id": "1",
+                "company": "Example",
+                "title": "SRE",
+                "score": 100,
+                "automation": {"mode": "supervised_review"},
+                "missing_facts": [],
+            },
+            "https://www.linkedin.com/jobs/view/1/",
+        )
+        unsafe_record = {
+            **safe_record,
+            "applicant": {"email": "person@example.com"},
+            "answer": "I can start immediately.",
+            "short_apply_url": "https://www.linkedin.com/jobs/view/2/?trk=feed&utm_source=x",
+            "real_platform_submission": True,
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            review_log = Path(temp_dir) / "browser_review_queue.jsonl"
+            review_log.write_text(
+                json.dumps(safe_record) + "\n" + json.dumps(unsafe_record) + "\n",
+                encoding="utf-8",
+            )
+            audit = build_browser_review_queue_audit(review_log)
+            markdown = render_browser_review_queue_audit_markdown(audit)
+
+            self.assertFalse(audit["safe"])
+            self.assertEqual(audit["row_count"], 2)
+            self.assertGreaterEqual(audit["disallowed_field_count"], 2)
+            self.assertGreaterEqual(audit["sensitive_field_count"], 2)
+            self.assertGreaterEqual(audit["sensitive_value_count"], 1)
+            self.assertGreaterEqual(audit["tracking_url_count"], 1)
+            self.assertEqual(audit["real_platform_submission_true_count"], 1)
+            self.assertIn("Browser Review Queue Audit", markdown)
+            self.assertIn("tracking query keys", markdown)
+
+            json_output = Path(temp_dir) / "audit.json"
+            markdown_output = Path(temp_dir) / "audit.md"
+            written = write_browser_review_queue_audit(review_log, json_output, markdown_output)
+            self.assertFalse(written["safe"])
+            self.assertTrue(json_output.exists())
+            self.assertTrue(markdown_output.exists())
+
+    def test_browser_review_queue_audit_accepts_sparse_review_records(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            review_log = Path(temp_dir) / "browser_review_queue.jsonl"
+            safe_record = build_browser_review_record(
+                {
+                    "submission_id": "sub-1",
+                    "platform": "LinkedIn",
+                    "job_id": "1",
+                    "company": "Example",
+                    "title": "SRE",
+                    "score": 100,
+                    "automation": {"mode": "supervised_review"},
+                    "missing_facts": [],
+                },
+                "https://www.linkedin.com/jobs/view/1/",
+            )
+            review_log.write_text(json.dumps(safe_record) + "\n", encoding="utf-8")
+            audit = build_browser_review_queue_audit(review_log)
+            self.assertTrue(audit["safe"])
+            self.assertEqual(audit["row_count"], 1)
+            self.assertEqual(audit["disallowed_field_count"], 0)
+            self.assertEqual(audit["sensitive_field_count"], 0)
+            self.assertEqual(audit["tracking_url_count"], 0)
 
     def test_open_browser_skips_closed_jobs(self) -> None:
         submissions = [

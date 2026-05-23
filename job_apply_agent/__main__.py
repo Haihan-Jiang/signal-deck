@@ -44,6 +44,7 @@ from .core import (
     write_automation_handoff_report,
     write_autofill_batch_plan,
     write_browser_action_manifest,
+    write_browser_review_queue_audit,
     write_candidate_observation_report,
     write_candidate_discovery_report,
     write_candidate_topup_selection_report,
@@ -89,6 +90,8 @@ DEFAULT_JOBS = Path(__file__).with_name("sample_jobs.json")
 DEFAULT_OUTBOX = Path(__file__).with_name("outbox") / "dry_run_submissions.jsonl"
 DEFAULT_MEMORY = Path(__file__).with_name("outbox") / "answer_memory.json"
 DEFAULT_REVIEW_LOG = Path(__file__).with_name("outbox") / "browser_review_queue.jsonl"
+DEFAULT_REVIEW_QUEUE_AUDIT_JSON = Path(__file__).with_name("outbox") / "browser_review_queue_audit_latest.json"
+DEFAULT_REVIEW_QUEUE_AUDIT_MARKDOWN = Path(__file__).with_name("outbox") / "browser_review_queue_audit_latest.md"
 DEFAULT_CLOSED_JOBS = Path(__file__).with_name("outbox") / "closed_jobs.json"
 DEFAULT_RESEARCH_JSON = Path(__file__).with_name("outbox") / "application_research_latest.json"
 DEFAULT_RESEARCH_MARKDOWN = Path(__file__).with_name("outbox") / "application_research_latest.md"
@@ -417,6 +420,19 @@ def main() -> int:
     notify_parser.add_argument("--live-check-limit", type=int, default=25)
     notify_parser.add_argument("--live-check-timeout", type=float, default=15.0)
 
+    review_queue_audit_parser = subparsers.add_parser(
+        "review-queue-audit",
+        help="audit browser review queue JSONL for sparse non-sensitive records",
+    )
+    review_queue_audit_parser.add_argument("--review-log", default=str(DEFAULT_REVIEW_LOG))
+    review_queue_audit_parser.add_argument("--json-output", default=str(DEFAULT_REVIEW_QUEUE_AUDIT_JSON))
+    review_queue_audit_parser.add_argument("--markdown-output", default=str(DEFAULT_REVIEW_QUEUE_AUDIT_MARKDOWN))
+    review_queue_audit_parser.add_argument(
+        "--fail-on-unsafe",
+        action="store_true",
+        help="exit non-zero if the review queue contains sensitive fields, answers, tokens, tracking URLs, or submitted rows",
+    )
+
     close_parser = subparsers.add_parser(
         "close",
         help="record a job as closed so future notifications skip it",
@@ -625,6 +641,14 @@ def main() -> int:
     automation_handoff_parser.add_argument(
         "--position-execution-audit-html",
         default=str(DEFAULT_POSITION_EXECUTION_AUDIT_HTML),
+    )
+    automation_handoff_parser.add_argument(
+        "--review-queue-audit-json",
+        default=str(DEFAULT_REVIEW_QUEUE_AUDIT_JSON),
+    )
+    automation_handoff_parser.add_argument(
+        "--review-queue-audit-markdown",
+        default=str(DEFAULT_REVIEW_QUEUE_AUDIT_MARKDOWN),
     )
     automation_handoff_parser.add_argument("--answer-memory-json", default=str(DEFAULT_MEMORY))
     automation_handoff_parser.add_argument("--closed-jobs-json", default=str(DEFAULT_CLOSED_JOBS))
@@ -1768,6 +1792,25 @@ def main() -> int:
         )
         return 0
 
+    if args.command == "review-queue-audit":
+        audit = write_browser_review_queue_audit(
+            args.review_log,
+            args.json_output,
+            args.markdown_output,
+        )
+        print(f"Wrote browser review queue audit JSON to {args.json_output}")
+        print(f"Wrote browser review queue audit Markdown to {args.markdown_output}")
+        print(f"Rows: {audit.get('row_count', 0)}")
+        print(f"Safe: {str(bool(audit.get('safe'))).lower()}")
+        print(f"Disallowed fields: {audit.get('disallowed_field_count', 0)}")
+        print(f"Sensitive fields: {audit.get('sensitive_field_count', 0)}")
+        print(f"Sensitive values: {audit.get('sensitive_value_count', 0)}")
+        print(f"Tracking URLs: {audit.get('tracking_url_count', 0)}")
+        print(f"Real platform submissions: {audit.get('real_platform_submission_true_count', 0)}")
+        if args.fail_on_unsafe and not audit.get("safe"):
+            return 2
+        return 0
+
     if args.command == "closed-preflight":
         if args.jobs:
             candidates = load_jobs(args.jobs)
@@ -2291,6 +2334,8 @@ def main() -> int:
                     "Apply queue autofill packet": args.apply_queue_autofill_packet_json,
                     "Position execution audit": args.position_execution_audit_json,
                     "Position execution audit HTML": args.position_execution_audit_html,
+                    "Browser review queue audit": args.review_queue_audit_json,
+                    "Browser review queue audit Markdown": args.review_queue_audit_markdown,
                     "Answer memory": args.answer_memory_json,
                     "Closed postings": args.closed_jobs_json,
                 }
@@ -4322,6 +4367,11 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_HTML,
             existing_intake_payload=_load_optional_json(str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON)),
         )
+    write_browser_review_queue_audit(
+        DEFAULT_REVIEW_LOG,
+        DEFAULT_REVIEW_QUEUE_AUDIT_JSON,
+        DEFAULT_REVIEW_QUEUE_AUDIT_MARKDOWN,
+    )
     autofill_batch = write_autofill_batch_plan(
         research,
         readiness,
@@ -4479,6 +4529,8 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                 "Apply queue autofill packet HTML": str(DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_HTML),
                 "Position execution audit": str(DEFAULT_POSITION_EXECUTION_AUDIT_JSON),
                 "Position execution audit HTML": str(DEFAULT_POSITION_EXECUTION_AUDIT_HTML),
+                "Browser review queue audit": str(DEFAULT_REVIEW_QUEUE_AUDIT_JSON),
+                "Browser review queue audit Markdown": str(DEFAULT_REVIEW_QUEUE_AUDIT_MARKDOWN),
                 "Answer memory": str(DEFAULT_MEMORY),
                 "Closed postings": str(DEFAULT_CLOSED_JOBS),
             }
@@ -4523,6 +4575,8 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                     "Apply queue autofill packet HTML": str(DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_HTML),
                     "Position execution audit": str(DEFAULT_POSITION_EXECUTION_AUDIT_JSON),
                     "Position execution audit HTML": str(DEFAULT_POSITION_EXECUTION_AUDIT_HTML),
+                    "Browser review queue audit": str(DEFAULT_REVIEW_QUEUE_AUDIT_JSON),
+                    "Browser review queue audit Markdown": str(DEFAULT_REVIEW_QUEUE_AUDIT_MARKDOWN),
                     "Critical input suggestions": str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON),
                     "Critical input questionnaire": str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_JSON),
                     "Critical input questionnaire HTML": str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_HTML),

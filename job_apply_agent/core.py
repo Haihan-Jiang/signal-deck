@@ -19898,6 +19898,284 @@ def append_browser_review_records(
             handle.write(json.dumps(record, ensure_ascii=True, sort_keys=True) + "\n")
 
 
+BROWSER_REVIEW_ALLOWED_FIELDS = {
+    "automation_mode",
+    "company",
+    "job_id",
+    "missing_facts",
+    "next_action",
+    "opened_at",
+    "platform",
+    "real_platform_submission",
+    "review_id",
+    "score",
+    "short_apply_url",
+    "source",
+    "status",
+    "submission_id",
+    "title",
+}
+BROWSER_REVIEW_SENSITIVE_FIELD_FRAGMENTS = {
+    "answer",
+    "applicant",
+    "auth",
+    "cookie",
+    "cover",
+    "email",
+    "payload",
+    "phone",
+    "profile",
+    "resume",
+    "secret",
+    "telegram",
+    "token",
+}
+BROWSER_REVIEW_TRACKING_QUERY_KEYS = {
+    "ebp",
+    "gh_src",
+    "ref",
+    "refid",
+    "source",
+    "src",
+    "trackingid",
+    "trk",
+}
+
+
+def build_browser_review_queue_audit(path: str | Path) -> dict[str, Any]:
+    review_path = Path(path)
+    violations: list[dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
+    parse_error_count = 0
+    if review_path.exists():
+        for line_number, line in enumerate(review_path.read_text(encoding="utf-8").splitlines(), start=1):
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                parse_error_count += 1
+                violations.append(
+                    {
+                        "line": line_number,
+                        "type": "parse_error",
+                        "field": "",
+                        "reason": str(exc),
+                    }
+                )
+                continue
+            if not isinstance(row, dict):
+                parse_error_count += 1
+                violations.append(
+                    {
+                        "line": line_number,
+                        "type": "parse_error",
+                        "field": "",
+                        "reason": "review queue row is not a JSON object",
+                    }
+                )
+                continue
+            rows.append(row)
+            violations.extend(_browser_review_record_violations(row, line_number))
+
+    counts = _count_by(violations, "type")
+    safe = bool(
+        not parse_error_count
+        and not counts.get("disallowed_field")
+        and not counts.get("sensitive_field")
+        and not counts.get("sensitive_value")
+        and not counts.get("tracking_url")
+        and not counts.get("long_url")
+        and not counts.get("real_platform_submission")
+    )
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "browser_review_queue_audit",
+        "path": str(review_path),
+        "exists": review_path.exists(),
+        "safe": safe,
+        "row_count": len(rows),
+        "parse_error_count": parse_error_count,
+        "disallowed_field_count": int(counts.get("disallowed_field") or 0),
+        "sensitive_field_count": int(counts.get("sensitive_field") or 0),
+        "sensitive_value_count": int(counts.get("sensitive_value") or 0),
+        "tracking_url_count": int(counts.get("tracking_url") or 0),
+        "long_url_count": int(counts.get("long_url") or 0),
+        "real_platform_submission_true_count": int(counts.get("real_platform_submission") or 0),
+        "allowed_fields": sorted(BROWSER_REVIEW_ALLOWED_FIELDS),
+        "violations": violations,
+        "policy": {
+            "stores_contact_details": False,
+            "stores_answer_text": False,
+            "stores_tokens": False,
+            "stores_long_tracking_urls": False,
+            "real_platform_submission": False,
+        },
+    }
+
+
+def write_browser_review_queue_audit(
+    path: str | Path,
+    json_output: str | Path,
+    markdown_output: str | Path,
+) -> dict[str, Any]:
+    audit = build_browser_review_queue_audit(path)
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    for output_path in [json_path, markdown_path]:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(audit, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(render_browser_review_queue_audit_markdown(audit), encoding="utf-8")
+    return audit
+
+
+def render_browser_review_queue_audit_markdown(audit: dict[str, Any]) -> str:
+    lines = [
+        "# Browser Review Queue Audit",
+        "",
+        f"Generated: {audit.get('generated_at')}",
+        f"Path: {audit.get('path')}",
+        f"Safe: {str(bool(audit.get('safe'))).lower()}",
+        f"Rows: {audit.get('row_count', 0)}",
+        "",
+        "## Summary",
+        "",
+        f"- parse errors: {audit.get('parse_error_count', 0)}",
+        f"- disallowed fields: {audit.get('disallowed_field_count', 0)}",
+        f"- sensitive fields: {audit.get('sensitive_field_count', 0)}",
+        f"- sensitive values: {audit.get('sensitive_value_count', 0)}",
+        f"- tracking URLs: {audit.get('tracking_url_count', 0)}",
+        f"- long URLs: {audit.get('long_url_count', 0)}",
+        f"- real platform submissions: {audit.get('real_platform_submission_true_count', 0)}",
+        "",
+        "## Violations",
+        "",
+    ]
+    violations = audit.get("violations") or []
+    if violations:
+        lines.extend(
+            _simple_markdown_table(
+                ["Line", "Type", "Field", "Reason"],
+                [
+                    [
+                        row.get("line"),
+                        row.get("type"),
+                        row.get("field"),
+                        row.get("reason"),
+                    ]
+                    for row in violations[:200]
+                ],
+            )
+        )
+    else:
+        lines.append("- None")
+    lines.extend(["", "## Policy", ""])
+    for key, value in sorted((audit.get("policy") or {}).items()):
+        lines.append(f"- {key}: {str(bool(value)).lower()}")
+    return "\n".join(lines) + "\n"
+
+
+def _browser_review_record_violations(row: dict[str, Any], line_number: int) -> list[dict[str, Any]]:
+    violations: list[dict[str, Any]] = []
+    for key, value in row.items():
+        key_text = str(key)
+        if key_text not in BROWSER_REVIEW_ALLOWED_FIELDS:
+            violations.append(
+                {
+                    "line": line_number,
+                    "type": "disallowed_field",
+                    "field": key_text,
+                    "reason": "review queue must only store sparse routing fields",
+                }
+            )
+        lowered_key = key_text.lower()
+        if any(fragment in lowered_key for fragment in BROWSER_REVIEW_SENSITIVE_FIELD_FRAGMENTS):
+            violations.append(
+                {
+                    "line": line_number,
+                    "type": "sensitive_field",
+                    "field": key_text,
+                    "reason": "field name suggests contact details, answers, tokens, profile, resume, or payload",
+                }
+            )
+        for field_path, text in _browser_review_string_values(value, key_text):
+            sensitive_reason = _browser_review_sensitive_value_reason(text)
+            if sensitive_reason:
+                violations.append(
+                    {
+                        "line": line_number,
+                        "type": "sensitive_value",
+                        "field": field_path,
+                        "reason": sensitive_reason,
+                    }
+                )
+            url_reason = _browser_review_url_reason(text, field_path)
+            if url_reason:
+                violations.append(
+                    {
+                        "line": line_number,
+                        "type": url_reason["type"],
+                        "field": field_path,
+                        "reason": url_reason["reason"],
+                    }
+                )
+    if bool(row.get("real_platform_submission")):
+        violations.append(
+            {
+                "line": line_number,
+                "type": "real_platform_submission",
+                "field": "real_platform_submission",
+                "reason": "review queue records must not represent submitted applications",
+            }
+        )
+    return violations
+
+
+def _browser_review_string_values(value: Any, path: str) -> list[tuple[str, str]]:
+    if isinstance(value, str):
+        return [(path, value)]
+    if isinstance(value, list):
+        rows: list[tuple[str, str]] = []
+        for index, item in enumerate(value):
+            rows.extend(_browser_review_string_values(item, f"{path}[{index}]"))
+        return rows
+    if isinstance(value, dict):
+        rows = []
+        for key, item in value.items():
+            rows.extend(_browser_review_string_values(item, f"{path}.{key}"))
+        return rows
+    return []
+
+
+def _browser_review_sensitive_value_reason(value: str) -> str:
+    text = str(value)
+    if re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", text, flags=re.IGNORECASE):
+        return "email-like value"
+    if re.search(r"\bsk-[A-Za-z0-9_-]{20,}\b", text):
+        return "OpenAI-style token value"
+    if re.search(r"\b\d{6,}:[A-Za-z0-9_-]{20,}\b", text):
+        return "Telegram-style bot token value"
+    return ""
+
+
+def _browser_review_url_reason(value: str, field_path: str) -> dict[str, str] | None:
+    text = str(value).strip()
+    if not text.startswith(("http://", "https://")):
+        return None
+    parsed = urllib.parse.urlparse(text)
+    query_keys = {key.lower() for key, _value in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)}
+    tracking_keys = {
+        key for key in query_keys if key.startswith("utm_") or key in BROWSER_REVIEW_TRACKING_QUERY_KEYS
+    }
+    if tracking_keys:
+        return {"type": "tracking_url", "reason": "tracking query keys: " + ", ".join(sorted(tracking_keys))}
+    if field_path == "short_apply_url" and parsed.query:
+        return {"type": "tracking_url", "reason": "short_apply_url should not contain query parameters"}
+    if len(text) > 240:
+        return {"type": "long_url", "reason": "URL is longer than 240 characters"}
+    return None
+
+
 def job_registry_key(job: dict[str, Any]) -> str:
     apply_url = str(
         job.get("apply_url") or job.get("short_apply_url") or job.get("url") or ""
