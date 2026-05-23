@@ -876,6 +876,54 @@ class JobApplyAgentTests(unittest.TestCase):
             classify_application_prompt("Are you within commuting distance of Riyadh, Saudi Arabia?").category,
             "location_constraint",
         )
+        self.assertEqual(
+            classify_application_prompt("Resume").category,
+            "resume_upload",
+        )
+        self.assertEqual(
+            classify_application_prompt("Submit application").category,
+            "final_submit",
+        )
+        self.assertEqual(
+            classify_application_prompt("Name").category,
+            "profile_identity",
+        )
+        self.assertEqual(
+            classify_application_prompt("Zip Code").category,
+            "profile_identity",
+        )
+        self.assertEqual(
+            classify_application_prompt("Current or last company you worked for").category,
+            "employment_history",
+        )
+        self.assertEqual(
+            classify_application_prompt("X Profile").category,
+            "profile_link",
+        )
+        self.assertEqual(
+            classify_application_prompt("What exceptional work have you done?").category,
+            "role_specific_free_text",
+        )
+        self.assertEqual(
+            classify_application_prompt(
+                "By selecting Yes, I am consenting to the use of AI for evaluating my candidacy."
+            ).category,
+            "policy_acknowledgement",
+        )
+        self.assertEqual(
+            classify_application_prompt("Future Contact Consent").category,
+            "communication_consent",
+        )
+        self.assertEqual(
+            classify_application_prompt(
+                "Our HQ is in San Mateo and this role is not remote. Are you able to come onsite as required for this role?"
+            ).category,
+            "location_constraint",
+        )
+        self.assertEqual(
+            classify_application_prompt("Have you worked with us before?").category,
+            "employment_history",
+        )
 
     def test_application_research_summarizes_form_snapshots_and_jsonl(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1168,6 +1216,56 @@ class JobApplyAgentTests(unittest.TestCase):
             "profile.question_answers",
         )
 
+    def test_answer_gap_report_uses_standard_notice_and_immigration_answers(self) -> None:
+        profile = CandidateProfile(
+            name="Alan Jiang",
+            email="alan@example.com",
+            phone="555-0100",
+            location="Bellevue, WA",
+            target_titles=["Site Reliability Engineer"],
+            target_locations=["United States"],
+            remote_ok=True,
+            keywords=["sre"],
+            blocklist=[],
+            min_score=1,
+            resume_facts={},
+            question_answers={
+                "start_date": "I can start in about two months.",
+                "sponsorship": "Yes, I will now or in the future require visa sponsorship or a visa transfer.",
+            },
+        )
+        research = {
+            "generated_at": "2026-05-22T00:00:00+00:00",
+            "positions_observed_total": 1,
+            "items": [
+                {
+                    "label": "What is your notice period?",
+                    "normalized_label": "what notice period",
+                    "category": "availability",
+                    "automation_action": "auto_answer_from_memory",
+                    "sensitivity": "standard_preference",
+                    "required": True,
+                    "platform": "Ashby",
+                    "source_file": "form.json",
+                },
+                {
+                    "label": "Now or in the future will you need immigration assistance?",
+                    "normalized_label": "future need immigration assistance",
+                    "category": "sponsorship",
+                    "automation_action": "auto_answer_from_memory",
+                    "sensitivity": "standard_preference",
+                    "required": True,
+                    "platform": "Ashby",
+                    "source_file": "form.json",
+                },
+            ],
+        }
+
+        report = build_answer_gap_report(research, profile=profile, answer_memory=None)
+
+        self.assertEqual(report["blocking_prompt_count"], 0)
+        self.assertEqual(report["coverage_counts"]["covered_auto_answer"], 2)
+
     def test_application_research_skips_linkedin_ai_advice_prompts(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             observed = Path(temp_dir) / "observed_candidates.jsonl"
@@ -1181,6 +1279,8 @@ class JobApplyAgentTests(unittest.TestCase):
                     "questions": [
                         "Am I a good fit for this job?",
                         "Tailor my resume",
+                        "WHAT’S IN IT FOR YOU?",
+                        "Ready to accelerate your career?",
                         "Why Cisco?",
                     ],
                 }
@@ -1195,6 +1295,8 @@ class JobApplyAgentTests(unittest.TestCase):
 
             self.assertNotIn("Am I a good fit for this job?", labels)
             self.assertNotIn("Tailor my resume", labels)
+            self.assertNotIn("WHAT’S IN IT FOR YOU?", labels)
+            self.assertNotIn("Ready to accelerate your career?", labels)
             self.assertIn("Why Cisco?", labels)
 
     def test_write_answer_gap_report_outputs_json_and_markdown(self) -> None:
@@ -3780,6 +3882,7 @@ class JobApplyAgentTests(unittest.TestCase):
 
         self.assertIn("Job Application Question Export", html)
         self.assertIn("Have you worked at DoorDash?", html)
+        self.assertIn("Problem Buckets", html)
         self.assertIn("Real Platform Shortfalls", html)
         self.assertIn("Collection Tasks", html)
         self.assertIn("Manual Gates", html)
@@ -3800,6 +3903,7 @@ class JobApplyAgentTests(unittest.TestCase):
             )
 
             self.assertEqual(len(result["question_rows"]), 2)
+            self.assertEqual(result["problem_buckets"][0]["coverage_status"], "needs_user_confirmation")
             self.assertTrue(xlsx_output.exists())
             self.assertTrue(html_output.exists())
             with zipfile.ZipFile(xlsx_output) as workbook:
@@ -3808,10 +3912,12 @@ class JobApplyAgentTests(unittest.TestCase):
                 self.assertIn("xl/worksheets/sheet1.xml", names)
                 self.assertIn("xl/worksheets/sheet2.xml", names)
                 self.assertIn("xl/worksheets/sheet6.xml", names)
-                self.assertIn("xl/worksheets/sheet10.xml", names)
-                user_questions = workbook.read("xl/worksheets/sheet2.xml").decode("utf-8")
+                self.assertIn("xl/worksheets/sheet11.xml", names)
+                problem_buckets = workbook.read("xl/worksheets/sheet2.xml").decode("utf-8")
+                self.assertIn("needs_user_confirmation", problem_buckets)
+                user_questions = workbook.read("xl/worksheets/sheet3.xml").decode("utf-8")
                 self.assertIn("Have you worked at DoorDash?", user_questions)
-                platform_shortfalls = workbook.read("xl/worksheets/sheet7.xml").decode("utf-8")
+                platform_shortfalls = workbook.read("xl/worksheets/sheet8.xml").decode("utf-8")
                 self.assertIn("Greenhouse", platform_shortfalls)
 
 

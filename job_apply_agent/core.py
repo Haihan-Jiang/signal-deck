@@ -835,7 +835,9 @@ def classify_application_prompt(
             "unknown",
             "unlabeled_or_placeholder_control",
         )
-    if tag == "BUTTON" and any(term in text for term in ["submit", "apply"]):
+    if (tag == "BUTTON" or raw_label in {"submit", "submit application", "apply", "apply now"}) and any(
+        term in text for term in ["submit", "apply"]
+    ):
         return ApplicationPromptClassification(
             "final_submit",
             "human_review_required",
@@ -865,7 +867,12 @@ def classify_application_prompt(
             "protected_class",
             "protected_class_self_identification",
         )
-    if field_type == "file" and any(term in text for term in ["resume", "cv", "autofill"]):
+    if (field_type == "file" and any(term in text for term in ["resume", "cv", "autofill"])) or raw_label in {
+        "resume",
+        "resume cv",
+        "cv resume",
+        "curriculum vitae",
+    }:
         return ApplicationPromptClassification(
             "resume_upload",
             "auto_fill_from_profile",
@@ -947,6 +954,13 @@ def classify_application_prompt(
             "current location",
             "currently located",
             "presently located",
+            "where currently based",
+            "where are you based",
+            "zip code",
+            "postal code",
+            "please select your state",
+            "what state do you currently live in",
+            "do you live in",
         ]
     ):
         return ApplicationPromptClassification(
@@ -961,10 +975,15 @@ def classify_application_prompt(
             "most recent employer",
             "current employer",
             "current company",
+            "current or last company",
+            "last company",
+            "company name",
             "company and position",
             "company position",
             "title held",
             "current title",
+            "current role",
+            "job title",
             "previous employer",
         ]
     ):
@@ -992,14 +1011,20 @@ def classify_application_prompt(
             "resume_fact",
             "employment_date_profile_field",
         )
-    if "privacy" in text or "acknowledgement" in text or "acknowledgment" in text:
+    if (
+        "privacy" in text
+        or "acknowledgement" in text
+        or "acknowledgment" in text
+        or "consenting to the use of ai" in text
+        or "ai for evaluating my candidacy" in text
+    ):
         return ApplicationPromptClassification(
             "policy_acknowledgement",
             "human_review_required",
             "policy",
             "policy_acknowledgement_requires_review",
         )
-    if re.search(r"\b(?:sms|whatsapp)\b", text) or "text message" in text:
+    if re.search(r"\b(?:sms|whatsapp)\b", text) or "text message" in text or "future contact consent" in text:
         return ApplicationPromptClassification(
             "communication_consent",
             "human_review_required",
@@ -1039,14 +1064,25 @@ def classify_application_prompt(
             "resume_fact",
             "skill_or_cloud_experience",
         )
-    if any(term in text for term in ["linkedin", "github", "portfolio", "website", "personal site"]):
+    if any(
+        term in text
+        for term in [
+            "linkedin",
+            "github",
+            "portfolio",
+            "website",
+            "personal site",
+            "x profile",
+            "profile url",
+        ]
+    ):
         return ApplicationPromptClassification(
             "profile_link",
             "auto_fill_from_profile",
             "profile",
             "profile_url_field",
         )
-    if any(
+    if raw_label in {"name", "preferred name"} or any(
         term in text
         for term in [
             "first name",
@@ -1088,6 +1124,13 @@ def classify_application_prompt(
             "profile",
             "employer_specific_history",
         )
+    if "worked with us before" in text or "worked for us before" in text:
+        return ApplicationPromptClassification(
+            "employment_history",
+            "human_review_required",
+            "profile",
+            "employer_specific_history",
+        )
     if any(
         term in text
         for term in [
@@ -1105,6 +1148,12 @@ def classify_application_prompt(
             "give a brief overview",
             "worked on before",
             "demonstrated leadership",
+            "exceptional work",
+            "excites you",
+            "additional information",
+            "additional information or a note",
+            "what will you do",
+            "what ai tools",
         ]
     ):
         return ApplicationPromptClassification(
@@ -1142,6 +1191,12 @@ def classify_application_prompt(
         for term in [
             "commuting distance",
             "work from canonical facilities",
+            "come onsite",
+            "in office",
+            "in-office",
+            "onsite",
+            "on-site",
+            "hybrid schedule",
             "riyadh",
             "taipei",
         ]
@@ -3873,6 +3928,7 @@ def build_question_export(
 ) -> dict[str, Any]:
     question_rows = [_question_export_row(item) for item in gaps.get("prompt_statuses", [])]
     blocker_rows = [_question_export_row(item) for item in gaps.get("blocking_prompts", [])]
+    problem_buckets = _question_problem_bucket_rows(blocker_rows)
     user_questions = [_learning_task_export_row(task) for task in learning_tasks.get("tasks", [])]
     manual_gates = [_manual_gate_export_row(item) for item in readiness.get("manual_gates", [])]
     positions = [_position_export_row(item) for item in readiness.get("positions", [])]
@@ -3924,6 +3980,7 @@ def build_question_export(
         "real_platform_shortfalls": coverage_gate.get("real_platform_shortfalls", {}),
         "question_rows": question_rows,
         "blocker_rows": blocker_rows,
+        "problem_buckets": problem_buckets,
         "user_questions": user_questions,
         "manual_gates": manual_gates,
         "positions": positions,
@@ -3980,6 +4037,33 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                     _yes_no(summary.get("synthetic_platform_role_target_achieved")),
                 ],
                 ["Actual real submit count", summary.get("actual_submit_count", 0)],
+            ],
+        ),
+        "</section>",
+        "<section><h2>Problem Buckets</h2>",
+        _html_table(
+            [
+                "Coverage status",
+                "Category",
+                "Unique prompts",
+                "Observed",
+                "Required",
+                "Platforms",
+                "Next action",
+                "Top labels",
+            ],
+            [
+                [
+                    row.get("coverage_status"),
+                    row.get("category"),
+                    row.get("unique_prompt_count"),
+                    row.get("observed_count"),
+                    row.get("required_count"),
+                    row.get("platforms"),
+                    row.get("next_action"),
+                    row.get("top_labels"),
+                ]
+                for row in export.get("problem_buckets", [])
             ],
         ),
         "</section>",
@@ -8785,8 +8869,17 @@ def _is_low_signal_application_prompt(normalized: str) -> bool:
         "office",
         "office filter",
         "previous page",
+        "pr t nous rejoindre",
+        "ready to accelerate your career",
+        "ready to shape future with us",
         "tailor my resume",
         "toggle flyout",
+        "want more info",
+        "what is the interview process like",
+        "what s in it for you",
+        "what s it",
+        "who else works at ashby",
+        "would you like to know more about this opportunity",
         "ai ml",
         "bash",
         "c",
@@ -8920,9 +9013,9 @@ def _direct_answer(profile: CandidateProfile, normalized_question: str) -> str |
 
     answer_map = {
         "authorization": ["authorized", "authorization", "work in the united states"],
-        "sponsorship": ["sponsor", "sponsorship", "visa"],
+        "sponsorship": ["sponsor", "sponsorship", "visa", "immigration assistance"],
         "compensation": ["salary", "compensation", "pay"],
-        "start_date": ["start", "available", "availability"],
+        "start_date": ["start", "available", "availability", "notice period", "notice"],
         "relocation": ["relocat"],
         "cloud_provider_general": [
             "gcp",
@@ -9010,6 +9103,59 @@ def _html_attrs(attr_text: str) -> dict[str, str]:
     return attrs
 
 
+def _question_problem_bucket_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    buckets: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for row in rows:
+        status = str(row.get("coverage_status") or "unknown")
+        category = str(row.get("category") or "unknown")
+        next_action = str(row.get("next_action") or "")
+        key = (status, category, next_action)
+        bucket = buckets.setdefault(
+            key,
+            {
+                "coverage_status": status,
+                "category": category,
+                "next_action": next_action,
+                "unique_prompt_count": 0,
+                "observed_count": 0,
+                "required_count": 0,
+                "platforms": set(),
+                "labels": [],
+            },
+        )
+        bucket["unique_prompt_count"] += 1
+        bucket["observed_count"] += int(row.get("observed_count") or 0)
+        bucket["required_count"] += int(row.get("required_count") or 0)
+        for platform in str(row.get("platforms") or "").split(","):
+            platform = platform.strip()
+            if platform:
+                bucket["platforms"].add(platform)
+        label = str(row.get("label") or "").strip()
+        if label and label not in bucket["labels"]:
+            bucket["labels"].append(label)
+
+    result: list[dict[str, Any]] = []
+    for bucket in buckets.values():
+        labels = bucket.pop("labels")
+        platforms = sorted(bucket.pop("platforms"))
+        result.append(
+            {
+                **bucket,
+                "platforms": ", ".join(platforms),
+                "top_labels": "\n".join(labels[:8]),
+            }
+        )
+    result.sort(
+        key=lambda item: (
+            -int(item.get("required_count") or 0),
+            -int(item.get("observed_count") or 0),
+            str(item.get("coverage_status") or ""),
+            str(item.get("category") or ""),
+        )
+    )
+    return result
+
+
 def _question_export_row(item: dict[str, Any]) -> dict[str, Any]:
     return {
         "coverage_status": item.get("coverage_status"),
@@ -9089,6 +9235,7 @@ def _position_export_row(item: dict[str, Any]) -> dict[str, Any]:
 def _write_question_export_xlsx(export: dict[str, Any], path: Path) -> None:
     sheets = [
         ("Summary", _question_export_summary_rows(export)),
+        ("Problem Buckets", _table_rows(export.get("problem_buckets", []))),
         ("User Questions", _table_rows(export.get("user_questions", []))),
         ("Blocking Prompts", _table_rows(export.get("blocker_rows", []))),
         ("All Prompts", _table_rows(export.get("question_rows", []))),
