@@ -39,6 +39,17 @@ CLOSED_APPLICATION_PHRASES = [
     "applications are closed",
     "application window is closed",
     "application period is closed",
+    "job posting is closed",
+    "this job is closed",
+    "this role is closed",
+    "this position is closed",
+    "this requisition is closed",
+    "this opening is closed",
+    "this job has been closed",
+    "this role has been closed",
+    "this position has been closed",
+    "this requisition has been closed",
+    "this opening has been closed",
     "this job posting has expired",
     "this job post is no longer active",
     "job is no longer available",
@@ -47,6 +58,10 @@ CLOSED_APPLICATION_PHRASES = [
     "this role is no longer available",
     "position has been filled",
     "this position has been filled",
+    "job posting has been removed",
+    "this job has been removed",
+    "this opening has been removed",
+    "this listing has been removed",
     "posting has expired",
     "listing has expired",
 ]
@@ -62,6 +77,11 @@ _CLOSED_APPLICATION_PATTERN_SPECS = [
         r"(?:are|is) (?:now )?closed\b",
     ),
     (
+        "posting is closed",
+        r"\b(?:this|the)? ?(?:job(?: posting)?|posting|position|role|requisition|opening|listing) "
+        r"(?:is|has been|was) (?:now )?closed\b",
+    ),
+    (
         "job is no longer available",
         r"\b(?:job|posting|position|role|listing|opportunity|job post).{0,8}"
         r"no longer (?:available|active|open)\b",
@@ -73,6 +93,11 @@ _CLOSED_APPLICATION_PATTERN_SPECS = [
     (
         "position has been filled",
         r"\b(?:this )?(?:position|role|job) (?:has been|was) filled\b",
+    ),
+    (
+        "posting has been removed",
+        r"\b(?:this|the)? ?(?:job(?: posting)?|posting|position|role|opening|listing) "
+        r"(?:has been|was) removed\b",
     ),
 ]
 _CLOSED_APPLICATION_PATTERNS = [
@@ -13767,11 +13792,13 @@ def build_goal_readiness_audit(
     requirements = [
         {
             "id": "closed_posting_filter",
-            "requirement": "Detect and skip postings that say No longer accepting applications.",
+            "requirement": "Detect and skip postings that show closed, expired, removed, filled, or no-longer-accepting application status.",
             "status": "achieved" if closed_count > 0 else "needs_live_evidence",
             "evidence": {
                 "closed_registry_count": closed_count,
                 "readiness_closed_skip_count": int(readiness_counts.get("closed_skip") or 0),
+                "closed_phrase_count": len(CLOSED_APPLICATION_PHRASES),
+                "closed_regex_count": len(_CLOSED_APPLICATION_PATTERN_SPECS),
                 "policy": "closed postings are excluded before notify/open/apply",
             },
         },

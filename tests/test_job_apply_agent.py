@@ -983,6 +983,18 @@ class JobApplyAgentTests(unittest.TestCase):
             ),
             "no longer accepting candidates",
         )
+        self.assertEqual(
+            closed_application_phrase({"page_text": "This job posting is closed."}),
+            "job posting is closed",
+        )
+        self.assertEqual(
+            closed_application_phrase({"page_text": "Sorry, this requisition has been closed."}),
+            "this requisition has been closed",
+        )
+        self.assertEqual(
+            closed_application_phrase({"page_text": "This opening has been removed by the employer."}),
+            "this opening has been removed",
+        )
         self.assertIsNone(
             closed_application_phrase(
                 {
@@ -8165,6 +8177,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(audit["blocker_summary"]["position_execution_position_count"], 100)
         self.assertEqual(audit["blocker_summary"]["position_execution_selector_miss_count"], 0)
         self.assertEqual(audit["requirements"][0]["status"], "achieved")
+        self.assertGreaterEqual(audit["requirements"][0]["evidence"]["closed_phrase_count"], 20)
+        self.assertGreaterEqual(audit["requirements"][0]["evidence"]["closed_regex_count"], 7)
         fake_requirement = next(item for item in audit["requirements"] if item["id"] == "fake_candidate_100_position_rehearsal")
         self.assertTrue(fake_requirement["evidence"]["post_answer_synthetic_queue_rehearsal_ready"])
         playbook_requirement = next(item for item in audit["requirements"] if item["id"] == "platform_question_playbook")
