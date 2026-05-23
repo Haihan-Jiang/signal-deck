@@ -816,6 +816,17 @@ one-shot updates file, reruns live closed-posting checks before opening pages,
 rebuilds the 100-position autofill packet with values only after the answers
 are approved, and keeps final submit as a supervised stop.
 
+To see the per-platform question handling summary for the 100-position rehearsal,
+write the platform playbook:
+
+```bash
+python3 -m job_apply_agent platform-question-playbook
+```
+
+This writes `platform_question_playbook_latest.{json,md,html}` with platform
+coverage, top question categories, local synthetic submit evidence, closed
+posting counts, and the remaining final-answer intake blockers.
+
 After the six answers are filled, run the safe gate first:
 
 ```bash

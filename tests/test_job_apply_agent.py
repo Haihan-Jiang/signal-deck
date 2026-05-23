@@ -50,6 +50,7 @@ from job_apply_agent.core import (
     build_final_answer_intake_update,
     build_goal_readiness_audit,
     build_learning_approval_pack,
+    build_platform_question_playbook,
     build_learning_task_template,
     build_pre_submit_review,
     build_position_readiness_report,
@@ -133,6 +134,8 @@ from job_apply_agent.core import (
     render_learning_task_template_markdown,
     render_pre_submit_review_markdown,
     render_position_readiness_markdown,
+    render_platform_question_playbook_html,
+    render_platform_question_playbook_markdown,
     render_research_coverage_gate_markdown,
     render_synthetic_apply_execution_markdown,
     render_synthetic_browser_action_execution_markdown,
@@ -184,6 +187,7 @@ from job_apply_agent.core import (
     write_learning_task_template,
     write_pre_submit_review,
     write_position_readiness_report,
+    write_platform_question_playbook,
     write_research_coverage_gate,
     write_synthetic_apply_execution,
     write_synthetic_application_simulation,
@@ -10944,6 +10948,177 @@ class JobApplyAgentTests(unittest.TestCase):
                 final_answer_intake = workbook.read("xl/worksheets/sheet45.xml").decode("utf-8")
                 self.assertIn("zip_or_postal_code", final_answer_intake)
                 self.assertIn("waiting_for_answer", final_answer_intake)
+
+    def test_platform_question_playbook_summarizes_research_and_rehearsal(self) -> None:
+        research = {
+            "positions_observed_total": 201,
+            "platforms": {
+                "Greenhouse": {"positions_observed": 101, "prompt_items": 3},
+                "Lever": {"positions_observed": 100, "prompt_items": 2},
+            },
+            "positions": [
+                {
+                    "position_key": "greenhouse:1",
+                    "platform": "Greenhouse",
+                    "company": "DoorDash",
+                    "title": "SRE",
+                    "role_family": "Site Reliability",
+                    "apply_url": "https://job-boards.greenhouse.io/doordash/jobs/1",
+                },
+                {
+                    "position_key": "lever:1",
+                    "platform": "Lever",
+                    "company": "Emburse",
+                    "title": "Platform Engineer",
+                    "role_family": "Platform Infrastructure",
+                    "apply_url": "https://jobs.lever.co/emburse/1",
+                },
+            ],
+            "items": [
+                {
+                    "position_key": "greenhouse:1",
+                    "platform": "Greenhouse",
+                    "item_type": "question",
+                    "label": "Are you authorized to work in the United States?",
+                    "normalized_label": "authorized work united states",
+                    "required": True,
+                    "category": "authorization",
+                    "automation_action": "auto_answer_from_memory",
+                },
+                {
+                    "position_key": "greenhouse:1",
+                    "platform": "Greenhouse",
+                    "item_type": "question",
+                    "label": "Why are you interested in this role?",
+                    "normalized_label": "why interested role",
+                    "required": True,
+                    "category": "role_specific_free_text",
+                    "automation_action": "generate_custom_material",
+                },
+                {
+                    "position_key": "lever:1",
+                    "platform": "Lever",
+                    "item_type": "question",
+                    "label": "What is your expected compensation?",
+                    "normalized_label": "expected compensation",
+                    "required": True,
+                    "category": "compensation",
+                    "automation_action": "auto_answer_from_memory",
+                },
+            ],
+        }
+        autofill_batch = {
+            "selected_count": 100,
+            "local_synthetic_submit_count": 100,
+            "local_synthetic_submit_achieved": True,
+            "local_synthetic_submit_selector_miss_count": 0,
+            "positions": [
+                {
+                    "index": 1,
+                    "platform": "Greenhouse",
+                    "company": "DoorDash",
+                    "title": "SRE",
+                    "role_family": "Site Reliability",
+                    "prompt_count": 2,
+                    "manifest_status": "autofill_ready_with_supervised_gates",
+                    "local_synthetic_submit_outcome": "submitted_local_synthetic",
+                    "local_synthetic_submit_count": 1,
+                    "local_synthetic_submit_selector_miss_count": 0,
+                    "stop_action_statuses": ["final_submit_confirmation"],
+                    "apply_url": "https://job-boards.greenhouse.io/doordash/jobs/1",
+                },
+                {
+                    "index": 2,
+                    "platform": "Lever",
+                    "company": "Emburse",
+                    "title": "Platform Engineer",
+                    "role_family": "Platform Infrastructure",
+                    "prompt_count": 1,
+                    "manifest_status": "autofill_ready_with_supervised_gates",
+                    "local_synthetic_submit_outcome": "submitted_local_synthetic",
+                    "local_synthetic_submit_count": 1,
+                    "local_synthetic_submit_selector_miss_count": 0,
+                    "stop_action_statuses": ["final_submit_confirmation"],
+                    "apply_url": "https://jobs.lever.co/emburse/1",
+                },
+            ],
+        }
+        fake_position_rehearsal = {
+            "target_platforms": ["Greenhouse", "Lever"],
+            "run_count": 2,
+            "actual_submit_count": 2,
+            "selector_miss_count": 0,
+            "runs": [
+                {"platform": "Greenhouse", "actual_submit_count": 1, "selector_miss_count": 0},
+                {"platform": "Lever", "actual_submit_count": 1, "selector_miss_count": 0},
+            ],
+        }
+        automation_handoff = {
+            "summary": {
+                "final_answer_intake_missing_count": 1,
+                "autofill_packet_ready_after_answers": True,
+            },
+            "final_answer_intake": [
+                {
+                    "alias": "citizenship_status",
+                    "input_id": "answer_memory_citizenship_status_default_policy",
+                    "status": "waiting_for_answer",
+                    "high_risk": True,
+                    "required_count": 3,
+                    "question": "What citizenship answers should automation use?",
+                    "platforms": ["Greenhouse", "Lever"],
+                }
+            ],
+        }
+        closed_jobs = {
+            "jobs": [
+                {
+                    "platform": "Greenhouse",
+                    "apply_url": "https://job-boards.greenhouse.io/closed/jobs/1",
+                    "reason": "No longer accepting applications",
+                }
+            ]
+        }
+
+        report = build_platform_question_playbook(
+            research,
+            autofill_batch=autofill_batch,
+            fake_position_rehearsal=fake_position_rehearsal,
+            automation_handoff=automation_handoff,
+            closed_jobs=closed_jobs,
+        )
+        html = render_platform_question_playbook_html(report)
+        markdown = render_platform_question_playbook_markdown(report)
+
+        self.assertEqual(report["summary"]["target_platforms_at_100_count"], 2)
+        self.assertEqual(report["summary"]["selected_position_count"], 100)
+        self.assertEqual(report["summary"]["selected_local_synthetic_submit_count"], 100)
+        self.assertEqual(report["summary"]["final_answer_missing_count"], 1)
+        self.assertTrue(report["summary"]["ready_after_answers_for_selected_100"])
+        requirement_statuses = {row["id"]: row["status"] for row in report["requirements"]}
+        self.assertEqual(requirement_statuses["platform_question_research"], "achieved")
+        self.assertEqual(requirement_statuses["selected_100_local_rehearsal"], "achieved")
+        self.assertEqual(requirement_statuses["remaining_truthful_answers"], "needs_user_answers")
+        greenhouse = next(row for row in report["platforms"] if row["platform"] == "Greenhouse")
+        self.assertEqual(greenhouse["closed_postings"], 1)
+        self.assertEqual(greenhouse["remaining_answer_inputs"], 1)
+        self.assertIn("role_specific_free_text", html)
+        self.assertIn("No longer accepting applications", json.dumps(report))
+        self.assertIn("Platform Question Playbook", markdown)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            written = write_platform_question_playbook(
+                research,
+                Path(temp_dir) / "playbook.json",
+                Path(temp_dir) / "playbook.md",
+                Path(temp_dir) / "playbook.html",
+                autofill_batch=autofill_batch,
+                fake_position_rehearsal=fake_position_rehearsal,
+                automation_handoff=automation_handoff,
+                closed_jobs=closed_jobs,
+            )
+            self.assertEqual(written["outputs"]["json"], str(Path(temp_dir) / "playbook.json"))
+            self.assertTrue((Path(temp_dir) / "playbook.html").exists())
 
 
 if __name__ == "__main__":

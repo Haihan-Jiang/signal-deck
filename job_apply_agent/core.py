@@ -14475,6 +14475,570 @@ def write_question_export(
     return export
 
 
+def write_platform_question_playbook(
+    research: dict[str, Any],
+    json_output: str | Path,
+    markdown_output: str | Path,
+    html_output: str | Path,
+    autofill_batch: dict[str, Any] | None = None,
+    fake_position_rehearsal: dict[str, Any] | None = None,
+    automation_handoff: dict[str, Any] | None = None,
+    closed_jobs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    report = build_platform_question_playbook(
+        research,
+        autofill_batch=autofill_batch,
+        fake_position_rehearsal=fake_position_rehearsal,
+        automation_handoff=automation_handoff,
+        closed_jobs=closed_jobs,
+    )
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    html_path = Path(html_output)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    html_path.parent.mkdir(parents=True, exist_ok=True)
+    report["outputs"] = {
+        "json": str(json_path),
+        "markdown": str(markdown_path),
+        "html": str(html_path),
+    }
+    json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(render_platform_question_playbook_markdown(report), encoding="utf-8")
+    html_path.write_text(render_platform_question_playbook_html(report), encoding="utf-8")
+    return report
+
+
+def build_platform_question_playbook(
+    research: dict[str, Any],
+    autofill_batch: dict[str, Any] | None = None,
+    fake_position_rehearsal: dict[str, Any] | None = None,
+    automation_handoff: dict[str, Any] | None = None,
+    closed_jobs: dict[str, Any] | None = None,
+    sample_limit: int = 5,
+) -> dict[str, Any]:
+    def counter_add(counter: dict[str, int], key: Any, amount: int = 1) -> None:
+        key_text = str(key or "unknown").strip() or "unknown"
+        counter[key_text] = int(counter.get(key_text) or 0) + amount
+
+    def top_counter(counter: dict[str, int], limit: int = 8) -> list[dict[str, Any]]:
+        return [
+            {"name": key, "count": value}
+            for key, value in sorted(counter.items(), key=lambda item: (-item[1], item[0]))[:limit]
+        ]
+
+    def platform_names(value: Any) -> list[str]:
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        if isinstance(value, str):
+            parts = re.split(r"[\n,]+", value)
+            return [part.strip() for part in parts if part.strip()]
+        return []
+
+    platforms: dict[str, dict[str, Any]] = {}
+
+    def bucket(platform: Any) -> dict[str, Any]:
+        platform_text = str(platform or "Unknown").strip() or "Unknown"
+        if platform_text not in platforms:
+            platforms[platform_text] = {
+                "platform": platform_text,
+                "positions_observed": 0,
+                "_position_keys": set(),
+                "research_prompt_items": 0,
+                "question_items": 0,
+                "required_question_items": 0,
+                "unique_prompts": set(),
+                "role_families": {},
+                "automation_actions": {},
+                "categories": {},
+                "selected_positions": 0,
+                "selected_final_submit_stops": 0,
+                "selected_selector_misses": 0,
+                "selected_local_synthetic_submits": 0,
+                "fake_rehearsal_runs": 0,
+                "fake_rehearsal_submits": 0,
+                "fake_rehearsal_selector_misses": 0,
+                "closed_postings": 0,
+                "remaining_answer_inputs": 0,
+            }
+        return platforms[platform_text]
+
+    for platform, payload in sorted((research.get("platforms") or {}).items()):
+        stats = bucket(platform)
+        stats["positions_observed"] = max(
+            int(stats.get("positions_observed") or 0),
+            int((payload or {}).get("positions_observed") or 0),
+        )
+        stats["research_prompt_items"] = int((payload or {}).get("prompt_items") or 0)
+
+    for position in research.get("positions") or []:
+        stats = bucket(position.get("platform"))
+        position_key = str(
+            position.get("position_key")
+            or position.get("apply_url")
+            or f"{position.get('company', '')}:{position.get('title', '')}"
+        ).strip()
+        if position_key:
+            stats["_position_keys"].add(position_key)
+        stats["positions_observed"] = max(
+            int(stats.get("positions_observed") or 0),
+            len(stats.get("_position_keys") or []),
+        )
+        counter_add(stats["role_families"], position.get("role_family"))
+
+    for item in research.get("items") or []:
+        if item.get("item_type") != "question":
+            continue
+        stats = bucket(item.get("platform"))
+        stats["question_items"] = int(stats.get("question_items") or 0) + 1
+        if item.get("required"):
+            stats["required_question_items"] = int(stats.get("required_question_items") or 0) + 1
+        label = str(item.get("label") or "").strip()
+        normalized_label = str(item.get("normalized_label") or label).strip()
+        if normalized_label:
+            stats["unique_prompts"].add(normalized_label)
+        category = str(item.get("category") or "unknown").strip() or "unknown"
+        action = str(item.get("automation_action") or "unknown").strip() or "unknown"
+        counter_add(stats["automation_actions"], action)
+        categories = stats["categories"]
+        if category not in categories:
+            categories[category] = {
+                "category": category,
+                "question_items": 0,
+                "required_question_items": 0,
+                "automation_actions": {},
+                "sample_labels": [],
+            }
+        category_row = categories[category]
+        category_row["question_items"] = int(category_row.get("question_items") or 0) + 1
+        if item.get("required"):
+            category_row["required_question_items"] = int(
+                category_row.get("required_question_items") or 0
+            ) + 1
+        counter_add(category_row["automation_actions"], action)
+        samples = category_row["sample_labels"]
+        if label and label not in samples and len(samples) < sample_limit:
+            samples.append(label)
+
+    for position in (autofill_batch or {}).get("positions") or []:
+        stats = bucket(position.get("platform"))
+        stats["selected_positions"] = int(stats.get("selected_positions") or 0) + 1
+        stats["selected_selector_misses"] = int(stats.get("selected_selector_misses") or 0) + int(
+            position.get("local_synthetic_submit_selector_miss_count")
+            or position.get("local_check_selector_miss_count")
+            or 0
+        )
+        stats["selected_local_synthetic_submits"] = int(
+            stats.get("selected_local_synthetic_submits") or 0
+        ) + int(position.get("local_synthetic_submit_count") or 0)
+        if "final_submit_confirmation" in (position.get("stop_action_statuses") or []):
+            stats["selected_final_submit_stops"] = int(stats.get("selected_final_submit_stops") or 0) + 1
+
+    for stop in (autofill_batch or {}).get("selected_stop_actions") or []:
+        if stop.get("status") == "final_submit_confirmation":
+            stats = bucket(stop.get("platform"))
+            if int(stats.get("selected_final_submit_stops") or 0) < int(stats.get("selected_positions") or 0):
+                stats["selected_final_submit_stops"] = int(stats.get("selected_final_submit_stops") or 0) + 1
+
+    for run in (fake_position_rehearsal or {}).get("runs") or []:
+        stats = bucket(run.get("platform"))
+        stats["fake_rehearsal_runs"] = int(stats.get("fake_rehearsal_runs") or 0) + 1
+        stats["fake_rehearsal_submits"] = int(stats.get("fake_rehearsal_submits") or 0) + int(
+            run.get("actual_submit_count") or 0
+        )
+        stats["fake_rehearsal_selector_misses"] = int(
+            stats.get("fake_rehearsal_selector_misses") or 0
+        ) + int(run.get("selector_miss_count") or 0)
+
+    for job in (closed_jobs or {}).get("jobs") or []:
+        platform = job.get("platform") or infer_platform_from_url(
+            str(job.get("apply_url") or job.get("short_apply_url") or job.get("url") or "")
+        )
+        bucket(platform)["closed_postings"] = int(bucket(platform).get("closed_postings") or 0) + 1
+
+    for answer in (automation_handoff or {}).get("final_answer_intake") or []:
+        for platform in platform_names(answer.get("platforms")):
+            bucket(platform)["remaining_answer_inputs"] = int(
+                bucket(platform).get("remaining_answer_inputs") or 0
+            ) + 1
+
+    platform_rows = []
+    category_rows = []
+    for platform, stats in sorted(platforms.items()):
+        categories = []
+        for category, payload in sorted(
+            stats["categories"].items(),
+            key=lambda item: (-int(item[1].get("question_items") or 0), item[0]),
+        )[:12]:
+            action_summary = ", ".join(
+                f"{row['name']}:{row['count']}" for row in top_counter(payload["automation_actions"], 4)
+            )
+            category_public = {
+                "platform": platform,
+                "category": category,
+                "question_items": int(payload.get("question_items") or 0),
+                "required_question_items": int(payload.get("required_question_items") or 0),
+                "automation_actions": action_summary,
+                "sample_labels": payload.get("sample_labels") or [],
+            }
+            categories.append(category_public)
+            category_rows.append(category_public)
+        platform_rows.append(
+            {
+                "platform": platform,
+                "positions_observed": int(stats.get("positions_observed") or 0),
+                "research_prompt_items": int(stats.get("research_prompt_items") or 0),
+                "question_items": int(stats.get("question_items") or 0),
+                "required_question_items": int(stats.get("required_question_items") or 0),
+                "unique_prompt_count": len(stats.get("unique_prompts") or []),
+                "selected_positions": int(stats.get("selected_positions") or 0),
+                "selected_local_synthetic_submits": int(
+                    stats.get("selected_local_synthetic_submits") or 0
+                ),
+                "selected_final_submit_stops": int(stats.get("selected_final_submit_stops") or 0),
+                "selected_selector_misses": int(stats.get("selected_selector_misses") or 0),
+                "fake_rehearsal_runs": int(stats.get("fake_rehearsal_runs") or 0),
+                "fake_rehearsal_submits": int(stats.get("fake_rehearsal_submits") or 0),
+                "fake_rehearsal_selector_misses": int(
+                    stats.get("fake_rehearsal_selector_misses") or 0
+                ),
+                "closed_postings": int(stats.get("closed_postings") or 0),
+                "remaining_answer_inputs": int(stats.get("remaining_answer_inputs") or 0),
+                "top_role_families": top_counter(stats.get("role_families") or {}, 6),
+                "automation_actions": top_counter(stats.get("automation_actions") or {}, 8),
+                "top_categories": categories,
+            }
+        )
+
+    handoff_summary = (automation_handoff or {}).get("summary") or {}
+    selected_positions = int((autofill_batch or {}).get("selected_count") or 0)
+    selected_synthetic_submits = int((autofill_batch or {}).get("local_synthetic_submit_count") or 0)
+    selected_selector_misses = int((autofill_batch or {}).get("local_synthetic_submit_selector_miss_count") or 0)
+    if "final_answer_intake_missing_count" in handoff_summary:
+        final_answer_missing = int(handoff_summary.get("final_answer_intake_missing_count") or 0)
+    else:
+        final_answer_missing = int(handoff_summary.get("updates_waiting_after_update_count") or 0)
+    target_platforms = platform_names((fake_position_rehearsal or {}).get("target_platforms")) or [
+        "Ashby",
+        "Greenhouse",
+        "Lever",
+        "LinkedIn",
+    ]
+    platform_100_status = [
+        {
+            "platform": platform,
+            "positions_observed": int((platforms.get(platform) or {}).get("positions_observed") or 0),
+            "target_met": int((platforms.get(platform) or {}).get("positions_observed") or 0) >= 100,
+        }
+        for platform in target_platforms
+    ]
+    selected_100_rehearsed = (
+        selected_positions >= 100
+        and selected_synthetic_submits >= 100
+        and selected_selector_misses == 0
+    )
+    ready_after_answers = bool(handoff_summary.get("autofill_packet_ready_after_answers"))
+    requirements = [
+        {
+            "id": "closed_posting_filter",
+            "status": "achieved" if int(len((closed_jobs or {}).get("jobs") or [])) else "needs_evidence",
+            "evidence": f"{len((closed_jobs or {}).get('jobs') or [])} closed postings persisted",
+        },
+        {
+            "id": "platform_question_research",
+            "status": "achieved" if all(row["target_met"] for row in platform_100_status) else "incomplete",
+            "evidence": "; ".join(
+                f"{row['platform']}={row['positions_observed']}" for row in platform_100_status
+            ),
+        },
+        {
+            "id": "selected_100_local_rehearsal",
+            "status": "achieved" if selected_100_rehearsed else "incomplete",
+            "evidence": (
+                f"selected={selected_positions}, local_synthetic_submits={selected_synthetic_submits}, "
+                f"selector_misses={selected_selector_misses}"
+            ),
+        },
+        {
+            "id": "remaining_truthful_answers",
+            "status": "needs_user_answers" if final_answer_missing else "achieved",
+            "evidence": f"{final_answer_missing} final-answer intake values missing",
+        },
+    ]
+    selected_position_rows = _table_dict_subset_rows(
+        (autofill_batch or {}).get("positions") or [],
+        [
+            "index",
+            "platform",
+            "company",
+            "title",
+            "role_family",
+            "prompt_count",
+            "manifest_status",
+            "local_synthetic_submit_outcome",
+            "local_synthetic_submit_count",
+            "local_synthetic_submit_selector_miss_count",
+            "apply_url",
+        ],
+    )
+    return {
+        "source": "platform_question_playbook",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "summary": {
+            "observed_position_count": int(research.get("positions_observed_total") or 0),
+            "platform_count": len(platform_rows),
+            "target_platform_count": len(target_platforms),
+            "target_platforms_at_100_count": sum(1 for row in platform_100_status if row["target_met"]),
+            "research_question_item_count": sum(int(row.get("question_items") or 0) for row in platform_rows),
+            "selected_position_count": selected_positions,
+            "selected_local_synthetic_submit_count": selected_synthetic_submits,
+            "selected_local_synthetic_submit_achieved": bool(
+                (autofill_batch or {}).get("local_synthetic_submit_achieved")
+            ),
+            "selected_selector_miss_count": selected_selector_misses,
+            "fake_rehearsal_run_count": int((fake_position_rehearsal or {}).get("run_count") or 0),
+            "fake_rehearsal_submit_count": int((fake_position_rehearsal or {}).get("actual_submit_count") or 0),
+            "fake_rehearsal_selector_miss_count": int(
+                (fake_position_rehearsal or {}).get("selector_miss_count") or 0
+            ),
+            "closed_posting_count": len((closed_jobs or {}).get("jobs") or []),
+            "final_answer_missing_count": final_answer_missing,
+            "ready_after_answers_for_selected_100": ready_after_answers and selected_100_rehearsed,
+            "real_platform_submission": False,
+        },
+        "requirements": requirements,
+        "platform_100_status": platform_100_status,
+        "platforms": sorted(
+            platform_rows,
+            key=lambda row: (-int(row.get("positions_observed") or 0), str(row.get("platform") or "")),
+        ),
+        "category_rows": sorted(
+            category_rows,
+            key=lambda row: (
+                str(row.get("platform") or ""),
+                -int(row.get("question_items") or 0),
+                str(row.get("category") or ""),
+            ),
+        ),
+        "selected_positions": selected_position_rows,
+        "final_answer_intake": (automation_handoff or {}).get("final_answer_intake") or [],
+        "policy": {
+            "fake_data": "Fake candidate data is restricted to local synthetic rehearsal.",
+            "real_submit": "Real employer final submit remains supervised.",
+            "closed_postings": "Live pages that say No longer accepting applications are persisted and skipped.",
+        },
+    }
+
+
+def render_platform_question_playbook_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    lines = [
+        "# Platform Question Playbook",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        "",
+        "## Summary",
+        "",
+        f"- observed positions: {summary.get('observed_position_count', 0)}",
+        f"- selected 100 positions: {summary.get('selected_position_count', 0)}",
+        f"- selected local synthetic submits: {summary.get('selected_local_synthetic_submit_count', 0)}",
+        f"- selected selector misses: {summary.get('selected_selector_miss_count', 0)}",
+        f"- closed postings persisted: {summary.get('closed_posting_count', 0)}",
+        f"- final answers still missing: {summary.get('final_answer_missing_count', 0)}",
+        f"- ready after answers for selected 100: {str(bool(summary.get('ready_after_answers_for_selected_100'))).lower()}",
+        "",
+        "## Requirements",
+        "",
+        "| ID | Status | Evidence |",
+        "| --- | --- | --- |",
+    ]
+    for row in report.get("requirements") or []:
+        lines.append(
+            "| {id} | {status} | {evidence} |".format(
+                id=row.get("id", ""),
+                status=row.get("status", ""),
+                evidence=str(row.get("evidence", "")).replace("\n", " "),
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Platform Coverage",
+            "",
+            "| Platform | Positions | Questions | Unique prompts | Selected | Local submits | Selector misses | Closed | Remaining answers |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for row in report.get("platforms") or []:
+        lines.append(
+            "| {platform} | {positions} | {questions} | {unique} | {selected} | {submits} | {misses} | {closed} | {answers} |".format(
+                platform=row.get("platform", ""),
+                positions=row.get("positions_observed", 0),
+                questions=row.get("question_items", 0),
+                unique=row.get("unique_prompt_count", 0),
+                selected=row.get("selected_positions", 0),
+                submits=row.get("selected_local_synthetic_submits", 0),
+                misses=row.get("selected_selector_misses", 0),
+                closed=row.get("closed_postings", 0),
+                answers=row.get("remaining_answer_inputs", 0),
+            )
+        )
+    lines.extend(["", "## Top Question Categories", ""])
+    for row in (report.get("category_rows") or [])[:40]:
+        samples = "; ".join(_string_list(row.get("sample_labels"))[:3])
+        lines.append(
+            "- {platform} / {category}: {count} question item(s), actions {actions}. Samples: {samples}".format(
+                platform=row.get("platform", ""),
+                category=row.get("category", ""),
+                count=row.get("question_items", 0),
+                actions=row.get("automation_actions", ""),
+                samples=samples,
+            )
+        )
+    return "\n".join(lines) + "\n"
+
+
+def render_platform_question_playbook_html(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    return "\n".join(
+        [
+            "<!doctype html>",
+            '<html lang="en">',
+            "<head>",
+            '<meta charset="utf-8">',
+            '<meta name="viewport" content="width=device-width, initial-scale=1">',
+            "<title>Platform Question Playbook</title>",
+            "<style>",
+            _question_export_css(),
+            "</style>",
+            "</head>",
+            "<body>",
+            "<main>",
+            "<h1>Platform Question Playbook</h1>",
+            f"<p class=\"muted\">Generated: {_html_escape(report.get('generated_at'))}</p>",
+            _html_kpis(
+                [
+                    ("Observed positions", summary.get("observed_position_count", 0)),
+                    ("Selected positions", summary.get("selected_position_count", 0)),
+                    ("Local submits", summary.get("selected_local_synthetic_submit_count", 0)),
+                    ("Selector misses", summary.get("selected_selector_miss_count", 0)),
+                    ("Closed postings", summary.get("closed_posting_count", 0)),
+                    ("Missing answers", summary.get("final_answer_missing_count", 0)),
+                ]
+            ),
+            "<section><h2>Goal Requirements</h2>",
+            _html_table(
+                ["ID", "Status", "Evidence"],
+                [
+                    [row.get("id"), row.get("status"), row.get("evidence")]
+                    for row in report.get("requirements", [])
+                ],
+            ),
+            "</section>",
+            "<section><h2>Platform Coverage</h2>",
+            _html_table(
+                [
+                    "Platform",
+                    "Observed positions",
+                    "Questions",
+                    "Unique prompts",
+                    "Selected",
+                    "Local submits",
+                    "Selector misses",
+                    "Closed",
+                    "Remaining answers",
+                ],
+                [
+                    [
+                        row.get("platform"),
+                        row.get("positions_observed"),
+                        row.get("question_items"),
+                        row.get("unique_prompt_count"),
+                        row.get("selected_positions"),
+                        row.get("selected_local_synthetic_submits"),
+                        row.get("selected_selector_misses"),
+                        row.get("closed_postings"),
+                        row.get("remaining_answer_inputs"),
+                    ]
+                    for row in report.get("platforms", [])
+                ],
+            ),
+            "</section>",
+            "<section><h2>Question Categories By Platform</h2>",
+            _html_table(
+                ["Platform", "Category", "Question items", "Required", "Automation actions", "Sample labels"],
+                [
+                    [
+                        row.get("platform"),
+                        row.get("category"),
+                        row.get("question_items"),
+                        row.get("required_question_items"),
+                        row.get("automation_actions"),
+                        "\n".join(_string_list(row.get("sample_labels"))[:5]),
+                    ]
+                    for row in report.get("category_rows", [])
+                ],
+            ),
+            "</section>",
+            "<section><h2>Selected 100 Rehearsal</h2>",
+            _html_table(
+                [
+                    "Index",
+                    "Platform",
+                    "Company",
+                    "Title",
+                    "Role family",
+                    "Prompts",
+                    "Manifest",
+                    "Synthetic outcome",
+                    "Local submits",
+                    "Selector misses",
+                    "Apply URL",
+                ],
+                [
+                    [
+                        row.get("index"),
+                        row.get("platform"),
+                        row.get("company"),
+                        row.get("title"),
+                        row.get("role_family"),
+                        row.get("prompt_count"),
+                        row.get("manifest_status"),
+                        row.get("local_synthetic_submit_outcome"),
+                        row.get("local_synthetic_submit_count"),
+                        row.get("local_synthetic_submit_selector_miss_count"),
+                        row.get("apply_url"),
+                    ]
+                    for row in report.get("selected_positions", [])
+                ],
+            ),
+            "</section>",
+            "<section><h2>Final Answer Intake</h2>",
+            _html_table(
+                ["Alias", "Input ID", "Status", "High risk", "Prompts", "Question"],
+                [
+                    [
+                        row.get("alias"),
+                        row.get("input_id"),
+                        row.get("status"),
+                        row.get("high_risk"),
+                        row.get("required_count"),
+                        row.get("question"),
+                    ]
+                    for row in report.get("final_answer_intake", [])
+                ],
+            ),
+            "</section>",
+            "<section><h2>Policy</h2>",
+            _html_key_value_table(report.get("policy") or {}),
+            "</section>",
+            "</main>",
+            "</body>",
+            "</html>",
+        ]
+    )
+
+
 def build_question_export(
     gaps: dict[str, Any],
     readiness: dict[str, Any],

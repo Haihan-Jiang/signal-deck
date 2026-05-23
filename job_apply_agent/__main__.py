@@ -68,6 +68,7 @@ from .core import (
     write_pre_submit_review,
     write_question_export,
     write_position_readiness_report,
+    write_platform_question_playbook,
     write_research_coverage_gate,
     write_synthetic_unblocker_proof,
     write_synthetic_apply_execution,
@@ -303,6 +304,15 @@ DEFAULT_CANDIDATE_OBSERVATION_JSON = Path(__file__).with_name("outbox") / "candi
 DEFAULT_CANDIDATE_OBSERVATION_MARKDOWN = Path(__file__).with_name("outbox") / "candidate_observation_latest.md"
 DEFAULT_QUESTION_EXPORT_XLSX = Path(__file__).with_name("outbox") / "application_questions_latest.xlsx"
 DEFAULT_QUESTION_EXPORT_HTML = Path(__file__).with_name("outbox") / "application_questions_latest.html"
+DEFAULT_PLATFORM_QUESTION_PLAYBOOK_JSON = (
+    Path(__file__).with_name("outbox") / "platform_question_playbook_latest.json"
+)
+DEFAULT_PLATFORM_QUESTION_PLAYBOOK_MARKDOWN = (
+    Path(__file__).with_name("outbox") / "platform_question_playbook_latest.md"
+)
+DEFAULT_PLATFORM_QUESTION_PLAYBOOK_HTML = (
+    Path(__file__).with_name("outbox") / "platform_question_playbook_latest.html"
+)
 DEFAULT_GOAL_AUDIT_JSON = Path(__file__).with_name("outbox") / "goal_readiness_audit_latest.json"
 DEFAULT_GOAL_AUDIT_MARKDOWN = Path(__file__).with_name("outbox") / "goal_readiness_audit_latest.md"
 DEFAULT_PERSONAL_PROFILE = Path(__file__).with_name("outbox") / "alan_jiang_profile.json"
@@ -1516,6 +1526,25 @@ def main() -> int:
     export_questions_parser.add_argument("--xlsx-output", default=str(DEFAULT_QUESTION_EXPORT_XLSX))
     export_questions_parser.add_argument("--html-output", default=str(DEFAULT_QUESTION_EXPORT_HTML))
 
+    platform_playbook_parser = subparsers.add_parser(
+        "platform-question-playbook",
+        help="summarize per-platform question handling and 100-position rehearsal evidence",
+    )
+    platform_playbook_parser.add_argument("--research-json", default=str(DEFAULT_RESEARCH_JSON))
+    platform_playbook_parser.add_argument("--autofill-batch-json", default=str(DEFAULT_AUTOFILL_BATCH_JSON))
+    platform_playbook_parser.add_argument(
+        "--fake-position-rehearsal-json",
+        default=str(DEFAULT_FAKE_POSITION_REHEARSAL_JSON),
+    )
+    platform_playbook_parser.add_argument("--automation-handoff-json", default=str(DEFAULT_AUTOMATION_HANDOFF_JSON))
+    platform_playbook_parser.add_argument("--closed-jobs-json", default=str(DEFAULT_CLOSED_JOBS))
+    platform_playbook_parser.add_argument("--json-output", default=str(DEFAULT_PLATFORM_QUESTION_PLAYBOOK_JSON))
+    platform_playbook_parser.add_argument(
+        "--markdown-output",
+        default=str(DEFAULT_PLATFORM_QUESTION_PLAYBOOK_MARKDOWN),
+    )
+    platform_playbook_parser.add_argument("--html-output", default=str(DEFAULT_PLATFORM_QUESTION_PLAYBOOK_HTML))
+
     goal_audit_parser = subparsers.add_parser(
         "goal-audit",
         help="audit current evidence against the 100-position automation goal",
@@ -1746,6 +1775,27 @@ def main() -> int:
         print(f"Blocking prompts: {len(export.get('blocker_rows', []))}")
         print(f"Learning tasks: {len(export.get('user_questions', []))}")
         print(f"Critical inputs: {export.get('summary', {}).get('critical_input_count', 0)}")
+        return 0
+
+    if args.command == "platform-question-playbook":
+        report = write_platform_question_playbook(
+            json.loads(Path(args.research_json).read_text(encoding="utf-8")),
+            args.json_output,
+            args.markdown_output,
+            args.html_output,
+            autofill_batch=_load_optional_json(args.autofill_batch_json),
+            fake_position_rehearsal=_load_optional_json(args.fake_position_rehearsal_json),
+            automation_handoff=_load_optional_json(args.automation_handoff_json),
+            closed_jobs=_load_optional_json(args.closed_jobs_json),
+        )
+        summary = report.get("summary") or {}
+        print(f"Wrote platform question playbook JSON to {args.json_output}")
+        print(f"Wrote platform question playbook Markdown to {args.markdown_output}")
+        print(f"Wrote platform question playbook HTML to {args.html_output}")
+        print(f"Observed positions: {summary.get('observed_position_count', 0)}")
+        print(f"Selected positions: {summary.get('selected_position_count', 0)}")
+        print(f"Local synthetic submits: {summary.get('selected_local_synthetic_submit_count', 0)}")
+        print(f"Final answers missing: {summary.get('final_answer_missing_count', 0)}")
         return 0
 
     if args.command == "goal-audit":
