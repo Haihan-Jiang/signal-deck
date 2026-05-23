@@ -460,6 +460,25 @@ This uses a synthetic candidate and fake answers only, then reports whether all
 learning blockers would clear while final submit, CAPTCHA/security, and
 sensitive self-identification gates remain blocked.
 
+To test the critical-input path itself with fake candidate answers, run:
+
+```bash
+python3 -m job_apply_agent fake-critical-input-probe
+```
+
+This writes:
+
+```text
+job_apply_agent/outbox/fake_critical_input_probe_latest.json
+job_apply_agent/outbox/fake_critical_input_probe_latest.md
+job_apply_agent/outbox/fake_critical_input_answers_latest.json
+job_apply_agent/outbox/fake_critical_input_answers_latest.md
+```
+
+The fake answer file is dry-run only. `apply-critical-inputs` refuses to apply it
+without `--dry-run`, so synthetic answers cannot be written into the real
+profile or answer memory by accident.
+
 For a captured Ashby or Greenhouse form snapshot, generate an offline fill plan:
 
 ```bash

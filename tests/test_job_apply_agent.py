@@ -29,6 +29,7 @@ from job_apply_agent.core import (
     build_browser_review_record,
     build_form_fill_plan,
     build_fake_learning_probe,
+    build_fake_critical_input_probe,
     build_fake_position_rehearsal,
     build_learning_approval_pack,
     build_learning_task_template,
@@ -79,6 +80,7 @@ from job_apply_agent.core import (
     render_browser_dom_execution_plan_markdown,
     render_form_fill_plan_markdown,
     render_fake_learning_probe_markdown,
+    render_fake_critical_input_probe_markdown,
     render_fake_position_rehearsal_markdown,
     render_learning_approval_pack_markdown,
     render_learning_task_template_markdown,
@@ -111,6 +113,7 @@ from job_apply_agent.core import (
     write_browser_dom_harness,
     write_form_fill_plan,
     write_fake_learning_probe,
+    write_fake_critical_input_probe,
     write_fake_position_rehearsal,
     write_learning_approval_pack,
     write_learning_task_template,
@@ -4330,6 +4333,103 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(written["summary"]["ready_to_apply_count"], 1)
             self.assertTrue(json_output.exists())
             self.assertTrue(markdown_output.exists())
+
+    def test_fake_critical_input_probe_is_dry_run_only(self) -> None:
+        learning_tasks = {
+            "tasks": [
+                {
+                    "group_key": "profile:zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "recommended_storage": "profile",
+                    "labels": ["Zip Code"],
+                    "platforms": ["Ashby"],
+                    "required_count": 4,
+                    "persist_allowed": True,
+                },
+                {
+                    "group_key": "answer_memory:citizenship_status:default_policy",
+                    "question": "What citizenship answers should automation use?",
+                    "recommended_storage": "answer_memory",
+                    "answer_scope": "category_default_policy",
+                    "suggested_answer_source": "requires_exact_user_confirmation",
+                    "approval_risk": "high",
+                    "labels": ["Are you a U.S. citizen?"],
+                    "platforms": ["Greenhouse"],
+                    "required_count": 2,
+                    "persist_allowed": True,
+                },
+                {
+                    "group_key": "supervised_confirmation:policy_acknowledgement",
+                    "question": "May automation mark applicant privacy acknowledgement?",
+                    "recommended_storage": "supervised_confirmation",
+                    "answer_scope": "supervised_only",
+                    "labels": ["Privacy policy"],
+                    "platforms": ["Lever"],
+                    "required_count": 1,
+                    "persist_allowed": False,
+                },
+            ],
+        }
+        pack = build_learning_approval_pack(learning_tasks, {})
+        report = build_fake_critical_input_probe(pack)
+
+        self.assertFalse(report["real_platform_submission"])
+        self.assertFalse(report["writes_real_profile_or_memory"])
+        self.assertEqual(report["fake_answered_count"], 2)
+        self.assertEqual(report["ready_to_apply_count"], 2)
+        self.assertEqual(report["supervised_only_count"], 1)
+        self.assertTrue(report["fake_answers"]["fake_candidate_only"])
+        self.assertIn("Fake Critical Input Probe", render_fake_critical_input_probe_markdown(report))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pack_path = Path(temp_dir) / "approval_pack.json"
+            fake_answers_path = Path(temp_dir) / "fake_answers.json"
+            profile_path = Path(temp_dir) / "profile.json"
+            memory_path = Path(temp_dir) / "memory.json"
+            report_json = Path(temp_dir) / "fake_probe.json"
+            report_md = Path(temp_dir) / "fake_probe.md"
+            answers_md = Path(temp_dir) / "fake_answers.md"
+            pack_path.write_text(json.dumps(pack), encoding="utf-8")
+            profile_path.write_text(
+                json.dumps(
+                    {
+                        "candidate": {"name": "Real User Placeholder"},
+                        "preferences": {},
+                        "resume_facts": {},
+                        "question_answers": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            written = write_fake_critical_input_probe(
+                pack,
+                report_json,
+                report_md,
+                fake_answers_path,
+                answers_md,
+            )
+            self.assertEqual(written["ready_to_apply_count"], 2)
+            self.assertTrue(report_json.exists())
+            self.assertTrue(fake_answers_path.exists())
+
+            dry_run = apply_critical_input_answers(
+                pack_path,
+                profile_path,
+                memory_path,
+                answers_path=fake_answers_path,
+                dry_run=True,
+            )
+            self.assertEqual(dry_run["approved_input_count"], 2)
+            self.assertFalse(memory_path.exists())
+
+            with self.assertRaises(ValueError):
+                apply_critical_input_answers(
+                    pack_path,
+                    profile_path,
+                    memory_path,
+                    answers_path=fake_answers_path,
+                    dry_run=False,
+                )
 
     def test_fake_learning_probe_clears_learning_blockers_without_real_submission(self) -> None:
         research = {

@@ -4160,6 +4160,128 @@ def build_critical_input_answer_template(approval_pack: dict[str, Any]) -> dict[
     }
 
 
+def build_fake_critical_input_probe(approval_pack: dict[str, Any]) -> dict[str, Any]:
+    fake_answers = build_critical_input_answer_template(approval_pack)
+    fake_answers["source"] = "fake_critical_input_probe"
+    fake_answers["fake_candidate_only"] = True
+    fake_answers["instructions"] = (
+        "Synthetic answers for dry-run verification only. Do not apply to a real profile."
+    )
+    for item in fake_answers.get("answers", []):
+        if not isinstance(item, dict):
+            continue
+        if item.get("input_type") == "supervised_browser_review_only":
+            item["approval_decision"] = ""
+            item["user_answer"] = ""
+            continue
+        item["approval_decision"] = "approved"
+        item["user_answer"] = _fake_critical_input_answer(item)
+    status = build_critical_input_status_report(approval_pack, fake_answers)
+    summary = status.get("summary") or {}
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "fake_critical_input_probe",
+        "real_platform_submission": False,
+        "writes_real_profile_or_memory": False,
+        "fake_candidate_only": True,
+        "input_count": summary.get("input_count", 0),
+        "fake_answered_count": sum(
+            1
+            for item in fake_answers.get("answers", [])
+            if isinstance(item, dict) and str(item.get("user_answer") or "").strip()
+        ),
+        "ready_to_apply_count": summary.get("ready_to_apply_count", 0),
+        "waiting_count": summary.get("waiting_count", 0),
+        "supervised_only_count": summary.get("supervised_only_count", 0),
+        "profile_ready_count": summary.get("profile_ready_count", 0),
+        "resume_fact_ready_count": summary.get("resume_fact_ready_count", 0),
+        "answer_memory_ready_count": summary.get("answer_memory_ready_count", 0),
+        "high_risk_ready_count": summary.get("high_risk_ready_count", 0),
+        "ready_for_apply_critical_inputs": summary.get("ready_for_apply_critical_inputs", False),
+        "ready_for_autofill_recheck": summary.get("ready_for_autofill_recheck", False),
+        "status_counts": status.get("status_counts", {}),
+        "status_rows": status.get("rows", []),
+        "fake_answers": fake_answers,
+        "policy": {
+            "uses_fake_candidate_only": True,
+            "dry_run_only": True,
+            "submits_real_applications": False,
+            "final_submit_remains_supervised": True,
+        },
+    }
+
+
+def write_fake_critical_input_probe(
+    approval_pack: dict[str, Any],
+    json_output: str | Path,
+    markdown_output: str | Path,
+    answers_json_output: str | Path,
+    answers_markdown_output: str | Path,
+) -> dict[str, Any]:
+    report = build_fake_critical_input_probe(approval_pack)
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    answers_json_path = Path(answers_json_output)
+    answers_markdown_path = Path(answers_markdown_output)
+    for path in [json_path, markdown_path, answers_json_path, answers_markdown_path]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(
+        json.dumps({key: value for key, value in report.items() if key != "fake_answers"}, ensure_ascii=True, indent=2)
+        + "\n",
+        encoding="utf-8",
+    )
+    markdown_path.write_text(render_fake_critical_input_probe_markdown(report), encoding="utf-8")
+    answers_json_path.write_text(
+        json.dumps(report.get("fake_answers", {}), ensure_ascii=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    answers_markdown_path.write_text(
+        render_critical_input_answer_template_markdown(report.get("fake_answers", {})),
+        encoding="utf-8",
+    )
+    return report
+
+
+def render_fake_critical_input_probe_markdown(report: dict[str, Any]) -> str:
+    lines = [
+        "# Fake Critical Input Probe",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        f"Real platform submission: {str(bool(report.get('real_platform_submission'))).lower()}",
+        f"Writes real profile or memory: {str(bool(report.get('writes_real_profile_or_memory'))).lower()}",
+        f"Inputs: {report.get('input_count', 0)}",
+        f"Fake answered: {report.get('fake_answered_count', 0)}",
+        f"Ready to apply: {report.get('ready_to_apply_count', 0)}",
+        f"Waiting: {report.get('waiting_count', 0)}",
+        f"Supervised only: {report.get('supervised_only_count', 0)}",
+        f"Ready for autofill recheck: {str(bool(report.get('ready_for_autofill_recheck'))).lower()}",
+        "",
+        "## Status Counts",
+        "",
+    ]
+    for status, count in sorted((report.get("status_counts") or {}).items()):
+        lines.append(f"- {status}: {count}")
+    lines.extend(["", "## Rows", ""])
+    for row in report.get("status_rows", [])[:80]:
+        lines.append(
+            "- {status}: {question}".format(
+                status=row.get("status"),
+                question=row.get("question") or "Unknown question",
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Policy",
+            "",
+            "- Fake answers are for dry-run verification only.",
+            "- Real profile and answer memory are not written by this probe.",
+            "- Final submit remains supervised.",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
 def write_critical_input_answer_template(
     approval_pack: dict[str, Any],
     json_output: str | Path,
@@ -4365,6 +4487,8 @@ def apply_critical_input_answers(
     answers_payload = _read_json_file(Path(answers_path)) if answers_path else None
     if answers_path and not isinstance(answers_payload, dict):
         raise ValueError("critical input answers file must be a JSON object")
+    if isinstance(answers_payload, dict) and answers_payload.get("fake_candidate_only") and not dry_run:
+        raise ValueError("fake critical input answers are dry-run only")
     if isinstance(answers_payload, dict):
         payload = _approval_pack_with_answer_template(payload, answers_payload)
     tasks_by_key = {
@@ -4605,6 +4729,33 @@ def _critical_input_status_next_action(status: str) -> str:
     if status == "supervised_only":
         return "handle in browser during supervised review; do not persist"
     return "fill user_answer and approve only if truthful and reusable"
+
+
+def _fake_critical_input_answer(item: dict[str, Any]) -> str:
+    group_key = str(item.get("group_key") or "")
+    input_type = str(item.get("input_type") or "")
+    if group_key == "resume_facts:education_grading":
+        return "Not applicable for synthetic candidate."
+    if group_key == "profile:zip_or_postal_code":
+        return "98101"
+    if "current c2c" in _normalize(str(item.get("question") or "")):
+        return "Synthetic candidate is not seeking C2C engagement."
+    if "junk food" in _normalize(str(item.get("question") or "")):
+        return "Potato chips."
+    if "restaurant" in _normalize(str(item.get("question") or "")):
+        return "Din Tai Fung."
+    if input_type == "high_risk_exact_confirmation":
+        category = _category_default_policy_from_group_key(group_key)
+        if category:
+            fake_task = {
+                "group_key": group_key,
+                "question": item.get("question"),
+                "recommended_storage": item.get("storage_after_approval") or "answer_memory",
+                "labels": item.get("labels", []),
+            }
+            return _fake_learning_answer_for_task(fake_task)
+        return "Synthetic candidate confirms the required legal answer for dry-run only."
+    return "Synthetic candidate test answer."
 
 
 def _critical_input_task_key(item: dict[str, Any]) -> str:

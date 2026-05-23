@@ -38,6 +38,7 @@ from .core import (
     write_collection_plan,
     write_form_fill_plan,
     write_fake_learning_probe,
+    write_fake_critical_input_probe,
     write_fake_position_rehearsal,
     write_learning_approval_pack,
     write_learning_task_template,
@@ -87,6 +88,10 @@ DEFAULT_CRITICAL_INPUT_ANSWERS_JSON = Path(__file__).with_name("outbox") / "crit
 DEFAULT_CRITICAL_INPUT_ANSWERS_MARKDOWN = Path(__file__).with_name("outbox") / "critical_input_answers_latest.md"
 DEFAULT_CRITICAL_INPUT_STATUS_JSON = Path(__file__).with_name("outbox") / "critical_input_status_latest.json"
 DEFAULT_CRITICAL_INPUT_STATUS_MARKDOWN = Path(__file__).with_name("outbox") / "critical_input_status_latest.md"
+DEFAULT_FAKE_CRITICAL_INPUT_PROBE_JSON = Path(__file__).with_name("outbox") / "fake_critical_input_probe_latest.json"
+DEFAULT_FAKE_CRITICAL_INPUT_PROBE_MARKDOWN = Path(__file__).with_name("outbox") / "fake_critical_input_probe_latest.md"
+DEFAULT_FAKE_CRITICAL_INPUT_ANSWERS_JSON = Path(__file__).with_name("outbox") / "fake_critical_input_answers_latest.json"
+DEFAULT_FAKE_CRITICAL_INPUT_ANSWERS_MARKDOWN = Path(__file__).with_name("outbox") / "fake_critical_input_answers_latest.md"
 DEFAULT_FAKE_LEARNING_PROBE_JSON = Path(__file__).with_name("outbox") / "fake_learning_probe_latest.json"
 DEFAULT_FAKE_LEARNING_PROBE_MARKDOWN = Path(__file__).with_name("outbox") / "fake_learning_probe_latest.md"
 DEFAULT_FAKE_POSITION_REHEARSAL_JSON = Path(__file__).with_name("outbox") / "fake_position_rehearsal_latest.json"
@@ -414,6 +419,25 @@ def main() -> int:
     apply_critical_inputs_parser.add_argument("--source", default="critical_inputs")
     apply_critical_inputs_parser.add_argument("--dry-run", action="store_true")
 
+    fake_critical_inputs_parser = subparsers.add_parser(
+        "fake-critical-input-probe",
+        help="fill critical inputs with fake candidate answers for dry-run verification only",
+    )
+    fake_critical_inputs_parser.add_argument("--approval-pack", default=str(DEFAULT_LEARNING_APPROVAL_PACK_JSON))
+    fake_critical_inputs_parser.add_argument("--json-output", default=str(DEFAULT_FAKE_CRITICAL_INPUT_PROBE_JSON))
+    fake_critical_inputs_parser.add_argument(
+        "--markdown-output",
+        default=str(DEFAULT_FAKE_CRITICAL_INPUT_PROBE_MARKDOWN),
+    )
+    fake_critical_inputs_parser.add_argument(
+        "--answers-json-output",
+        default=str(DEFAULT_FAKE_CRITICAL_INPUT_ANSWERS_JSON),
+    )
+    fake_critical_inputs_parser.add_argument(
+        "--answers-markdown-output",
+        default=str(DEFAULT_FAKE_CRITICAL_INPUT_ANSWERS_MARKDOWN),
+    )
+
     fake_learning_probe_parser = subparsers.add_parser(
         "fake-learning-probe",
         help="apply fake non-user learning answers in memory and report remaining blockers",
@@ -609,6 +633,14 @@ def main() -> int:
         default=str(DEFAULT_SYNTHETIC_BROWSER_EXEC_JSON),
     )
     export_questions_parser.add_argument("--fake-learning-probe-json", default=str(DEFAULT_FAKE_LEARNING_PROBE_JSON))
+    export_questions_parser.add_argument(
+        "--fake-critical-input-probe-json",
+        default=str(DEFAULT_FAKE_CRITICAL_INPUT_PROBE_JSON),
+    )
+    export_questions_parser.add_argument(
+        "--fake-critical-input-answers-json",
+        default=str(DEFAULT_FAKE_CRITICAL_INPUT_ANSWERS_JSON),
+    )
     export_questions_parser.add_argument("--fake-position-rehearsal-json", default=str(DEFAULT_FAKE_POSITION_REHEARSAL_JSON))
     export_questions_parser.add_argument(
         "--learning-approval-pack-json",
@@ -750,6 +782,8 @@ def main() -> int:
                     "Learning tasks": args.learning_tasks_json,
                     "Synthetic browser execution": args.synthetic_browser_exec_json,
                     "Fake learning probe": args.fake_learning_probe_json,
+                    "Fake critical input probe": args.fake_critical_input_probe_json,
+                    "Fake critical input answers": args.fake_critical_input_answers_json,
                     "Fake position rehearsal": args.fake_position_rehearsal_json,
                     "Learning approval pack": args.learning_approval_pack_json,
                     "Answer memory": args.answer_memory_json,
@@ -1089,6 +1123,27 @@ def main() -> int:
         print(f"Answer memory updates: {len(result.get('answer_memory_updates', []))}")
         print(f"Skipped inputs: {result.get('skipped_input_count', 0)}")
         print(f"Skipped writes: {len(result.get('skipped', []))}")
+        return 0
+
+    if args.command == "fake-critical-input-probe":
+        approval_pack_path = Path(args.approval_pack)
+        if not approval_pack_path.exists():
+            raise FileNotFoundError(f"approval pack not found: {args.approval_pack}")
+        report = write_fake_critical_input_probe(
+            json.loads(approval_pack_path.read_text(encoding="utf-8")),
+            args.json_output,
+            args.markdown_output,
+            args.answers_json_output,
+            args.answers_markdown_output,
+        )
+        print(f"Wrote fake critical input probe JSON to {args.json_output}")
+        print(f"Wrote fake critical input probe Markdown to {args.markdown_output}")
+        print(f"Wrote fake critical input answers JSON to {args.answers_json_output}")
+        print(f"Wrote fake critical input answers Markdown to {args.answers_markdown_output}")
+        print(f"Fake answered: {report.get('fake_answered_count', 0)}")
+        print(f"Ready to apply: {report.get('ready_to_apply_count', 0)}")
+        print(f"Waiting: {report.get('waiting_count', 0)}")
+        print(f"Supervised only: {report.get('supervised_only_count', 0)}")
         return 0
 
     if args.command == "fake-learning-probe":
