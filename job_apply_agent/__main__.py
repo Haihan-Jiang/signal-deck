@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
+import subprocess
+import sys
 import threading
+import time
 import webbrowser
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -223,6 +227,12 @@ DEFAULT_FINAL_ANSWER_BLOCKERS_MARKDOWN = (
 )
 DEFAULT_FINAL_ANSWER_REPLY_TEMPLATE_TEXT = (
     Path(__file__).with_name("outbox") / "final_answer_reply_template_latest.txt"
+)
+DEFAULT_FINAL_ANSWER_AUTOPILOT_JSON = (
+    Path(__file__).with_name("outbox") / "final_answer_autopilot_latest.json"
+)
+DEFAULT_FINAL_ANSWER_AUTOPILOT_MARKDOWN = (
+    Path(__file__).with_name("outbox") / "final_answer_autopilot_latest.md"
 )
 DEFAULT_FINAL_ANSWER_REPLY_JSON = (
     Path(__file__).with_name("outbox") / "final_answer_reply_intake_latest.json"
@@ -1207,6 +1217,55 @@ def main() -> int:
         default=str(DEFAULT_POST_ANSWER_PIPELINE_MARKDOWN),
     )
     final_answer_reply_parser.add_argument("--fail-on-not-ready", action="store_true")
+
+    final_answer_autopilot_parser = subparsers.add_parser(
+        "final-answer-autopilot",
+        help="watch or check the final-answer reply file and run the post-answer pipeline once it is filled",
+    )
+    final_answer_autopilot_parser.add_argument(
+        "--reply-file",
+        default=str(DEFAULT_FINAL_ANSWER_REPLY_TEMPLATE_TEXT),
+    )
+    final_answer_autopilot_parser.add_argument(
+        "--template",
+        default=str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON),
+    )
+    final_answer_autopilot_parser.add_argument(
+        "--unblockers",
+        default=str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_JSON),
+    )
+    final_answer_autopilot_parser.add_argument("--watch", action="store_true")
+    final_answer_autopilot_parser.add_argument("--interval", type=float, default=5.0)
+    final_answer_autopilot_parser.add_argument(
+        "--timeout",
+        type=float,
+        default=0.0,
+        help="seconds to wait in watch mode; 0 waits indefinitely",
+    )
+    final_answer_autopilot_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="validate readiness and write the autopilot report without running the pipeline",
+    )
+    final_answer_autopilot_parser.add_argument(
+        "--no-run-post-answer-pipeline",
+        action="store_true",
+        help="only validate the filled reply file; do not run the post-answer pipeline",
+    )
+    final_answer_autopilot_parser.add_argument("--apply", action="store_true")
+    final_answer_autopilot_parser.add_argument("--live-check", action="store_true")
+    final_answer_autopilot_parser.add_argument("--live-check-limit", type=int, default=100)
+    final_answer_autopilot_parser.add_argument("--live-check-timeout", type=float, default=25.0)
+    final_answer_autopilot_parser.add_argument("--include-values", action="store_true")
+    final_answer_autopilot_parser.add_argument("--open-browser", action="store_true")
+    final_answer_autopilot_parser.add_argument("--open-limit", type=int, default=100)
+    final_answer_autopilot_parser.add_argument("--review-log", default=str(DEFAULT_REVIEW_LOG))
+    final_answer_autopilot_parser.add_argument("--json-output", default=str(DEFAULT_FINAL_ANSWER_AUTOPILOT_JSON))
+    final_answer_autopilot_parser.add_argument(
+        "--markdown-output",
+        default=str(DEFAULT_FINAL_ANSWER_AUTOPILOT_MARKDOWN),
+    )
+    final_answer_autopilot_parser.add_argument("--fail-on-not-ready", action="store_true")
 
     resume_after_answers_parser = subparsers.add_parser(
         "resume-after-answers",
@@ -3187,6 +3246,9 @@ def main() -> int:
         args.review_log = str(DEFAULT_REVIEW_LOG)
         args.fail_on_not_ready = True
 
+    if args.command == "final-answer-autopilot":
+        return _run_final_answer_autopilot(args)
+
     if args.command == "final-answer-reply":
         if bool(args.reply_text) == bool(args.reply_file):
             raise ValueError("provide exactly one of --reply-text or --reply-file")
@@ -4146,6 +4208,263 @@ def main() -> int:
             f"score={submission['score']} id={submission['submission_id']}"
         )
     return 0
+
+
+def _final_answer_reply_placeholder_count(reply_text: str) -> int:
+    count = 0
+    for line in reply_text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if "<fill>" in stripped:
+            count += 1
+    return count
+
+
+def _final_answer_autopilot_validate_command(args: argparse.Namespace) -> list[str]:
+    return [
+        sys.executable,
+        "-m",
+        "job_apply_agent",
+        "final-answer-reply",
+        "--reply-file",
+        str(args.reply_file),
+        "--template",
+        str(args.template),
+        "--unblockers",
+        str(args.unblockers),
+        "--validate-only",
+        "--fail-on-not-ready",
+    ]
+
+
+def _final_answer_autopilot_pipeline_command(args: argparse.Namespace) -> list[str]:
+    command = [
+        sys.executable,
+        "-m",
+        "job_apply_agent",
+        "final-answer-reply",
+        "--reply-file",
+        str(args.reply_file),
+        "--template",
+        str(args.template),
+        "--unblockers",
+        str(args.unblockers),
+        "--run-post-answer-pipeline",
+        "--fail-on-not-ready",
+    ]
+    if args.apply:
+        command.append("--post-answer-apply")
+    if args.live_check:
+        command.extend(
+            [
+                "--post-answer-live-check",
+                "--post-answer-live-check-limit",
+                str(args.live_check_limit),
+                "--post-answer-live-check-timeout",
+                str(args.live_check_timeout),
+            ]
+        )
+    if args.include_values:
+        command.append("--post-answer-include-values")
+    if args.open_browser:
+        command.extend(["--post-answer-open-browser", "--post-answer-open-limit", str(args.open_limit)])
+    if args.review_log:
+        command.extend(["--review-log", str(args.review_log)])
+    return command
+
+
+def _write_final_answer_autopilot_report(
+    report: dict[str, object],
+    json_output: str | Path,
+    markdown_output: str | Path,
+) -> None:
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(_render_final_answer_autopilot_markdown(report), encoding="utf-8")
+
+
+def _render_final_answer_autopilot_markdown(report: dict[str, object]) -> str:
+    lines = [
+        "# Final Answer Autopilot",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        f"Status: {report.get('status')}",
+        f"Reply file: `{report.get('reply_file')}`",
+        f"Attempts: {report.get('attempt_count', 0)}",
+        f"Placeholder lines remaining: {report.get('placeholder_line_count', 0)}",
+        f"Validate exit code: {report.get('validate_exit_code', '')}",
+        f"Pipeline exit code: {report.get('pipeline_exit_code', '')}",
+        "",
+        "## Commands",
+        "",
+        f"- validate: `{report.get('validate_command', '')}`",
+        f"- pipeline: `{report.get('pipeline_command', '')}`",
+        "",
+        "## Policy",
+        "",
+        "- answer text stored in report: false",
+        "- Telegram answer text sent: false",
+        f"- real applications submitted: {str(bool(report.get('submits_real_applications'))).lower()}",
+        "- final submit remains supervised: true",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _final_answer_autopilot_base_report(
+    args: argparse.Namespace,
+    *,
+    status: str,
+    attempt_count: int,
+    placeholder_line_count: int,
+    validate_command: list[str],
+    pipeline_command: list[str],
+    validate_exit_code: int | None = None,
+    pipeline_exit_code: int | None = None,
+    reason: str = "",
+) -> dict[str, object]:
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "final_answer_autopilot",
+        "status": status,
+        "reason": reason,
+        "reply_file": str(args.reply_file),
+        "watch": bool(args.watch),
+        "dry_run": bool(args.dry_run),
+        "run_post_answer_pipeline": not bool(args.no_run_post_answer_pipeline),
+        "apply_requested": bool(args.apply),
+        "live_check_requested": bool(args.live_check),
+        "include_values": bool(args.include_values),
+        "open_browser_requested": bool(args.open_browser),
+        "attempt_count": attempt_count,
+        "placeholder_line_count": placeholder_line_count,
+        "validate_command": shlex.join(validate_command),
+        "pipeline_command": shlex.join(pipeline_command),
+        "validate_exit_code": validate_exit_code,
+        "pipeline_exit_code": pipeline_exit_code,
+        "stores_answer_text_in_report": False,
+        "sends_answer_text_to_telegram": False,
+        "submits_real_applications": False,
+        "final_submit_remains_supervised": True,
+    }
+
+
+def _run_final_answer_autopilot(args: argparse.Namespace) -> int:
+    reply_path = Path(args.reply_file)
+    validate_command = _final_answer_autopilot_validate_command(args)
+    pipeline_command = _final_answer_autopilot_pipeline_command(args)
+    start = time.monotonic()
+    attempt_count = 0
+    interval = max(float(args.interval or 0), 0.25)
+    timeout = max(float(args.timeout or 0), 0.0)
+    while True:
+        attempt_count += 1
+        if not reply_path.exists():
+            report = _final_answer_autopilot_base_report(
+                args,
+                status="waiting_for_reply_file",
+                attempt_count=attempt_count,
+                placeholder_line_count=0,
+                validate_command=validate_command,
+                pipeline_command=pipeline_command,
+                reason="reply file does not exist",
+            )
+            _write_final_answer_autopilot_report(report, args.json_output, args.markdown_output)
+            if not args.watch:
+                print(f"Final answer autopilot: {report['status']}")
+                return 2 if args.fail_on_not_ready else 0
+        else:
+            reply_text = reply_path.read_text(encoding="utf-8")
+            placeholder_count = _final_answer_reply_placeholder_count(reply_text)
+            if placeholder_count:
+                report = _final_answer_autopilot_base_report(
+                    args,
+                    status="waiting_for_filled_reply",
+                    attempt_count=attempt_count,
+                    placeholder_line_count=placeholder_count,
+                    validate_command=validate_command,
+                    pipeline_command=pipeline_command,
+                    reason="reply file still contains <fill> placeholders",
+                )
+                _write_final_answer_autopilot_report(report, args.json_output, args.markdown_output)
+                if not args.watch:
+                    print(f"Final answer autopilot: {report['status']}")
+                    print(f"Placeholder lines remaining: {placeholder_count}")
+                    return 2 if args.fail_on_not_ready else 0
+            else:
+                validate_result = subprocess.run(
+                    validate_command,
+                    cwd=Path.cwd(),
+                    check=False,
+                    text=True,
+                    capture_output=True,
+                )
+                if validate_result.stdout:
+                    print(validate_result.stdout, end="")
+                if validate_result.stderr:
+                    print(validate_result.stderr, end="", file=sys.stderr)
+                if validate_result.returncode != 0:
+                    report = _final_answer_autopilot_base_report(
+                        args,
+                        status="validation_failed",
+                        attempt_count=attempt_count,
+                        placeholder_line_count=0,
+                        validate_command=validate_command,
+                        pipeline_command=pipeline_command,
+                        validate_exit_code=validate_result.returncode,
+                        reason="filled reply did not pass final-answer validation",
+                    )
+                    _write_final_answer_autopilot_report(report, args.json_output, args.markdown_output)
+                    print(f"Final answer autopilot: {report['status']}")
+                    return validate_result.returncode if args.fail_on_not_ready else 0
+                if args.dry_run or args.no_run_post_answer_pipeline:
+                    report = _final_answer_autopilot_base_report(
+                        args,
+                        status="validated_ready",
+                        attempt_count=attempt_count,
+                        placeholder_line_count=0,
+                        validate_command=validate_command,
+                        pipeline_command=pipeline_command,
+                        validate_exit_code=validate_result.returncode,
+                        reason="dry run or pipeline disabled",
+                    )
+                    _write_final_answer_autopilot_report(report, args.json_output, args.markdown_output)
+                    print(f"Final answer autopilot: {report['status']}")
+                    return 0
+                pipeline_result = subprocess.run(
+                    pipeline_command,
+                    cwd=Path.cwd(),
+                    check=False,
+                    text=True,
+                    capture_output=True,
+                )
+                if pipeline_result.stdout:
+                    print(pipeline_result.stdout, end="")
+                if pipeline_result.stderr:
+                    print(pipeline_result.stderr, end="", file=sys.stderr)
+                report = _final_answer_autopilot_base_report(
+                    args,
+                    status="pipeline_complete" if pipeline_result.returncode == 0 else "pipeline_failed",
+                    attempt_count=attempt_count,
+                    placeholder_line_count=0,
+                    validate_command=validate_command,
+                    pipeline_command=pipeline_command,
+                    validate_exit_code=validate_result.returncode,
+                    pipeline_exit_code=pipeline_result.returncode,
+                    reason="pipeline command finished",
+                )
+                _write_final_answer_autopilot_report(report, args.json_output, args.markdown_output)
+                print(f"Final answer autopilot: {report['status']}")
+                return pipeline_result.returncode if args.fail_on_not_ready else 0
+        if not args.watch:
+            return 2 if args.fail_on_not_ready else 0
+        if timeout and time.monotonic() - start >= timeout:
+            print("Final answer autopilot: timed out waiting for filled reply")
+            return 2 if args.fail_on_not_ready else 0
+        time.sleep(interval)
 
 
 def _run_post_answer_pipeline(args: argparse.Namespace) -> int:

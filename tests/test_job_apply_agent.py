@@ -7479,6 +7479,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("final_answer_reply_template_latest.txt", report["action_pack"]["reply_file"])
         self.assertIn("--validate-only", report["action_pack"]["safe_validate_command"])
         self.assertIn("--run-post-answer-pipeline", report["action_pack"]["safe_run_command"])
+        self.assertIn("final-answer-autopilot", report["action_pack"]["autopilot_command"])
         self.assertFalse(report["action_pack"]["stores_answer_text_in_report"])
         self.assertFalse(report["action_pack"]["sends_answer_text_to_telegram"])
         self.assertFalse(report["action_pack"]["submits_real_applications"])
@@ -7502,6 +7503,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("## One-Reply Action Pack", markdown)
         self.assertIn("run post-answer pipeline", markdown)
         self.assertIn("--run-post-answer-pipeline", markdown)
+        self.assertIn("watch and auto-run when filled", markdown)
         self.assertIn("## Reply Template", markdown)
         self.assertIn("citizenship_status\uff1a<fill>", markdown)
         self.assertIn("\u786e\u8ba4", markdown)
@@ -7765,6 +7767,105 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertIn("--reply-text", resume_help.stdout)
             self.assertIn("--reply-file", resume_help.stdout)
             self.assertIn("--validate-only", resume_help.stdout)
+
+    def test_final_answer_autopilot_waits_for_unfilled_reply_template(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            reply_path = root / "reply.txt"
+            report_path = root / "autopilot.json"
+            markdown_path = root / "autopilot.md"
+            reply_path.write_text(
+                "# comment with <fill> should not count\nzip_or_postal_code：<fill>\n",
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "job_apply_agent",
+                    "final-answer-autopilot",
+                    "--reply-file",
+                    str(reply_path),
+                    "--json-output",
+                    str(report_path),
+                    "--markdown-output",
+                    str(markdown_path),
+                    "--dry-run",
+                    "--fail-on-not-ready",
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 2)
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "waiting_for_filled_reply")
+            self.assertEqual(report["placeholder_line_count"], 1)
+            self.assertFalse(report["stores_answer_text_in_report"])
+            self.assertIn("Final Answer Autopilot", markdown_path.read_text(encoding="utf-8"))
+
+    def test_final_answer_autopilot_validates_filled_reply_without_storing_answer_text(self) -> None:
+        unblockers = {
+            "unblockers": [
+                {
+                    "input_id": "profile_zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "high_risk": False,
+                    "required_count": 1,
+                }
+            ]
+        }
+        template = build_final_answer_intake_template(unblockers)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            reply_path = root / "reply.txt"
+            template_path = root / "template.json"
+            unblockers_path = root / "unblockers.json"
+            report_path = root / "autopilot.json"
+            markdown_path = root / "autopilot.md"
+            reply_path.write_text("zip_or_postal_code：98004\n", encoding="utf-8")
+            template_path.write_text(json.dumps(template, ensure_ascii=True, indent=2), encoding="utf-8")
+            unblockers_path.write_text(json.dumps(unblockers, ensure_ascii=True, indent=2), encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "job_apply_agent",
+                    "final-answer-autopilot",
+                    "--reply-file",
+                    str(reply_path),
+                    "--template",
+                    str(template_path),
+                    "--unblockers",
+                    str(unblockers_path),
+                    "--json-output",
+                    str(report_path),
+                    "--markdown-output",
+                    str(markdown_path),
+                    "--dry-run",
+                    "--fail-on-not-ready",
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report_text = report_path.read_text(encoding="utf-8")
+            report = json.loads(report_text)
+            self.assertEqual(report["status"], "validated_ready")
+            self.assertEqual(report["validate_exit_code"], 0)
+            self.assertEqual(report["placeholder_line_count"], 0)
+            self.assertFalse(report["stores_answer_text_in_report"])
+            self.assertFalse(report["sends_answer_text_to_telegram"])
+            self.assertFalse(report["submits_real_applications"])
+            self.assertNotIn("98004", report_text)
+            self.assertNotIn("98004", markdown_path.read_text(encoding="utf-8"))
 
     def test_final_answer_reply_accepts_chinese_colon_and_confirmations(self) -> None:
         unblockers = {
