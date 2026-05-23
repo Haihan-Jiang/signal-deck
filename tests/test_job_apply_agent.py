@@ -279,6 +279,9 @@ class JobApplyAgentTests(unittest.TestCase):
             question_answers={
                 "start_date": "I can start in about two months.",
                 "ai_application_disclosure": "Yes",
+                "compensation_currency": "USD",
+                "policy_acknowledgement": "Yes, I acknowledge.",
+                "referral_contact": "N/A - no specific employee referral.",
             },
         )
         job = {
@@ -288,6 +291,12 @@ class JobApplyAgentTests(unittest.TestCase):
                 "Did AI complete or submit this application?",
                 "Are you actively looking for a job, or just exploring future opportunities?",
                 "When would you like to hear back from us regarding potential opportunities?",
+                "If someone at SEON referred you, who should we thank?",
+                "If someone referred you, please add note their name below",
+                "I acknowledge SEON's Recruitment Privacy Notice and understand how my data will be used for recruitment.",
+                "This role does not require active security clearance at the time of hiring, but candidates must be eligible and willing to obtain company-sponsored security clearance after starting. Are you willing and able to meet this requirement?",
+                "What aspects of startup culture resonate with you, and how do you believe they align with your working style?",
+                "What aspects of the cryptocurrency industry appeal to you, and how do they align with your career goals?",
             ],
         }
         draft = build_application_draft(profile, job)
@@ -306,6 +315,38 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(
             draft.answers["When would you like to hear back from us regarding potential opportunities?"],
             "As soon as convenient for the recruiting team.",
+        )
+        self.assertEqual(
+            draft.answers["If someone at SEON referred you, who should we thank?"],
+            "N/A - no specific employee referral.",
+        )
+        self.assertEqual(
+            draft.answers["If someone referred you, please add note their name below"],
+            "N/A - no specific employee referral.",
+        )
+        self.assertEqual(
+            draft.answers[
+                "I acknowledge SEON's Recruitment Privacy Notice and understand how my data will be used for recruitment."
+            ],
+            "Yes, I acknowledge.",
+        )
+        self.assertNotEqual(
+            draft.answers[
+                "This role does not require active security clearance at the time of hiring, but candidates must be eligible and willing to obtain company-sponsored security clearance after starting. Are you willing and able to meet this requirement?"
+            ],
+            "Yes, I will now or in the future require visa sponsorship or a visa transfer.",
+        )
+        self.assertNotEqual(
+            draft.answers[
+                "What aspects of startup culture resonate with you, and how do you believe they align with your working style?"
+            ],
+            "I can start in about two months.",
+        )
+        self.assertNotEqual(
+            draft.answers[
+                "What aspects of the cryptocurrency industry appeal to you, and how do they align with your career goals?"
+            ],
+            "USD",
         )
 
     def test_pipeline_writes_dry_run_submission(self) -> None:
@@ -1161,6 +1202,10 @@ class JobApplyAgentTests(unittest.TestCase):
             "referral_contact",
         )
         self.assertEqual(
+            classify_application_prompt("If someone at SEON referred you, who should we thank?").category,
+            "referral_contact",
+        )
+        self.assertEqual(
             classify_application_prompt("Where are you currently based?").category,
             "profile_identity",
         )
@@ -1220,6 +1265,16 @@ class JobApplyAgentTests(unittest.TestCase):
         )
         self.assertEqual(
             classify_application_prompt("Do you currently hold an active security clearance?").category,
+            "security_clearance",
+        )
+        self.assertEqual(
+            classify_application_prompt(
+                "This role does not require active security clearance at the time of hiring, but candidates must be eligible and willing to obtain company-sponsored security clearance after starting. Are you willing and able to meet this requirement?"
+            ).category,
+            "security_clearance",
+        )
+        self.assertEqual(
+            classify_application_prompt("What is the Sponsoring Agency of your Security Clearnance").category,
             "security_clearance",
         )
         self.assertEqual(

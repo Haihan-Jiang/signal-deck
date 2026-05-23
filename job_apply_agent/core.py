@@ -1119,6 +1119,28 @@ def classify_application_prompt(
     if any(
         term in text
         for term in [
+            "security clearance",
+            "clearance level",
+            "dod clearance",
+            "active clearance",
+            "clearance question",
+            "active security question",
+            "clearance you hold",
+            "sponsoring agency of your security",
+            "company sponsored security clearance",
+            "scif",
+            "secure government facility",
+        ]
+    ):
+        return ApplicationPromptClassification(
+            "security_clearance",
+            "human_review_required",
+            "work_eligibility",
+            "security_clearance_requires_confirmation",
+        )
+    if any(
+        term in text
+        for term in [
             "sponsor",
             "sponsorship",
             "immigration",
@@ -1178,26 +1200,6 @@ def classify_application_prompt(
             "human_review_required",
             "work_eligibility",
             "citizenship_or_residency_requires_confirmation",
-        )
-    if any(
-        term in text
-        for term in [
-            "security clearance",
-            "clearance level",
-            "dod clearance",
-            "active clearance",
-            "clearance question",
-            "active security question",
-            "clearance you hold",
-            "scif",
-            "secure government facility",
-        ]
-    ):
-        return ApplicationPromptClassification(
-            "security_clearance",
-            "human_review_required",
-            "work_eligibility",
-            "security_clearance_requires_confirmation",
         )
     if any(
         term in text
@@ -1502,6 +1504,13 @@ def classify_application_prompt(
             "human_review_required",
             "credential",
             "professional_license_requires_confirmation",
+        )
+    if any(term in text for term in ["referral", "referred by", "referred you", "who should we thank"]):
+        return ApplicationPromptClassification(
+            "referral_contact",
+            "auto_answer_from_memory",
+            "standard_preference",
+            "standard_referral_contact_answer",
         )
     if any(
         term in text
@@ -2101,13 +2110,6 @@ def classify_application_prompt(
             "auto_answer_from_memory",
             "standard_preference",
             "standard_referral_source_answer",
-        )
-    if any(term in text for term in ["referral", "referred by", "referred you", "who should we thank"]):
-        return ApplicationPromptClassification(
-            "referral_contact",
-            "auto_answer_from_memory",
-            "standard_preference",
-            "standard_referral_contact_answer",
         )
     if any(
         term in text
@@ -18058,10 +18060,20 @@ def _direct_answer(profile: CandidateProfile, normalized_question: str) -> str |
             "right to work",
             "work eligibility status",
         ],
-        "sponsorship": ["sponsor", "sponsorship", "visa", "immigration assistance"],
+        "sponsorship": [
+            "visa sponsorship",
+            "require sponsorship",
+            "requires sponsorship",
+            "need sponsorship",
+            "needs sponsorship",
+            "require visa",
+            "need visa",
+            "visa",
+            "immigration assistance",
+        ],
         "compensation": ["salary", "compensation", "pay", "ctc", "combien tu vas gagner"],
         "compensation_currency": ["currency", "preferred currency"],
-        "start_date": ["start", "available", "availability", "notice period", "notice", "commence"],
+        "start_date": ["start", "available", "availability", "notice period", "commence"],
         "relocation": ["relocat"],
         "remote_preference": ["remote-friendly", "remote friendly", "remote work", "work remotely"],
         "onsite_hybrid": ["onsite", "on-site", "in office", "in-office", "hybrid", "office"],
@@ -18108,7 +18120,7 @@ def _direct_answer(profile: CandidateProfile, normalized_question: str) -> str |
             "job board",
             "indeed",
         ],
-        "referral_contact": ["referral", "referred by", "who should we thank"],
+        "referral_contact": ["referral", "referred by", "referred you", "someone referred", "who should we thank"],
         "communication_consent": ["sms", "whatsapp", "text message", "future contact"],
         "cloud_provider_general": [
             "gcp",
@@ -18120,10 +18132,26 @@ def _direct_answer(profile: CandidateProfile, normalized_question: str) -> str |
         ],
     }
     for answer_key, hints in answer_map.items():
+        if answer_key == "sponsorship" and any(
+            term in normalized_question for term in ["security clearance", "clearance", "scif"]
+        ):
+            continue
         answer = profile.question_answers.get(answer_key)
-        if answer and any(hint in normalized_question for hint in hints):
+        if answer and any(_direct_answer_hint_matches(normalized_question, hint) for hint in hints):
             return answer
     return None
+
+
+def _direct_answer_hint_matches(normalized_question: str, hint: str) -> bool:
+    text = f" {_normalize(normalized_question)} "
+    normalized_hint = _normalize(hint)
+    if not normalized_hint:
+        return False
+    if normalized_hint == "relocat":
+        return any(token.startswith("relocat") for token in text.split())
+    if " " in normalized_hint:
+        return f" {normalized_hint} " in text
+    return bool(re.search(rf"\b{re.escape(normalized_hint)}\b", text))
 
 
 def _start_date_weeks_answer(profile: CandidateProfile, normalized_question: str) -> str:
