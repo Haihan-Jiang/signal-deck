@@ -2808,10 +2808,21 @@ class JobApplyAgentTests(unittest.TestCase):
         buckets = {row["bucket"]: row for row in pack["buckets"]}
 
         self.assertEqual(pack["summary"]["task_count"], 4)
+        self.assertEqual(pack["summary"]["critical_input_count"], 3)
+        self.assertEqual(pack["summary"]["critical_persistable_input_count"], 2)
+        self.assertEqual(pack["summary"]["critical_supervised_only_count"], 1)
         self.assertEqual(pack["summary"]["draft_answer_count"], 1)
         self.assertEqual(pack["summary"]["missing_user_answer_count"], 3)
         self.assertEqual(pack["summary"]["exact_user_confirmation_count"], 1)
         self.assertEqual(pack["summary"]["manual_gate_count"], 1)
+        self.assertEqual(
+            [row["input_type"] for row in pack["critical_inputs"]],
+            [
+                "profile_or_resume_fact",
+                "high_risk_exact_confirmation",
+                "supervised_browser_review_only",
+            ],
+        )
         self.assertEqual(buckets["default_policy_review"]["task_count"], 1)
         self.assertEqual(buckets["profile_or_resume_fact"]["task_count"], 1)
         self.assertEqual(buckets["exact_user_confirmation"]["task_count"], 1)
@@ -2819,6 +2830,8 @@ class JobApplyAgentTests(unittest.TestCase):
         markdown = render_learning_approval_pack_markdown(pack)
         self.assertIn("Learning Approval Pack", markdown)
         self.assertIn("Review reusable default policies", markdown)
+        self.assertIn("Missing Critical Inputs", markdown)
+        self.assertIn("user answer:", markdown)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             json_output = Path(temp_dir) / "approval.json"
@@ -6074,10 +6087,12 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("No longer accepting applications", html)
         self.assertIn("Problem Buckets", html)
         self.assertIn("Learning Approval Pack", html)
+        self.assertIn("Missing Critical Inputs", html)
         self.assertIn("Approval Tasks", html)
         self.assertIn("Real Platform Shortfalls", html)
         self.assertIn("Collection Tasks", html)
         self.assertIn("Manual Gates", html)
+        self.assertIn("Provide the exact answer to reuse for this prompt wording.", html)
         self.assertIn("https://job-boards.greenhouse.io/doordash/jobs/1", html)
         self.assertIn("Autofill ready", html)
 
@@ -6103,6 +6118,8 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(len(result["question_rows"]), 2)
             self.assertEqual(result["problem_buckets"][0]["coverage_status"], "needs_user_confirmation")
             self.assertEqual(result["summary"]["approval_pack_task_count"], 1)
+            self.assertEqual(result["summary"]["critical_input_count"], 1)
+            self.assertEqual(result["learning_approval_critical_inputs"][0]["input_type"], "exact_prompt_answer")
             self.assertEqual(len(result["learning_approval_tasks"]), 1)
             self.assertEqual(result["summary"]["answer_memory_count"], 1)
             self.assertEqual(result["summary"]["closed_posting_count"], 1)
@@ -6113,29 +6130,33 @@ class JobApplyAgentTests(unittest.TestCase):
                 self.assertIn("xl/workbook.xml", names)
                 self.assertIn("xl/worksheets/sheet1.xml", names)
                 self.assertIn("xl/worksheets/sheet2.xml", names)
-                self.assertIn("xl/worksheets/sheet7.xml", names)
-                self.assertIn("xl/worksheets/sheet19.xml", names)
+                self.assertIn("xl/worksheets/sheet8.xml", names)
                 self.assertIn("xl/worksheets/sheet20.xml", names)
                 self.assertIn("xl/worksheets/sheet21.xml", names)
-                source_sheet = workbook.read("xl/worksheets/sheet2.xml").decode("utf-8")
+                self.assertIn("xl/worksheets/sheet22.xml", names)
+                self.assertIn("xl/worksheets/sheet23.xml", names)
+                critical_inputs = workbook.read("xl/worksheets/sheet2.xml").decode("utf-8")
+                self.assertIn("exact_prompt_answer", critical_inputs)
+                self.assertIn("user_answer", critical_inputs)
+                source_sheet = workbook.read("xl/worksheets/sheet3.xml").decode("utf-8")
                 self.assertIn("Answer gaps", source_sheet)
-                synthetic_sheet = workbook.read("xl/worksheets/sheet3.xml").decode("utf-8")
+                synthetic_sheet = workbook.read("xl/worksheets/sheet4.xml").decode("utf-8")
                 self.assertIn("local_synthetic_browser_action_executor", synthetic_sheet)
-                fake_probe = workbook.read("xl/worksheets/sheet6.xml").decode("utf-8")
+                fake_probe = workbook.read("xl/worksheets/sheet7.xml").decode("utf-8")
                 self.assertIn("learning_blockers_cleared", fake_probe)
-                fake_position = workbook.read("xl/worksheets/sheet7.xml").decode("utf-8")
+                fake_position = workbook.read("xl/worksheets/sheet8.xml").decode("utf-8")
                 self.assertIn("observed_prompt_local_browser_manifest_executor", fake_position)
-                problem_buckets = workbook.read("xl/worksheets/sheet8.xml").decode("utf-8")
+                problem_buckets = workbook.read("xl/worksheets/sheet9.xml").decode("utf-8")
                 self.assertIn("needs_user_confirmation", problem_buckets)
-                user_questions = workbook.read("xl/worksheets/sheet9.xml").decode("utf-8")
+                user_questions = workbook.read("xl/worksheets/sheet10.xml").decode("utf-8")
                 self.assertIn("Have you worked at DoorDash?", user_questions)
-                platform_shortfalls = workbook.read("xl/worksheets/sheet14.xml").decode("utf-8")
+                platform_shortfalls = workbook.read("xl/worksheets/sheet15.xml").decode("utf-8")
                 self.assertIn("Greenhouse", platform_shortfalls)
-                closed_postings = workbook.read("xl/worksheets/sheet19.xml").decode("utf-8")
+                closed_postings = workbook.read("xl/worksheets/sheet20.xml").decode("utf-8")
                 self.assertIn("No longer accepting applications", closed_postings)
-                approval_buckets = workbook.read("xl/worksheets/sheet20.xml").decode("utf-8")
+                approval_buckets = workbook.read("xl/worksheets/sheet21.xml").decode("utf-8")
                 self.assertIn("exact_prompt_answer", approval_buckets)
-                approval_tasks = workbook.read("xl/worksheets/sheet21.xml").decode("utf-8")
+                approval_tasks = workbook.read("xl/worksheets/sheet22.xml").decode("utf-8")
                 self.assertIn("Have you worked at DoorDash?", approval_tasks)
 
 

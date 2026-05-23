@@ -347,11 +347,11 @@ job_apply_agent/outbox/application_questions_latest.xlsx
 job_apply_agent/outbox/application_questions_latest.html
 ```
 
-The Excel workbook includes sheets for summary metrics, user questions,
-blocking prompts, all observed prompts, per-position readiness, collection
-targets, collection tasks, manual gates, approval buckets, approval tasks, and
-approval-only manual gates. The HTML file presents the same information as a
-dashboard for quick review.
+The Excel workbook includes sheets for summary metrics, critical inputs still
+needed from the user, user questions, blocking prompts, all observed prompts,
+per-position readiness, collection targets, collection tasks, manual gates,
+approval buckets, approval tasks, and approval-only manual gates. The HTML file
+presents the same information as a dashboard for quick review.
 
 Turn that learning queue into a fill-in template:
 
@@ -372,6 +372,10 @@ This writes:
 job_apply_agent/outbox/learning_approval_pack_latest.json
 job_apply_agent/outbox/learning_approval_pack_latest.md
 ```
+
+The approval pack includes a `critical_inputs` section for the final questions
+that should not be inferred, including profile facts, exact prompt answers,
+high-risk confirmations, and supervised-only privacy acknowledgements.
 
 The approval pack groups tasks into reusable default policies, profile or
 resume facts, exact prompt answers, high-risk confirmations, and supervised-only

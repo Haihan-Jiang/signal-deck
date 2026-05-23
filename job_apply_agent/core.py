@@ -3976,11 +3976,19 @@ def build_learning_approval_pack(
         for item in (readiness_report or {}).get("manual_gates", [])
         if isinstance(item, dict)
     ]
+    critical_input_rows = _learning_approval_critical_input_rows(task_rows)
     summary = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source": "learning_tasks",
         "task_count": len(task_rows),
         "bucket_count": len(bucket_rows),
+        "critical_input_count": len(critical_input_rows),
+        "critical_persistable_input_count": sum(
+            1 for row in critical_input_rows if row.get("persist_allowed")
+        ),
+        "critical_supervised_only_count": sum(
+            1 for row in critical_input_rows if row.get("input_type") == "supervised_browser_review_only"
+        ),
         "draft_answer_count": sum(1 for row in task_rows if row.get("draft_answer")),
         "persist_allowed_count": sum(1 for row in task_rows if row.get("persist_allowed")),
         "exact_user_confirmation_count": sum(
@@ -3999,6 +4007,7 @@ def build_learning_approval_pack(
         "generated_at": summary["generated_at"],
         "summary": summary,
         "buckets": bucket_rows,
+        "critical_inputs": critical_input_rows,
         "tasks": task_rows,
         "manual_gates": manual_gate_rows,
         "instructions": (
@@ -4032,6 +4041,7 @@ def render_learning_approval_pack_markdown(pack: dict[str, Any]) -> str:
         "",
         f"Generated: {pack.get('generated_at')}",
         f"Learning tasks: {summary.get('task_count', 0)}",
+        f"Critical inputs still needed: {summary.get('critical_input_count', 0)}",
         f"Draft answers ready to review: {summary.get('draft_answer_count', 0)}",
         f"Missing user answers: {summary.get('missing_user_answer_count', 0)}",
         f"Exact user confirmations: {summary.get('exact_user_confirmation_count', 0)}",
@@ -4052,6 +4062,24 @@ def render_learning_approval_pack_markdown(pack: dict[str, Any]) -> str:
             )
         )
         lines.append(f"  action: {bucket.get('recommended_action')}")
+
+    lines.extend(["", "## Missing Critical Inputs", ""])
+    critical_inputs = pack.get("critical_inputs") or []
+    if not critical_inputs:
+        lines.append("- None")
+    for item in critical_inputs[:80]:
+        lines.append(
+            "- [ ] {input_type}: {question}".format(
+                input_type=item.get("input_type"),
+                question=item.get("question") or "Unknown question",
+            )
+        )
+        lines.append(f"  response needed: {item.get('required_user_response')}")
+        lines.append(f"  user answer: {item.get('user_answer') or ''}")
+        lines.append(f"  automation after answer: {item.get('automation_after_answer')}")
+        labels = item.get("labels") or []
+        if labels:
+            lines.append(f"  labels: {'; '.join(str(label) for label in labels[:3])}")
 
     lines.extend(["", "## Tasks", ""])
     tasks = pack.get("tasks", [])
@@ -6402,6 +6430,7 @@ def build_question_export(
         readiness,
     )
     approval_bucket_rows = _learning_approval_bucket_export_rows(learning_approval_pack)
+    critical_input_rows = _learning_approval_critical_input_export_rows(learning_approval_pack)
     approval_task_rows = _learning_approval_task_export_rows(learning_approval_pack)
     approval_manual_gate_rows = _learning_approval_manual_gate_export_rows(learning_approval_pack)
     manual_gates = [_manual_gate_export_row(item) for item in readiness.get("manual_gates", [])]
@@ -6455,6 +6484,21 @@ def build_question_export(
         "blocking_prompt_count": gaps.get("blocking_prompt_count", 0),
         "learning_task_count": learning_tasks.get("task_count", len(user_questions)),
         "manual_gate_count": readiness.get("manual_gate_count", 0),
+        "critical_input_count": (learning_approval_pack.get("summary") or {}).get(
+            "critical_input_count", len(critical_input_rows)
+        ),
+        "critical_persistable_input_count": (learning_approval_pack.get("summary") or {}).get(
+            "critical_persistable_input_count",
+            sum(1 for row in critical_input_rows if row.get("persist_allowed")),
+        ),
+        "critical_supervised_only_count": (learning_approval_pack.get("summary") or {}).get(
+            "critical_supervised_only_count",
+            sum(
+                1
+                for row in critical_input_rows
+                if row.get("input_type") == "supervised_browser_review_only"
+            ),
+        ),
         "approval_pack_task_count": (learning_approval_pack.get("summary") or {}).get("task_count", 0),
         "approval_pack_draft_answer_count": (learning_approval_pack.get("summary") or {}).get(
             "draft_answer_count", 0
@@ -6536,6 +6580,7 @@ def build_question_export(
         "user_questions": user_questions,
         "learning_approval_summary": learning_approval_pack.get("summary", {}),
         "learning_approval_buckets": approval_bucket_rows,
+        "learning_approval_critical_inputs": critical_input_rows,
         "learning_approval_tasks": approval_task_rows,
         "learning_approval_manual_gates": approval_manual_gate_rows,
         "manual_gates": manual_gates,
@@ -6575,6 +6620,7 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                 ("Ready prompts", summary.get("ready_prompt_count", 0)),
                 ("Blocking prompts", summary.get("blocking_prompt_count", 0)),
                 ("Learning tasks", summary.get("learning_task_count", 0)),
+                ("Critical inputs", summary.get("critical_input_count", 0)),
                 ("Draft answers", summary.get("approval_pack_draft_answer_count", 0)),
                 ("Missing answers", summary.get("approval_pack_missing_user_answer_count", 0)),
                 ("Manual gates", summary.get("manual_gate_count", 0)),
@@ -6725,6 +6771,39 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                     row.get("recommended_action"),
                 ]
                 for row in export.get("learning_approval_buckets", [])
+            ],
+        ),
+        "</section>",
+        "<section><h2>Missing Critical Inputs</h2>",
+        _html_table(
+            [
+                "Priority",
+                "Input type",
+                "Question",
+                "User answer",
+                "Required response",
+                "Risk",
+                "Storage",
+                "Automation after answer",
+                "Required",
+                "Platforms",
+                "Labels",
+            ],
+            [
+                [
+                    row.get("priority"),
+                    row.get("input_type"),
+                    row.get("question"),
+                    row.get("user_answer"),
+                    row.get("required_user_response"),
+                    row.get("approval_risk"),
+                    row.get("storage_after_approval"),
+                    row.get("automation_after_answer"),
+                    row.get("required_count"),
+                    row.get("platforms"),
+                    row.get("labels"),
+                ]
+                for row in export.get("learning_approval_critical_inputs", [])
             ],
         ),
         "</section>",
@@ -11058,6 +11137,86 @@ def _learning_approval_manual_gate_row(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _learning_approval_critical_input_rows(task_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for task in task_rows:
+        if not isinstance(task, dict):
+            continue
+        bucket = str(task.get("bucket") or "")
+        draft_answer = str(task.get("draft_answer") or "").strip()
+        approval_risk = str(task.get("approval_risk") or "")
+        if draft_answer and bucket not in {"exact_user_confirmation", "supervised_only"} and approval_risk != "high":
+            continue
+        input_type = _learning_approval_critical_input_type(task)
+        rows.append(
+            {
+                "priority": task.get("priority"),
+                "input_type": input_type,
+                "bucket": bucket,
+                "bucket_title": task.get("bucket_title"),
+                "question": task.get("question"),
+                "user_answer": "",
+                "approval_decision": "",
+                "required_user_response": _learning_approval_required_user_response(input_type),
+                "draft_answer": draft_answer,
+                "approval_risk": task.get("approval_risk"),
+                "persist_allowed": bool(task.get("persist_allowed")),
+                "storage_after_approval": task.get("recommended_storage"),
+                "automation_after_answer": _learning_approval_automation_after_answer(task, input_type),
+                "related_prompt_count": task.get("related_prompt_count", 0),
+                "observed_count": task.get("observed_count", 0),
+                "required_count": task.get("required_count", 0),
+                "platforms": task.get("platforms") or [],
+                "labels": task.get("labels") or [],
+                "group_key": task.get("group_key"),
+                "approval_note": task.get("approval_note"),
+            }
+        )
+    rows.sort(
+        key=lambda row: (
+            int(row.get("priority") or 99),
+            -int(row.get("required_count") or 0),
+            str(row.get("question") or ""),
+        )
+    )
+    return rows
+
+
+def _learning_approval_critical_input_type(task: dict[str, Any]) -> str:
+    bucket = str(task.get("bucket") or "")
+    if bucket == "profile_or_resume_fact":
+        return "profile_or_resume_fact"
+    if bucket == "exact_prompt_answer":
+        return "exact_prompt_answer"
+    if bucket == "exact_user_confirmation":
+        return "high_risk_exact_confirmation"
+    if bucket == "supervised_only":
+        return "supervised_browser_review_only"
+    return "missing_user_answer"
+
+
+def _learning_approval_required_user_response(input_type: str) -> str:
+    if input_type == "profile_or_resume_fact":
+        return "Provide the exact stable profile/resume value, or mark unavailable if there is no truthful value."
+    if input_type == "exact_prompt_answer":
+        return "Provide the exact answer to reuse for this prompt wording."
+    if input_type == "high_risk_exact_confirmation":
+        return "Confirm the exact truthful legal or sensitive answer; automation must not infer it."
+    if input_type == "supervised_browser_review_only":
+        return "Handle this in the browser during supervised review; do not store it as reusable automation."
+    return "Provide a truthful answer before this prompt can be automated."
+
+
+def _learning_approval_automation_after_answer(task: dict[str, Any], input_type: str) -> str:
+    if input_type == "supervised_browser_review_only":
+        return "manual_browser_step_only"
+    if input_type == "high_risk_exact_confirmation":
+        return "reuse_only_after_explicit_confirmation_final_submit_stays_supervised"
+    if task.get("persist_allowed"):
+        return f"persist_to_{task.get('recommended_storage')}_after_approval"
+    return "do_not_persist"
+
+
 def _location_policy_suggestion(profile: CandidateProfile | None) -> str:
     return "Open to remote, hybrid, onsite, travel, and relocation for the right role; review city-specific requirements before submit."
 
@@ -13699,6 +13858,42 @@ def _learning_approval_bucket_export_rows(pack: dict[str, Any]) -> list[dict[str
     return rows
 
 
+def _learning_approval_critical_input_export_rows(pack: dict[str, Any]) -> list[dict[str, Any]]:
+    source_rows = pack.get("critical_inputs")
+    if not isinstance(source_rows, list):
+        source_rows = _learning_approval_critical_input_rows(
+            [task for task in pack.get("tasks", []) if isinstance(task, dict)]
+        )
+    rows: list[dict[str, Any]] = []
+    for item in source_rows:
+        if not isinstance(item, dict):
+            continue
+        rows.append(
+            {
+                "priority": item.get("priority"),
+                "input_type": item.get("input_type"),
+                "bucket": item.get("bucket"),
+                "question": item.get("question"),
+                "user_answer": item.get("user_answer", ""),
+                "approval_decision": item.get("approval_decision", ""),
+                "required_user_response": item.get("required_user_response"),
+                "draft_answer": item.get("draft_answer"),
+                "approval_risk": item.get("approval_risk"),
+                "persist_allowed": item.get("persist_allowed"),
+                "storage_after_approval": item.get("storage_after_approval"),
+                "automation_after_answer": item.get("automation_after_answer"),
+                "related_prompt_count": item.get("related_prompt_count", 0),
+                "observed_count": item.get("observed_count", 0),
+                "required_count": item.get("required_count", 0),
+                "platforms": ", ".join(_string_list(item.get("platforms"))),
+                "labels": "\n".join(_string_list(item.get("labels"))),
+                "group_key": item.get("group_key"),
+                "approval_note": item.get("approval_note"),
+            }
+        )
+    return rows
+
+
 def _learning_approval_task_export_rows(pack: dict[str, Any]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for task in pack.get("tasks", []):
@@ -13794,6 +13989,7 @@ def _position_export_row(item: dict[str, Any]) -> dict[str, Any]:
 def _write_question_export_xlsx(export: dict[str, Any], path: Path) -> None:
     sheets = [
         ("Summary", _question_export_summary_rows(export)),
+        ("Critical Inputs", _table_rows(export.get("learning_approval_critical_inputs", []))),
         ("Source Artifacts", _table_rows(export.get("source_artifacts", []))),
         ("Synthetic Execution", _table_rows(export.get("synthetic_execution", []))),
         ("Synthetic Stops", _table_rows(export.get("synthetic_policy_stops", []))),

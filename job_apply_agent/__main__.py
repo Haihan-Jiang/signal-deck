@@ -724,6 +724,7 @@ def main() -> int:
         print(f"Questions: {len(export.get('question_rows', []))}")
         print(f"Blocking prompts: {len(export.get('blocker_rows', []))}")
         print(f"Learning tasks: {len(export.get('user_questions', []))}")
+        print(f"Critical inputs: {export.get('summary', {}).get('critical_input_count', 0)}")
         return 0
 
     if args.command == "research":
@@ -966,6 +967,7 @@ def main() -> int:
         print(f"Wrote learning approval pack JSON to {args.json_output}")
         print(f"Wrote learning approval pack Markdown to {args.markdown_output}")
         print(f"Tasks: {summary.get('task_count', 0)}")
+        print(f"Critical inputs: {summary.get('critical_input_count', 0)}")
         print(f"Draft answers: {summary.get('draft_answer_count', 0)}")
         print(f"Missing user answers: {summary.get('missing_user_answer_count', 0)}")
         print(f"Exact confirmations: {summary.get('exact_user_confirmation_count', 0)}")
