@@ -2920,6 +2920,7 @@ def main() -> int:
         print(f"Missing unblockers: {summary.get('missing_unblocker_count', 0)}")
         print(f"High-risk confirmations missing: {summary.get('unconfirmed_high_risk_count', 0)}")
         print(f"Unknown answers: {summary.get('unknown_answer_count', 0)}")
+        _print_final_answer_intake_problem_aliases(report)
         if args.finalize:
             final_report = write_critical_input_unblocker_final_update(
                 args.compact_updates_output,
@@ -3147,6 +3148,7 @@ def main() -> int:
         print(f"High-risk confirmations missing: {intake_summary.get('unconfirmed_high_risk_count', 0)}")
         print(f"Needs more specificity: {intake_summary.get('needs_more_specific_answer_count', 0)}")
         print(f"Unknown answers: {intake_summary.get('unknown_answer_count', 0)}")
+        _print_final_answer_intake_problem_aliases(intake_report)
         if args.finalize:
             final_report = write_critical_input_unblocker_final_update(
                 compact_updates_output,
@@ -4631,6 +4633,30 @@ def _load_optional_json(path_value: str | None) -> dict | None:
         return None
     payload = json.loads(path.read_text(encoding="utf-8"))
     return payload if isinstance(payload, dict) else None
+
+
+def _print_final_answer_intake_problem_aliases(report: dict) -> None:
+    status_labels = [
+        ("Missing answer aliases", "missing"),
+        ("High-risk confirmation aliases", "high_risk_unconfirmed"),
+        ("Needs specificity aliases", "needs_more_specific_answer"),
+    ]
+    fields = [row for row in report.get("fields") or [] if isinstance(row, dict)]
+    for label, status in status_labels:
+        aliases = [
+            str(row.get("alias") or row.get("input_id") or "").strip()
+            for row in fields
+            if row.get("status") == status and str(row.get("alias") or row.get("input_id") or "").strip()
+        ]
+        if aliases:
+            print(f"{label}: {', '.join(aliases[:12])}")
+    unknown_ids = [
+        str(item).strip()
+        for item in report.get("unknown_answer_ids") or []
+        if str(item).strip()
+    ]
+    if unknown_ids:
+        print(f"Unknown answer keys: {', '.join(unknown_ids[:12])}")
 
 
 def _load_jobs_payload(path: Path) -> list[dict]:

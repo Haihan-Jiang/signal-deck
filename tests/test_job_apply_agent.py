@@ -7447,6 +7447,50 @@ class JobApplyAgentTests(unittest.TestCase):
             [field["status"] for field in intake_report["fields"]],
             ["needs_more_specific_answer", "needs_more_specific_answer"],
         )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            template_path = root / "template.json"
+            unblockers_path = root / "unblockers.json"
+            reply_path = root / "reply.txt"
+            template_path.write_text(json.dumps(template, ensure_ascii=True, indent=2), encoding="utf-8")
+            unblockers_path.write_text(json.dumps(unblockers, ensure_ascii=True, indent=2), encoding="utf-8")
+            reply_path.write_text(reply_text, encoding="utf-8")
+
+            cli_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "job_apply_agent",
+                    "final-answer-reply",
+                    "--template",
+                    str(template_path),
+                    "--unblockers",
+                    str(unblockers_path),
+                    "--reply-file",
+                    str(reply_path),
+                    "--json-output",
+                    str(root / "reply.json"),
+                    "--markdown-output",
+                    str(root / "reply.md"),
+                    "--intake-output",
+                    str(root / "payload.json"),
+                    "--compact-updates-output",
+                    str(root / "compact.json"),
+                    "--final-answer-intake-report-json",
+                    str(root / "intake.json"),
+                    "--final-answer-intake-report-markdown",
+                    str(root / "intake.md"),
+                    "--fail-on-not-ready",
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(cli_result.returncode, 2)
+            self.assertIn("Needs specificity aliases", cli_result.stdout)
+            self.assertIn("zip_or_postal_code", cli_result.stdout)
+            self.assertIn("health_requirement", cli_result.stdout)
 
     def test_final_answer_intake_server_post_answer_flags_are_guarded(self) -> None:
         base_args = {
