@@ -4634,12 +4634,10 @@ def build_critical_input_unblocker_packet(
     }
     rows: list[dict[str, Any]] = []
     compact_updates_template: dict[str, Any] = {}
+    full_updates_template: dict[str, Any] = {}
+    prefilled_update_count = 0
     for item in suggestions_payload.get("critical_inputs", []):
         if not isinstance(item, dict):
-            continue
-        if str(item.get("suggested_answer") or "").strip():
-            continue
-        if item.get("input_type") == "supervised_browser_review_only":
             continue
         input_id = str(item.get("input_id") or "")
         if not input_id:
@@ -4647,6 +4645,30 @@ def build_critical_input_unblocker_packet(
         high_risk = item.get("input_type") == "high_risk_exact_confirmation" or str(
             item.get("approval_risk") or ""
         ) == "high"
+        suggested_answer = str(item.get("suggested_answer") or "").strip()
+        if item.get("input_type") != "supervised_browser_review_only":
+            if suggested_answer:
+                prefilled_update_count += 1
+                if high_risk:
+                    full_updates_template[input_id] = {
+                        "user_answer": suggested_answer,
+                        "approval_decision": "approved",
+                        "high_risk_user_confirmed": False,
+                    }
+                else:
+                    full_updates_template[input_id] = suggested_answer
+            elif high_risk:
+                full_updates_template[input_id] = {
+                    "user_answer": "",
+                    "approval_decision": "approved",
+                    "high_risk_user_confirmed": False,
+                }
+            else:
+                full_updates_template[input_id] = ""
+        if str(item.get("suggested_answer") or "").strip():
+            continue
+        if item.get("input_type") == "supervised_browser_review_only":
+            continue
         impact = impacts_by_id.get(input_id, {})
         row = {
             "input_id": input_id,
@@ -4694,23 +4716,33 @@ def build_critical_input_unblocker_packet(
         "profile_or_resume_fact_count": sum(
             1 for row in rows if row.get("input_type") == "profile_or_resume_fact"
         ),
+        "full_update_count": len(full_updates_template),
+        "prefilled_update_count": prefilled_update_count,
+        "missing_exact_update_count": len(rows),
         "instructions": (
             "Fill only these remaining exact values, then run critical-inputs-workflow with "
-            "the resulting JSON. High-risk values require high_risk_user_confirmed=true and "
+            "the full updates JSON if you want one-shot approval of existing drafts plus the "
+            "final values. High-risk values require high_risk_user_confirmed=true and "
             "--approve-high-risk. This artifact does not write profile or answer memory and "
             "does not submit applications."
         ),
         "workflow_command": (
             "python3 -m job_apply_agent critical-inputs-workflow "
-            "--updates <confirmed_unblockers.json> --approve --approve-high-risk --apply"
+            "--updates <full_confirmed_answers.json> --approve --approve-high-risk --apply"
+        ),
+        "compact_workflow_command": (
+            "python3 -m job_apply_agent critical-inputs-workflow "
+            "--updates <confirmed_unblockers_only.json> --approve --approve-high-risk --apply"
         ),
         "unblockers": rows,
         "compact_updates_template": compact_updates_template,
+        "full_updates_template": full_updates_template,
         "policy": {
             "writes_profile_or_memory": False,
             "submits_real_applications": False,
             "high_risk_requires_user_confirmation": True,
             "only_missing_suggestions_included": True,
+            "full_template_includes_prefilled_existing_suggestions": True,
         },
     }
 
@@ -5035,10 +5067,12 @@ def render_critical_input_unblocker_markdown(packet: dict[str, Any]) -> str:
         f"Inputs: {packet.get('input_count', 0)}",
         f"High risk: {packet.get('high_risk_count', 0)}",
         f"Profile/resume facts: {packet.get('profile_or_resume_fact_count', 0)}",
+        f"Full update entries: {packet.get('full_update_count', 0)}",
+        f"Prefilled update entries: {packet.get('prefilled_update_count', 0)}",
         "",
         str(packet.get("instructions") or ""),
         "",
-        "Workflow command:",
+        "One-shot workflow command:",
         "",
         f"`{packet.get('workflow_command')}`",
         "",
@@ -5064,6 +5098,14 @@ def render_critical_input_unblocker_markdown(packet: dict[str, Any]) -> str:
             "",
             "```json",
             json.dumps(packet.get("compact_updates_template", {}), ensure_ascii=True, indent=2),
+            "```",
+            "",
+            "## Full Updates Template",
+            "",
+            "Use this template for one-shot approval. Fill the blank values first.",
+            "",
+            "```json",
+            json.dumps(packet.get("full_updates_template", {}), ensure_ascii=True, indent=2),
             "```",
         ]
     )
@@ -5111,6 +5153,11 @@ def render_critical_input_unblocker_html(packet: dict[str, Any]) -> str:
         ensure_ascii=True,
         indent=2,
     ).replace("</", "<\\/")
+    full_template_json = json.dumps(
+        packet.get("full_updates_template", {}),
+        ensure_ascii=True,
+        indent=2,
+    ).replace("</", "<\\/")
     script = """
 <script>
 function buildUnblockerUpdates() {
@@ -5136,9 +5183,13 @@ function buildUnblockerUpdates() {
 function loadUnblockerTemplate() {
   document.getElementById("compact-json").value = document.getElementById("template-json").textContent.trim();
 }
+function loadFullUnblockerTemplate() {
+  document.getElementById("compact-json").value = document.getElementById("full-template-json").textContent.trim();
+}
 document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("build-json").addEventListener("click", buildUnblockerUpdates);
   document.getElementById("load-template").addEventListener("click", loadUnblockerTemplate);
+  document.getElementById("load-full-template").addEventListener("click", loadFullUnblockerTemplate);
 });
 </script>
 """.strip()
@@ -5163,18 +5214,21 @@ document.addEventListener("DOMContentLoaded", () => {
                     ("Inputs", packet.get("input_count", 0)),
                     ("High risk", packet.get("high_risk_count", 0)),
                     ("Profile facts", packet.get("profile_or_resume_fact_count", 0)),
+                    ("Full updates", packet.get("full_update_count", 0)),
+                    ("Prefilled", packet.get("prefilled_update_count", 0)),
                 ]
             ),
             "<section>",
-            "<h2>Command</h2>",
+            "<h2>One-shot Command</h2>",
             f"<pre>{_html_escape(packet.get('workflow_command'))}</pre>",
             "</section>",
             "".join(cards),
             "<section>",
             "<h2>Compact JSON</h2>",
-            '<div class="actions"><button id="build-json" type="button">Build compact JSON</button><button id="load-template" type="button">Load blank template</button></div>',
+            '<div class="actions"><button id="build-json" type="button">Build compact JSON</button><button id="load-template" type="button">Load blank template</button><button id="load-full-template" type="button">Load full one-shot template</button></div>',
             '<textarea id="compact-json" rows="16" spellcheck="false"></textarea>',
             f'<script type="application/json" id="template-json">{template_json}</script>',
+            f'<script type="application/json" id="full-template-json">{full_template_json}</script>',
             "</section>",
             "</main>",
             script,
@@ -9752,6 +9806,7 @@ def build_goal_readiness_audit(
     fake_critical_input_probe: dict[str, Any] | None = None,
     fake_position_rehearsal: dict[str, Any] | None = None,
     autofill_batch_plan: dict[str, Any] | None = None,
+    synthetic_unblocker_proof: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     coverage_counts = gaps.get("coverage_counts") or {}
@@ -9759,6 +9814,8 @@ def build_goal_readiness_audit(
     fake_critical = fake_critical_input_probe or {}
     fake_rehearsal = fake_position_rehearsal or {}
     autofill_batch = autofill_batch_plan or {}
+    unblocker_proof = synthetic_unblocker_proof or {}
+    unblocker_proof_summary = unblocker_proof.get("summary") or {}
     synthetic = coverage_gate.get("synthetic") or {}
     readiness_counts = readiness.get("readiness_counts") or {}
     closed_count = _closed_registry_count(closed_jobs)
@@ -9819,6 +9876,11 @@ def build_goal_readiness_audit(
         and not batch_real_submit
         and batch_would_submit == 0
     )
+    unblocker_proof_complete = bool(
+        unblocker_proof_summary.get("proof_complete")
+        and not unblocker_proof.get("real_platform_submission")
+        and not unblocker_proof.get("writes_real_profile_or_memory")
+    )
     user_answers_ready = data_blocker_count == 0 and critical_waiting_count == 0
     supervised_autofill_ready = bool(
         research_ready
@@ -9877,6 +9939,26 @@ def build_goal_readiness_audit(
                 "local_synthetic_submit_count": batch_local_synthetic_submit_count,
                 "local_synthetic_submit_achieved": batch_local_synthetic_submit_achieved,
                 "local_synthetic_submit_selector_miss_count": batch_local_synthetic_selector_misses,
+            },
+        },
+        {
+            "id": "synthetic_final_unblocker_proof",
+            "requirement": "Prove the final unanswered critical inputs can clear data blockers in a temp-only dry run.",
+            "status": "achieved" if unblocker_proof_complete else "needs_synthetic_unblocker_proof",
+            "evidence": {
+                "proof_complete": unblocker_proof_complete,
+                "synthetic_final_unblocker_update_count": int(
+                    unblocker_proof_summary.get("synthetic_final_unblocker_update_count") or 0
+                ),
+                "existing_draft_update_count": int(
+                    unblocker_proof_summary.get("existing_draft_update_count") or 0
+                ),
+                "data_blocking_prompts_after": int(
+                    unblocker_proof_summary.get("data_blocking_prompts_after") or 0
+                ),
+                "local_100_synthetic_apply_path_ready": bool(
+                    unblocker_proof_summary.get("local_100_synthetic_apply_path_ready")
+                ),
             },
         },
         {
@@ -9948,6 +10030,16 @@ def build_goal_readiness_audit(
             "autofill_batch_local_synthetic_submit_count": batch_local_synthetic_submit_count,
             "autofill_batch_local_synthetic_submit_achieved": batch_local_synthetic_submit_achieved,
             "autofill_batch_local_synthetic_submit_selector_miss_count": batch_local_synthetic_selector_misses,
+            "synthetic_unblocker_proof_complete": unblocker_proof_complete,
+            "synthetic_final_unblocker_update_count": int(
+                unblocker_proof_summary.get("synthetic_final_unblocker_update_count") or 0
+            ),
+            "synthetic_unblocker_data_blocking_prompts_after": int(
+                unblocker_proof_summary.get("data_blocking_prompts_after") or 0
+            ),
+            "synthetic_unblocker_existing_draft_update_count": int(
+                unblocker_proof_summary.get("existing_draft_update_count") or 0
+            ),
         },
         "data_blockers": _goal_coverage_status_rows(coverage_counts, GOAL_DATA_BLOCKER_STATUSES),
         "optional_gaps": _goal_coverage_status_rows(coverage_counts, GOAL_OPTIONAL_GAP_STATUSES),
@@ -9968,6 +10060,7 @@ def build_goal_readiness_audit(
             data_blocker_count=data_blocker_count,
             fake_critical_ready=fake_critical_ready,
             fake_critical_submits_real=fake_critical_submits_real,
+            unblocker_proof_complete=unblocker_proof_complete,
         ),
     }
 
@@ -9982,6 +10075,7 @@ def write_goal_readiness_audit(
     fake_critical_input_probe: dict[str, Any] | None = None,
     fake_position_rehearsal: dict[str, Any] | None = None,
     autofill_batch_plan: dict[str, Any] | None = None,
+    synthetic_unblocker_proof: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     audit = build_goal_readiness_audit(
@@ -9992,6 +10086,7 @@ def write_goal_readiness_audit(
         fake_critical_input_probe=fake_critical_input_probe,
         fake_position_rehearsal=fake_position_rehearsal,
         autofill_batch_plan=autofill_batch_plan,
+        synthetic_unblocker_proof=synthetic_unblocker_proof,
         closed_jobs=closed_jobs,
     )
     json_path = Path(json_output)
@@ -10043,6 +10138,9 @@ def render_goal_readiness_audit_markdown(audit: dict[str, Any]) -> str:
             f"- closed registry entries: {summary.get('closed_registry_count', 0)}",
             f"- 100-batch local synthetic submits: {summary.get('autofill_batch_local_synthetic_submit_count', 0)}",
             f"- 100-batch local synthetic submit achieved: {str(bool(summary.get('autofill_batch_local_synthetic_submit_achieved'))).lower()}",
+            f"- synthetic final unblocker proof complete: {str(bool(summary.get('synthetic_unblocker_proof_complete'))).lower()}",
+            f"- synthetic final unblockers: {summary.get('synthetic_final_unblocker_update_count', 0)}",
+            f"- synthetic unblocker data blockers after: {summary.get('synthetic_unblocker_data_blocking_prompts_after', 0)}",
             "",
             "## Data Blockers",
             "",
@@ -10171,6 +10269,7 @@ def _goal_next_actions(
     data_blocker_count: int,
     fake_critical_ready: int,
     fake_critical_submits_real: bool,
+    unblocker_proof_complete: bool,
 ) -> list[str]:
     actions: list[str] = []
     if not research_ready:
@@ -10178,9 +10277,14 @@ def _goal_next_actions(
     if not synthetic_ready:
         actions.append("Run synthetic-browser-exec and fake-position-rehearsal until selector misses are zero and eligible fake submits pass locally.")
     if critical_waiting_count:
-        actions.append(
-            "Fill job_apply_agent/outbox/critical_input_answers_latest.json with truthful answers for waiting critical inputs."
-        )
+        if unblocker_proof_complete:
+            actions.append(
+                "Fill the six blanks in job_apply_agent/outbox/critical_input_full_updates_template.json, then run critical-inputs-workflow with --approve --approve-high-risk --apply."
+            )
+        else:
+            actions.append(
+                "Fill job_apply_agent/outbox/critical_input_answers_latest.json with truthful answers for waiting critical inputs."
+            )
     if fake_critical_ready and not fake_critical_submits_real:
         actions.append("Use fake-critical-input-probe as dry-run evidence only; never apply fake answers to the real profile.")
     if data_blocker_count:
@@ -10255,6 +10359,18 @@ def build_automation_handoff_report(
         ),
         "autofill_local_synthetic_submit_selector_miss_count": int(
             batch.get("local_synthetic_submit_selector_miss_count") or 0
+        ),
+        "synthetic_unblocker_proof_complete": bool(
+            blocker_summary.get("synthetic_unblocker_proof_complete")
+        ),
+        "synthetic_final_unblocker_update_count": int(
+            blocker_summary.get("synthetic_final_unblocker_update_count") or 0
+        ),
+        "synthetic_unblocker_existing_draft_update_count": int(
+            blocker_summary.get("synthetic_unblocker_existing_draft_update_count") or 0
+        ),
+        "synthetic_unblocker_data_blocking_prompts_after": int(
+            blocker_summary.get("synthetic_unblocker_data_blocking_prompts_after") or 0
         ),
         "selected_stop_group_count": len(selected_stop_summary),
         "blocked_stop_group_count": len(blocked_stop_summary),
@@ -10354,6 +10470,7 @@ def render_automation_handoff_markdown(report: dict[str, Any]) -> str:
         f"- individual impact rows: {summary.get('individual_impact_count', 0)}; truncated {str(bool(summary.get('individual_impact_truncated'))).lower()}",
         f"- autofill batch: {summary.get('autofill_allowed_count', 0)} / {summary.get('autofill_selected_count', 0)} selected, selector misses {summary.get('autofill_selector_miss_count', 0)}",
         f"- local synthetic submit proof: {summary.get('autofill_local_synthetic_submit_count', 0)} submits, achieved {str(bool(summary.get('autofill_local_synthetic_submit_achieved'))).lower()}, selector misses {summary.get('autofill_local_synthetic_submit_selector_miss_count', 0)}",
+        f"- synthetic final unblocker proof: {str(bool(summary.get('synthetic_unblocker_proof_complete'))).lower()}, final blanks {summary.get('synthetic_final_unblocker_update_count', 0)}, prefilled drafts {summary.get('synthetic_unblocker_existing_draft_update_count', 0)}, blockers after {summary.get('synthetic_unblocker_data_blocking_prompts_after', 0)}",
         "",
         "## Requirement Status",
         "",
@@ -10470,6 +10587,9 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
                     ("Selector misses", summary.get("autofill_selector_miss_count", 0)),
                     ("Local synthetic submits", summary.get("autofill_local_synthetic_submit_count", 0)),
                     ("Synthetic submit ok", str(bool(summary.get("autofill_local_synthetic_submit_achieved"))).lower()),
+                    ("Unblocker proof", str(bool(summary.get("synthetic_unblocker_proof_complete"))).lower()),
+                    ("Final blanks", summary.get("synthetic_final_unblocker_update_count", 0)),
+                    ("Prefilled drafts", summary.get("synthetic_unblocker_existing_draft_update_count", 0)),
                 ]
             ),
             "<section><h2>Requirement Status</h2>",

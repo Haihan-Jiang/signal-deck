@@ -6059,6 +6059,33 @@ class JobApplyAgentTests(unittest.TestCase):
                 },
             ],
         }
+        answers_payload = {
+            "critical_inputs": [
+                {
+                    "input_id": "profile_zip_or_postal_code",
+                    "input_type": "profile_or_resume_fact",
+                    "group_key": "profile:zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "user_answer": "",
+                },
+                {
+                    "input_id": "answer_memory_citizenship_status_default_policy",
+                    "input_type": "high_risk_exact_confirmation",
+                    "group_key": "answer_memory:citizenship_status:default_policy",
+                    "question": "What citizenship answers should automation use?",
+                    "approval_risk": "high",
+                    "user_answer": "",
+                },
+                {
+                    "input_id": "answer_memory_startup_culture",
+                    "input_type": "exact_prompt_answer",
+                    "group_key": "answer_memory:startup_culture",
+                    "question": "What aspects of startup culture resonate with you?",
+                    "user_answer": "Ownership and fast feedback loops.",
+                },
+            ],
+            "answers": [],
+        }
         impact_payload = {
             "input_impacts": [
                 {
@@ -6080,8 +6107,15 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(packet["input_count"], 2)
         self.assertEqual(packet["high_risk_count"], 1)
         self.assertEqual(packet["profile_or_resume_fact_count"], 1)
+        self.assertEqual(packet["full_update_count"], 3)
+        self.assertEqual(packet["prefilled_update_count"], 1)
+        self.assertEqual(packet["missing_exact_update_count"], 2)
         self.assertEqual(packet["unblockers"][0]["input_id"], "profile_zip_or_postal_code")
         self.assertEqual(packet["compact_updates_template"]["profile_zip_or_postal_code"], "")
+        self.assertEqual(
+            packet["full_updates_template"]["answer_memory_startup_culture"],
+            "Ownership and fast feedback loops.",
+        )
         self.assertEqual(
             packet["compact_updates_template"]["answer_memory_citizenship_status_default_policy"],
             {
@@ -6091,9 +6125,23 @@ class JobApplyAgentTests(unittest.TestCase):
             },
         )
         self.assertNotIn("answer_memory_startup_culture", packet["compact_updates_template"])
+        self.assertIn("answer_memory_startup_culture", packet["full_updates_template"])
         self.assertIn("--approve-high-risk", packet["workflow_command"])
         self.assertIn("Critical Input Final Unblockers", markdown)
-        self.assertIn("Build compact JSON", html)
+        self.assertIn("Load full one-shot template", html)
+
+        full_updates = json.loads(json.dumps(packet["full_updates_template"]))
+        full_updates["profile_zip_or_postal_code"] = "98004"
+        full_updates["answer_memory_citizenship_status_default_policy"]["user_answer"] = "Synthetic truthful answer."
+        full_updates["answer_memory_citizenship_status_default_policy"]["high_risk_user_confirmed"] = True
+        update_report = build_critical_input_answer_update(
+            answers_payload,
+            full_updates,
+            approve=True,
+            approve_high_risk=True,
+        )
+        self.assertEqual(update_report["summary"]["ready_after_update_count"], 3)
+        self.assertEqual(update_report["summary"]["waiting_after_update_count"], 0)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -7136,6 +7184,17 @@ class JobApplyAgentTests(unittest.TestCase):
             "local_synthetic_submit_achieved": True,
             "local_synthetic_submit_selector_miss_count": 0,
         }
+        synthetic_unblocker_proof = {
+            "real_platform_submission": False,
+            "writes_real_profile_or_memory": False,
+            "summary": {
+                "proof_complete": True,
+                "synthetic_final_unblocker_update_count": 2,
+                "existing_draft_update_count": 10,
+                "data_blocking_prompts_after": 0,
+                "local_100_synthetic_apply_path_ready": True,
+            },
+        }
         closed_jobs = {"jobs": [{"key": "linkedin:1", "reason": "No longer accepting applications"}]}
 
         audit = build_goal_readiness_audit(
@@ -7146,6 +7205,7 @@ class JobApplyAgentTests(unittest.TestCase):
             fake_critical_input_probe=fake_critical,
             fake_position_rehearsal=fake_rehearsal,
             autofill_batch_plan=autofill_batch,
+            synthetic_unblocker_proof=synthetic_unblocker_proof,
             closed_jobs=closed_jobs,
         )
         markdown = render_goal_readiness_audit_markdown(audit)
@@ -7157,11 +7217,14 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(audit["blocker_summary"]["policy_gate_prompt_count"], 4)
         self.assertEqual(audit["blocker_summary"]["autofill_batch_local_synthetic_submit_count"], 100)
         self.assertTrue(audit["blocker_summary"]["autofill_batch_local_synthetic_submit_achieved"])
+        self.assertTrue(audit["blocker_summary"]["synthetic_unblocker_proof_complete"])
         self.assertEqual(audit["requirements"][0]["status"], "achieved")
+        self.assertEqual(audit["requirements"][4]["status"], "achieved")
         self.assertEqual(audit["top_data_blocking_prompts"][0]["coverage_status"], "needs_user_confirmation")
         self.assertIn("Goal Readiness Audit", markdown)
         self.assertIn("needs_user_answers", markdown)
         self.assertIn("100-batch local synthetic submits: 100", markdown)
+        self.assertIn("synthetic final unblocker proof complete: true", markdown)
         self.assertIn("Top Data-Blocking Prompts", markdown)
         self.assertIn("Have you worked with us before?", markdown)
 
@@ -7178,6 +7241,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 fake_critical_input_probe=fake_critical,
                 fake_position_rehearsal=fake_rehearsal,
                 autofill_batch_plan=autofill_batch,
+                synthetic_unblocker_proof=synthetic_unblocker_proof,
                 closed_jobs=closed_jobs,
             )
 
@@ -7195,6 +7259,10 @@ class JobApplyAgentTests(unittest.TestCase):
                 "data_blocking_prompt_count": 253,
                 "critical_waiting_count": 10,
                 "critical_supervised_only_count": 1,
+                "synthetic_unblocker_proof_complete": True,
+                "synthetic_final_unblocker_update_count": 6,
+                "synthetic_unblocker_existing_draft_update_count": 83,
+                "synthetic_unblocker_data_blocking_prompts_after": 0,
             },
             "requirements": [
                 {
@@ -7324,6 +7392,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["summary"]["combined_remaining_data_blocker_count"], 12)
         self.assertTrue(report["summary"]["individual_impact_truncated"])
         self.assertEqual(report["summary"]["closed_registry_count"], 1)
+        self.assertTrue(report["summary"]["synthetic_unblocker_proof_complete"])
+        self.assertEqual(report["summary"]["synthetic_final_unblocker_update_count"], 6)
         self.assertEqual(report["answer_impact_queue"][0]["input_id"], "answer_memory_citizenship_status_default_policy")
         self.assertEqual(report["answer_impact_queue"][0]["handoff_action"], "confirm_truthful_answer_before_persisting")
         self.assertEqual(report["selected_stop_action_summary"][0]["status"], "final_submit_confirmation")
@@ -7331,6 +7401,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Application Automation Handoff", markdown)
         self.assertIn("data blockers after simulated confirmations: 12", markdown)
         self.assertIn("local synthetic submit proof: 100 submits", markdown)
+        self.assertIn("synthetic final unblocker proof: true", markdown)
         self.assertIn("100-Position Stop Actions", markdown)
         self.assertIn("GitHub URL", html)
         self.assertIn("Answer Impact Queue", html)

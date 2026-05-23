@@ -127,6 +127,9 @@ DEFAULT_CRITICAL_INPUT_UNBLOCKERS_HTML = Path(__file__).with_name("outbox") / "c
 DEFAULT_CRITICAL_INPUT_UNBLOCKERS_UPDATES_JSON = (
     Path(__file__).with_name("outbox") / "critical_input_unblockers_updates_template.json"
 )
+DEFAULT_CRITICAL_INPUT_FULL_UPDATES_JSON = (
+    Path(__file__).with_name("outbox") / "critical_input_full_updates_template.json"
+)
 DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_JSON = Path(__file__).with_name("outbox") / "synthetic_unblocker_proof_latest.json"
 DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_MARKDOWN = (
     Path(__file__).with_name("outbox") / "synthetic_unblocker_proof_latest.md"
@@ -529,6 +532,10 @@ def main() -> int:
     critical_inputs_unblockers_parser.add_argument(
         "--updates-template-output",
         default=str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_UPDATES_JSON),
+    )
+    critical_inputs_unblockers_parser.add_argument(
+        "--full-updates-template-output",
+        default=str(DEFAULT_CRITICAL_INPUT_FULL_UPDATES_JSON),
     )
 
     critical_inputs_update_parser = subparsers.add_parser(
@@ -944,6 +951,14 @@ def main() -> int:
     )
     export_questions_parser.add_argument("--fake-position-rehearsal-json", default=str(DEFAULT_FAKE_POSITION_REHEARSAL_JSON))
     export_questions_parser.add_argument(
+        "--synthetic-unblocker-proof-json",
+        default=str(DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_JSON),
+    )
+    export_questions_parser.add_argument(
+        "--critical-input-full-updates-json",
+        default=str(DEFAULT_CRITICAL_INPUT_FULL_UPDATES_JSON),
+    )
+    export_questions_parser.add_argument(
         "--learning-approval-pack-json",
         default=str(DEFAULT_LEARNING_APPROVAL_PACK_JSON),
     )
@@ -1006,6 +1021,10 @@ def main() -> int:
         default=str(DEFAULT_FAKE_POSITION_REHEARSAL_JSON),
     )
     goal_audit_parser.add_argument("--autofill-batch-json", default=str(DEFAULT_AUTOFILL_BATCH_JSON))
+    goal_audit_parser.add_argument(
+        "--synthetic-unblocker-proof-json",
+        default=str(DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_JSON),
+    )
     goal_audit_parser.add_argument("--closed-jobs-json", default=str(DEFAULT_CLOSED_JOBS))
     goal_audit_parser.add_argument("--json-output", default=str(DEFAULT_GOAL_AUDIT_JSON))
     goal_audit_parser.add_argument("--markdown-output", default=str(DEFAULT_GOAL_AUDIT_MARKDOWN))
@@ -1144,6 +1163,8 @@ def main() -> int:
                     "Fake critical input probe": args.fake_critical_input_probe_json,
                     "Fake critical input answers": args.fake_critical_input_answers_json,
                     "Fake position rehearsal": args.fake_position_rehearsal_json,
+                    "Synthetic unblocker proof": args.synthetic_unblocker_proof_json,
+                    "Critical input full updates template": args.critical_input_full_updates_json,
                     "Learning approval pack": args.learning_approval_pack_json,
                     "Answer memory": args.answer_memory_json,
                     "Closed postings": args.closed_jobs_json,
@@ -1197,6 +1218,7 @@ def main() -> int:
             fake_critical_input_probe=_load_optional_json(args.fake_critical_input_probe_json),
             fake_position_rehearsal=_load_optional_json(args.fake_position_rehearsal_json),
             autofill_batch_plan=_load_optional_json(args.autofill_batch_json),
+            synthetic_unblocker_proof=_load_optional_json(args.synthetic_unblocker_proof_json),
             closed_jobs=_load_optional_json(args.closed_jobs_json),
         )
         print(f"Wrote goal audit JSON to {args.json_output}")
@@ -1613,12 +1635,20 @@ def main() -> int:
             json.dumps(packet.get("compact_updates_template", {}), ensure_ascii=True, indent=2) + "\n",
             encoding="utf-8",
         )
+        full_updates_path = Path(args.full_updates_template_output)
+        full_updates_path.parent.mkdir(parents=True, exist_ok=True)
+        full_updates_path.write_text(
+            json.dumps(packet.get("full_updates_template", {}), ensure_ascii=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
         print(f"Wrote critical input unblockers JSON to {args.json_output}")
         print(f"Wrote critical input unblockers Markdown to {args.markdown_output}")
         print(f"Wrote critical input unblockers HTML to {args.html_output}")
         print(f"Wrote critical input unblocker updates template to {args.updates_template_output}")
+        print(f"Wrote critical input full updates template to {args.full_updates_template_output}")
         print(f"Inputs: {packet.get('input_count', 0)}")
         print(f"High risk: {packet.get('high_risk_count', 0)}")
+        print(f"Full update entries: {packet.get('full_update_count', 0)}")
         return 0
 
     if args.command == "critical-inputs-update":
@@ -2341,6 +2371,10 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             json.dumps(unblockers.get("compact_updates_template", {}), ensure_ascii=True, indent=2) + "\n",
             encoding="utf-8",
         )
+        DEFAULT_CRITICAL_INPUT_FULL_UPDATES_JSON.write_text(
+            json.dumps(unblockers.get("full_updates_template", {}), ensure_ascii=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
     autofill_batch = write_autofill_batch_plan(
         research,
         readiness,
@@ -2375,6 +2409,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
         fake_critical_input_probe=_load_optional_json(str(DEFAULT_FAKE_CRITICAL_INPUT_PROBE_JSON)),
         fake_position_rehearsal=_load_optional_json(str(DEFAULT_FAKE_POSITION_REHEARSAL_JSON)),
         autofill_batch_plan=_load_optional_json(str(DEFAULT_AUTOFILL_BATCH_JSON)),
+        synthetic_unblocker_proof=_load_optional_json(str(DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_JSON)),
         closed_jobs=_load_optional_json(str(DEFAULT_CLOSED_JOBS)),
     )
     automation_handoff = write_automation_handoff_report(
@@ -2394,6 +2429,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                 "Critical input impact": str(DEFAULT_CRITICAL_INPUT_IMPACT_JSON),
                 "Autofill batch": str(DEFAULT_AUTOFILL_BATCH_JSON),
                 "Synthetic unblocker proof": str(DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_JSON),
+                "Critical input full updates template": str(DEFAULT_CRITICAL_INPUT_FULL_UPDATES_JSON),
                 "Answer memory": str(DEFAULT_MEMORY),
                 "Closed postings": str(DEFAULT_CLOSED_JOBS),
             }
@@ -2436,6 +2472,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                     "Critical input impact": str(DEFAULT_CRITICAL_INPUT_IMPACT_JSON),
                     "Critical input impact HTML": str(DEFAULT_CRITICAL_INPUT_IMPACT_HTML),
                     "Synthetic unblocker proof": str(DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_JSON),
+                    "Critical input full updates template": str(DEFAULT_CRITICAL_INPUT_FULL_UPDATES_JSON),
                 }
             ),
             synthetic_browser_execution=_load_optional_json(str(DEFAULT_SYNTHETIC_BROWSER_EXEC_JSON)),
