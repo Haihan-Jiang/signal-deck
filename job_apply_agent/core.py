@@ -5160,34 +5160,67 @@ def render_critical_input_unblocker_html(packet: dict[str, Any]) -> str:
     ).replace("</", "<\\/")
     script = """
 <script>
-function buildUnblockerUpdates() {
+function collectUnblockerValues() {
   const updates = {};
+  const missing = [];
+  const unconfirmed = [];
   document.querySelectorAll("[data-question-id]").forEach((card) => {
     const textarea = card.querySelector("textarea");
     const value = textarea ? textarea.value.trim() : "";
-    if (!value) return;
     const id = card.dataset.questionId;
+    if (!value) {
+      missing.push(id);
+      return;
+    }
     if (card.dataset.highRisk === "true") {
       const checkbox = card.querySelector("input[type=checkbox]");
+      const confirmed = Boolean(checkbox && checkbox.checked);
+      if (!confirmed) unconfirmed.push(id);
       updates[id] = {
         user_answer: value,
         approval_decision: "approved",
-        high_risk_user_confirmed: Boolean(checkbox && checkbox.checked)
+        high_risk_user_confirmed: confirmed
       };
     } else {
       updates[id] = value;
     }
   });
-  document.getElementById("compact-json").value = JSON.stringify(updates, null, 2);
+  return {updates, missing, unconfirmed};
+}
+function buildUnblockerUpdates() {
+  const result = collectUnblockerValues();
+  document.getElementById("compact-json").value = JSON.stringify(result.updates, null, 2);
+  showUnblockerStatus(result, "compact");
+}
+function buildFullUnblockerUpdates() {
+  const result = collectUnblockerValues();
+  const full = JSON.parse(document.getElementById("full-template-json").textContent);
+  Object.entries(result.updates).forEach(([id, value]) => {
+    full[id] = value;
+  });
+  document.getElementById("compact-json").value = JSON.stringify(full, null, 2);
+  showUnblockerStatus(result, "full");
+}
+function showUnblockerStatus(result, mode) {
+  const status = document.getElementById("json-status");
+  const parts = [];
+  if (mode === "full") parts.push("full one-shot JSON includes prefilled draft answers");
+  if (result.missing.length) parts.push("missing: " + result.missing.join(", "));
+  if (result.unconfirmed.length) parts.push("high-risk confirmations missing: " + result.unconfirmed.join(", "));
+  if (!result.missing.length && !result.unconfirmed.length) parts.push("ready to use with the workflow command");
+  status.textContent = parts.join(" | ");
 }
 function loadUnblockerTemplate() {
   document.getElementById("compact-json").value = document.getElementById("template-json").textContent.trim();
+  document.getElementById("json-status").textContent = "blank compact template loaded";
 }
 function loadFullUnblockerTemplate() {
   document.getElementById("compact-json").value = document.getElementById("full-template-json").textContent.trim();
+  document.getElementById("json-status").textContent = "full one-shot template loaded; fill the remaining blanks before workflow";
 }
 document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("build-json").addEventListener("click", buildUnblockerUpdates);
+  document.getElementById("build-full-json").addEventListener("click", buildFullUnblockerUpdates);
   document.getElementById("load-template").addEventListener("click", loadUnblockerTemplate);
   document.getElementById("load-full-template").addEventListener("click", loadFullUnblockerTemplate);
 });
@@ -5225,7 +5258,8 @@ document.addEventListener("DOMContentLoaded", () => {
             "".join(cards),
             "<section>",
             "<h2>Compact JSON</h2>",
-            '<div class="actions"><button id="build-json" type="button">Build compact JSON</button><button id="load-template" type="button">Load blank template</button><button id="load-full-template" type="button">Load full one-shot template</button></div>',
+            '<div class="actions"><button id="build-full-json" type="button">Build full one-shot JSON</button><button id="build-json" type="button">Build compact JSON</button><button id="load-template" type="button">Load blank template</button><button id="load-full-template" type="button">Load full one-shot template</button></div>',
+            '<p id="json-status" class="muted">Full one-shot JSON preserves the prefilled draft answers.</p>',
             '<textarea id="compact-json" rows="16" spellcheck="false"></textarea>',
             f'<script type="application/json" id="template-json">{template_json}</script>',
             f'<script type="application/json" id="full-template-json">{full_template_json}</script>',

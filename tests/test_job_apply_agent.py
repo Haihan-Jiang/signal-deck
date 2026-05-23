@@ -6129,6 +6129,10 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("--approve-high-risk", packet["workflow_command"])
         self.assertIn("Critical Input Final Unblockers", markdown)
         self.assertIn("Load full one-shot template", html)
+        self.assertIn("Build full one-shot JSON", html)
+        self.assertIn("collectUnblockerValues", html)
+        self.assertIn("high-risk confirmations missing", html)
+        self.assertIn("full one-shot JSON includes prefilled draft answers", html)
 
         full_updates = json.loads(json.dumps(packet["full_updates_template"]))
         full_updates["profile_zip_or_postal_code"] = "98004"
