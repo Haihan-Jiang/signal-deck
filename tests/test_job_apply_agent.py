@@ -288,6 +288,7 @@ class JobApplyAgentTests(unittest.TestCase):
             **self.jobs[0],
             "questions": [
                 "How many weeks after accepting an offer could you start?",
+                "What is your earliest possible starting date?",
                 "Did AI complete or submit this application?",
                 "Are you actively looking for a job, or just exploring future opportunities?",
                 "When would you like to hear back from us regarding potential opportunities?",
@@ -303,6 +304,10 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(
             draft.answers["How many weeks after accepting an offer could you start?"],
             "About 8 weeks after offer acceptance.",
+        )
+        self.assertEqual(
+            draft.answers["What is your earliest possible starting date?"],
+            "I can start in about two months.",
         )
         self.assertEqual(
             draft.answers["Did AI complete or submit this application?"],
@@ -1400,6 +1405,10 @@ class JobApplyAgentTests(unittest.TestCase):
             "availability",
         )
         self.assertEqual(
+            classify_application_prompt("What is your earliest possible starting date?").category,
+            "availability",
+        )
+        self.assertEqual(
             classify_application_prompt("Stack Overflow Jobs").category,
             "referral_source",
         )
@@ -1416,6 +1425,12 @@ class JobApplyAgentTests(unittest.TestCase):
                 "Have you ever been charged or convicted of a misdemeanor or felony?"
             ).category,
             "background_or_export_control",
+        )
+        self.assertEqual(
+            classify_application_prompt(
+                "Do you have any contractual obligations, agreements, relationships, or commitments to another person or entity that would impact, impede or interfere with your ability to join Axon?"
+            ).category,
+            "conflict_of_interest",
         )
         self.assertEqual(
             classify_application_prompt(
@@ -2935,6 +2950,84 @@ class JobApplyAgentTests(unittest.TestCase):
                     "observed_count": 4,
                     "required_count": 4,
                 },
+                {
+                    "group_key": "answer_memory:needs_user_confirmation:earliest_start",
+                    "question": "What is your earliest possible starting date?",
+                    "recommended_storage": "answer_memory",
+                    "labels": ["What is your earliest possible starting date?"],
+                    "platforms": ["Ashby"],
+                    "related_prompt_count": 1,
+                    "observed_count": 1,
+                    "required_count": 1,
+                },
+                {
+                    "group_key": "resume_facts:education_grading",
+                    "question": "What GPA, grading system, ACT/SAT score, or 'not applicable' answer should automation use for education grading fields?",
+                    "recommended_storage": "resume_facts",
+                    "labels": ["What is your GPA?"],
+                    "platforms": ["Greenhouse"],
+                    "related_prompt_count": 1,
+                    "observed_count": 8,
+                    "required_count": 8,
+                },
+                {
+                    "group_key": "answer_memory:needs_user_confirmation:startup_environment",
+                    "question": "Have you worked in a startup environment in the past 5 years?",
+                    "recommended_storage": "answer_memory",
+                    "labels": ["Have you worked in a startup environment in the past 5 years?"],
+                    "platforms": ["Greenhouse"],
+                    "related_prompt_count": 1,
+                    "observed_count": 2,
+                    "required_count": 2,
+                },
+                {
+                    "group_key": "answer_memory:needs_user_confirmation:startup_culture",
+                    "question": "What aspects of startup culture resonate with you, and how do you believe they align with your working style?",
+                    "recommended_storage": "answer_memory",
+                    "labels": [
+                        "What aspects of startup culture resonate with you, and how do you believe they align with your working style?"
+                    ],
+                    "platforms": ["Ashby"],
+                    "related_prompt_count": 1,
+                    "observed_count": 2,
+                    "required_count": 2,
+                },
+                {
+                    "group_key": "answer_memory:needs_user_confirmation:crypto_motivation",
+                    "question": "What aspects of the cryptocurrency industry appeal to you, and how do they align with your career goals?",
+                    "recommended_storage": "answer_memory",
+                    "labels": [
+                        "What aspects of the cryptocurrency industry appeal to you, and how do they align with your career goals?"
+                    ],
+                    "platforms": ["Ashby"],
+                    "related_prompt_count": 1,
+                    "observed_count": 2,
+                    "required_count": 2,
+                },
+                {
+                    "group_key": "answer_memory:needs_user_confirmation:platform_big_impact",
+                    "question": "Are you a Platform Engineer looking to make a big impact on a mission-driven company? Do you enjoy architecting software that shapes an entire engineering organization? Do you thrive in high-autonomy startup environments?",
+                    "recommended_storage": "answer_memory",
+                    "labels": [
+                        "Are you a Platform Engineer looking to make a big impact on a mission-driven company? Do you enjoy architecting software that shapes an entire engineering organization? Do you thrive in high-autonomy startup environments?"
+                    ],
+                    "platforms": ["LinkedIn"],
+                    "related_prompt_count": 1,
+                    "observed_count": 2,
+                    "required_count": 2,
+                },
+                {
+                    "group_key": "answer_memory:needs_user_confirmation:define_infra",
+                    "question": "Do you want to define the infrastructure that powers one of the fastest-growing startups in history?",
+                    "recommended_storage": "answer_memory",
+                    "labels": [
+                        "Do you want to define the infrastructure that powers one of the fastest-growing startups in history?"
+                    ],
+                    "platforms": ["LinkedIn"],
+                    "related_prompt_count": 1,
+                    "observed_count": 1,
+                    "required_count": 1,
+                },
             ]
         }
 
@@ -2953,8 +3046,9 @@ class JobApplyAgentTests(unittest.TestCase):
                 **self.profile.resume_facts,
                 "strongest_skills": "Python, Linux, Azure, SQL, Redis, MongoDB, and automation tooling",
                 "current_role": "Operating Rocky Linux migration and Azure VM reliability work",
+                "education": "MS in Computer Science and Software Engineering; BS in Computer Science",
             },
-            question_answers=self.profile.question_answers,
+            question_answers={**self.profile.question_answers, "start_date": "I can start in about two months."},
         )
 
         template = build_learning_task_template(readiness, profile=profile)
@@ -3007,6 +3101,34 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn(
             "public, non-invasive signals",
             tasks["answer_memory:needs_user_confirmation:perimeter"]["suggested_answer"],
+        )
+        self.assertEqual(
+            tasks["answer_memory:needs_user_confirmation:earliest_start"]["suggested_answer"],
+            "I can start in about two months.",
+        )
+        self.assertIn(
+            "GPA/test scores are not included",
+            tasks["resume_facts:education_grading"]["suggested_answer"],
+        )
+        self.assertIn(
+            "No confirmed startup environment",
+            tasks["answer_memory:needs_user_confirmation:startup_environment"]["suggested_answer"],
+        )
+        self.assertIn(
+            "ownership",
+            tasks["answer_memory:needs_user_confirmation:startup_culture"]["suggested_answer"].lower(),
+        )
+        self.assertIn(
+            "infrastructure and reliability challenges",
+            tasks["answer_memory:needs_user_confirmation:crypto_motivation"]["suggested_answer"],
+        )
+        self.assertIn(
+            "platform reliability",
+            tasks["answer_memory:needs_user_confirmation:platform_big_impact"]["suggested_answer"],
+        )
+        self.assertIn(
+            "defining and operating infrastructure",
+            tasks["answer_memory:needs_user_confirmation:define_infra"]["suggested_answer"],
         )
 
     def test_direct_answers_cover_localized_compensation_and_years_questions(self) -> None:
@@ -5004,11 +5126,6 @@ class JobApplyAgentTests(unittest.TestCase):
                     "required_count": 4,
                     "persist_allowed": True,
                 },
-            ],
-        }
-        new_tasks = {
-            "tasks": [
-                *old_tasks["tasks"],
                 {
                     "group_key": "resume_facts:education_grading",
                     "question": "What GPA should automation use?",
@@ -5020,10 +5137,28 @@ class JobApplyAgentTests(unittest.TestCase):
                 },
             ],
         }
+        new_tasks = {
+            "tasks": [
+                old_tasks["tasks"][0],
+                {
+                    "group_key": "resume_facts:education_grading",
+                    "question": "What GPA should automation use?",
+                    "recommended_storage": "resume_facts",
+                    "labels": ["What is your GPA?"],
+                    "suggested_answer": "Not provided in my current resume; GPA/test scores are not included.",
+                    "suggested_answer_source": "profile.resume_facts.education_without_grade",
+                    "platforms": ["Greenhouse"],
+                    "required_count": 8,
+                    "persist_allowed": True,
+                },
+            ],
+        }
         old_pack = build_learning_approval_pack(old_tasks, {})
         existing = build_critical_input_answer_template(old_pack)
-        existing["critical_inputs"][0]["user_answer"] = "98004"
-        existing["critical_inputs"][0]["approval_decision"] = "approved"
+        for row in existing["critical_inputs"]:
+            if row["group_key"] == "profile:zip_or_postal_code":
+                row["user_answer"] = "98004"
+                row["approval_decision"] = "approved"
 
         new_pack = build_learning_approval_pack(new_tasks, {})
         synced = build_critical_input_answer_template(
@@ -5037,7 +5172,10 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(rows_by_id["profile_zip_or_postal_code"]["user_answer"], "98004")
         self.assertEqual(rows_by_id["profile_zip_or_postal_code"]["approval_decision"], "approved")
         self.assertIn("resume_facts_education_grading", rows_by_id)
-        self.assertEqual(rows_by_id["resume_facts_education_grading"]["user_answer"], "")
+        self.assertEqual(
+            rows_by_id["resume_facts_education_grading"]["user_answer"],
+            "Not provided in my current resume; GPA/test scores are not included.",
+        )
 
     def test_critical_input_answer_update_merges_compact_answers_safely(self) -> None:
         learning_tasks = {
@@ -5752,6 +5890,17 @@ class JobApplyAgentTests(unittest.TestCase):
                     "required_count": 1,
                     "persist_allowed": False,
                 },
+                {
+                    "group_key": "answer_memory:startup_culture",
+                    "question": "What aspects of startup culture resonate with you?",
+                    "recommended_storage": "answer_memory",
+                    "labels": ["What aspects of startup culture resonate with you?"],
+                    "suggested_answer": "Ownership, fast feedback loops, and production impact.",
+                    "suggested_answer_source": "standard_startup_working_style",
+                    "platforms": ["Ashby"],
+                    "required_count": 1,
+                    "persist_allowed": True,
+                },
             ],
         }
         profile = CandidateProfile.from_mapping(
@@ -5769,15 +5918,26 @@ class JobApplyAgentTests(unittest.TestCase):
         )
         pack = build_learning_approval_pack(learning_tasks, {})
         template = build_critical_input_answer_template(pack)
+        for row in template["critical_inputs"]:
+            if row["group_key"] == "answer_memory:startup_culture":
+                row["user_answer"] = ""
 
         packet = build_critical_input_suggestion_packet(template, profile=profile, answer_memory=None)
         rows = {row["input_id"]: row for row in packet["critical_inputs"]}
         markdown = render_critical_input_suggestions_markdown(packet)
 
-        self.assertEqual(packet["input_count"], 3)
-        self.assertEqual(packet["direct_suggestion_count"], 2)
+        self.assertEqual(packet["input_count"], 4)
+        self.assertEqual(packet["direct_suggestion_count"], 3)
         self.assertFalse(packet["policy"]["writes_profile_or_memory"])
         self.assertEqual(rows["profile_zip_or_postal_code"]["suggested_answer"], "98004")
+        self.assertEqual(
+            rows["answer_memory_startup_culture"]["suggested_answer"],
+            "Ownership, fast feedback loops, and production impact.",
+        )
+        self.assertEqual(
+            rows["answer_memory_startup_culture"]["suggestion_source"],
+            "standard_startup_working_style",
+        )
         self.assertTrue(rows["profile_zip_or_postal_code"]["can_copy_to_user_answer_after_review"])
         self.assertIn("sponsorship", rows["answer_memory_citizenship_status_default_policy"]["review_context"])
         self.assertEqual(
@@ -5796,7 +5956,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 profile=profile,
             )
 
-            self.assertEqual(written["input_count"], 3)
+            self.assertEqual(written["input_count"], 4)
             self.assertTrue(json_output.exists())
             self.assertTrue(markdown_output.exists())
             self.assertIn("98004", markdown_output.read_text())

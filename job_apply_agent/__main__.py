@@ -573,6 +573,12 @@ def main() -> int:
         default=str(DEFAULT_CRITICAL_INPUT_IMPACT_MARKDOWN),
     )
     critical_inputs_impact_parser.add_argument("--html-output", default=str(DEFAULT_CRITICAL_INPUT_IMPACT_HTML))
+    critical_inputs_impact_parser.add_argument(
+        "--individual-limit",
+        type=int,
+        default=10,
+        help="number of individual input impact rows to rank; use -1 for all",
+    )
 
     critical_inputs_workflow_parser = subparsers.add_parser(
         "critical-inputs-workflow",
@@ -1617,6 +1623,7 @@ def main() -> int:
             args.html_output,
             answer_memory=load_answer_memory(args.memory),
             closed_jobs=load_closed_jobs(args.closed_jobs),
+            individual_impact_limit=None if args.individual_limit < 0 else args.individual_limit,
         )
         summary = report.get("summary") or {}
         print(f"Wrote critical input impact JSON to {args.json_output}")

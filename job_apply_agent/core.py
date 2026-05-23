@@ -1315,6 +1315,9 @@ def classify_application_prompt(
         term in text
         for term in [
             "start date",
+            "starting date",
+            "earliest possible start",
+            "earliest possible starting date",
             "available to start",
             "can you start",
             "could you start",
@@ -1567,6 +1570,12 @@ def classify_application_prompt(
             "non compete",
             "non-compete",
             "employment agreement",
+            "contractual obligations",
+            "contractual obligation",
+            "relationships or commitments",
+            "commitments to another person",
+            "commitments to another entity",
+            "interfere with your ability to join",
             "government official",
             "state-owned enterprise",
             "commercial contracts",
@@ -4198,6 +4207,7 @@ def build_critical_input_answer_template(
                 "user_answer": prefilled_answer,
                 "required_user_response": item.get("required_user_response"),
                 "draft_answer": draft_answer,
+                "draft_answer_source": item.get("draft_answer_source"),
                 "approval_risk": item.get("approval_risk"),
                 "storage_after_approval": item.get("storage_after_approval"),
                 "automation_after_answer": item.get("automation_after_answer"),
@@ -4256,8 +4266,12 @@ def _sync_existing_critical_input_answers(
         copied_any = False
         for field in ["user_answer", "approval_decision"]:
             if field in existing:
-                answer[field] = existing.get(field)
-                copied_any = copied_any or bool(str(existing.get(field) or "").strip())
+                existing_value = existing.get(field)
+                if field != "user_answer" or str(existing_value or "").strip() or not str(
+                    answer.get("user_answer") or ""
+                ).strip():
+                    answer[field] = existing_value
+                copied_any = copied_any or bool(str(existing_value or "").strip())
         for field in ["notes", "high_risk_user_confirmed"]:
             if field in existing and field not in answer:
                 answer[field] = existing.get(field)
@@ -5719,10 +5733,14 @@ def build_critical_input_impact_report(
     profile_payload: dict[str, Any],
     answer_memory: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
-    individual_impact_limit: int | None = 50,
+    individual_impact_limit: int | None = 10,
 ) -> dict[str, Any]:
     rows = _critical_input_answer_rows(answers_payload)
-    individual_rows = rows[: max(0, int(individual_impact_limit))] if individual_impact_limit else rows
+    individual_rows = (
+        rows
+        if individual_impact_limit is None
+        else rows[: max(0, int(individual_impact_limit))]
+    )
     baseline_memory = json.loads(json.dumps(answer_memory or {"version": 1, "answers": []}))
     baseline_profile = CandidateProfile.from_mapping(json.loads(json.dumps(profile_payload)))
     baseline_gaps = build_answer_gap_report(
@@ -5862,6 +5880,7 @@ def write_critical_input_impact_report(
     html_output: str | Path,
     answer_memory: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
+    individual_impact_limit: int | None = 10,
 ) -> dict[str, Any]:
     report = build_critical_input_impact_report(
         approval_pack,
@@ -5870,6 +5889,7 @@ def write_critical_input_impact_report(
         profile_payload,
         answer_memory=answer_memory,
         closed_jobs=closed_jobs,
+        individual_impact_limit=individual_impact_limit,
     )
     json_path = Path(json_output)
     markdown_path = Path(markdown_output)
@@ -6198,6 +6218,7 @@ def _critical_input_suggestion(
     question = str(item.get("question") or "")
     labels = _string_list(item.get("labels"))
     existing = str(item.get("user_answer") or "").strip()
+    draft = str(item.get("draft_answer") or "").strip()
     base = {
         "suggested_answer": "",
         "suggestion_source": "needs_user",
@@ -6216,6 +6237,16 @@ def _critical_input_suggestion(
             "suggestion_note": "Existing user_answer is present; verify approval_decision before applying.",
             "recommended_action": "review_existing_answer",
             "can_copy_to_user_answer_after_review": False,
+        }
+    if draft and input_type not in {"high_risk_exact_confirmation", "supervised_browser_review_only"}:
+        return {
+            **base,
+            "suggested_answer": draft,
+            "suggestion_source": str(item.get("draft_answer_source") or "draft_answer"),
+            "suggestion_confidence": "medium",
+            "suggestion_note": "Draft answer from the learning template; verify before approval.",
+            "recommended_action": "review_then_copy_to_user_answer",
+            "can_copy_to_user_answer_after_review": True,
         }
     if input_type == "supervised_browser_review_only":
         policy_ack = (profile.question_answers.get("policy_acknowledgement") if profile else "") or ""
@@ -15453,6 +15484,20 @@ def _learning_task_answer_suggestion(
                 "approval_risk": "medium",
                 "approval_note": "Resume fact exists, but verify it is appropriate for repeated form answers.",
             }
+        if group_key == "resume_facts:education_grading":
+            education = str((profile.resume_facts.get("education") if profile else "") or "").strip()
+            if education:
+                return {
+                    **base,
+                    "suggested_answer": "Not provided in my current resume; GPA/test scores are not included.",
+                    "suggested_answer_source": "profile.resume_facts.education_without_grade",
+                    "suggestion_confidence": "medium",
+                    "approval_risk": "medium",
+                    "approval_note": (
+                        "Education is stored but no grade or test score is present; approve this only "
+                        "if you want forms to say the value is not provided."
+                    ),
+                }
         return {
             **base,
             "approval_note": "Resume fact is missing or should not be inferred.",
@@ -15522,6 +15567,54 @@ def _standard_learning_answer_suggestion(
             if profile and profile.question_answers.get("policy_acknowledgement")
             else "standard_policy_acknowledgement",
             "Draft only for this exact policy prompt; approve after reviewing the employer text.",
+        )
+    if "earliest possible starting date" in text or "earliest possible start" in text:
+        start_date = (profile.question_answers.get("start_date") if profile else "") or ""
+        if start_date:
+            return _suggested_learning_answer(
+                start_date,
+                "profile.question_answers.start_date",
+                "Drafted from stored availability; verify before approving.",
+            )
+    if "platform engineer" in text and "big impact" in text and "startup" in text:
+        return _suggested_learning_answer(
+            (
+                "Yes. My background is in SRE, production engineering, platform reliability, "
+                "automation, and infrastructure work, and I am interested in high-ownership "
+                "platform roles where the work has broad engineering impact."
+            ),
+            "profile.resume_facts",
+            "Motivation draft based on target platform/SRE profile; verify tone before approving.",
+        )
+    if "startup culture" in text and "working style" in text:
+        return _suggested_learning_answer(
+            (
+                "I value ownership, fast feedback loops, pragmatic execution, and working close "
+                "to production systems. That matches how I like to work: taking clear responsibility, "
+                "automating repeated problems, and improving reliability with measurable impact."
+            ),
+            "standard_startup_working_style",
+            "Subjective motivation draft; edit to your own wording before approving.",
+        )
+    if "cryptocurrency industry" in text and "career goals" in text:
+        return _suggested_learning_answer(
+            (
+                "The infrastructure and reliability challenges are the most relevant part for me: "
+                "secure, high-scale systems, automation, observability, incident response, and resilient "
+                "platform operations. My career goal is to keep building production infrastructure systems "
+                "where reliability and operational rigor matter."
+            ),
+            "standard_crypto_infrastructure_motivation",
+            "Motivation draft that does not claim crypto work experience; verify before approving.",
+        )
+    if "define the infrastructure" in text and "fastest growing startups" in text:
+        return _suggested_learning_answer(
+            (
+                "Yes. I am interested in defining and operating infrastructure that supports fast growth, "
+                "reliability, automation, and clear production ownership."
+            ),
+            "profile.resume_facts",
+            "Motivation draft based on SRE/platform interests; verify before approving.",
         )
     if "attended an on campus or virtual event" in text:
         return _suggested_learning_answer(
@@ -15738,6 +15831,7 @@ def _looks_like_resume_skill_learning_prompt(normalized: str) -> bool:
             "proficiency",
             "familiar",
             "worked with",
+            "worked in",
             "hands on",
             "hands-on",
             "select the tools",
@@ -15956,6 +16050,8 @@ def _experience_subject_summary(normalized: str) -> str:
         "ad tech",
         "digital media",
         "customer facing technical support",
+        "startup environment",
+        "startup",
         "go or c",
         "c++",
         "fedramp",
@@ -16187,6 +16283,7 @@ def _learning_approval_critical_input_rows(task_rows: list[dict[str, Any]]) -> l
                 "approval_decision": "",
                 "required_user_response": _learning_approval_required_user_response(input_type),
                 "draft_answer": draft_answer,
+                "draft_answer_source": task.get("suggested_answer_source"),
                 "approval_risk": task.get("approval_risk"),
                 "persist_allowed": bool(task.get("persist_allowed")),
                 "storage_after_approval": task.get("recommended_storage"),
@@ -18418,7 +18515,17 @@ def _direct_answer(profile: CandidateProfile, normalized_question: str) -> str |
         ],
         "compensation": ["salary", "compensation", "pay", "ctc", "combien tu vas gagner"],
         "compensation_currency": ["currency", "preferred currency"],
-        "start_date": ["start", "available", "availability", "notice period", "commence"],
+        "start_date": [
+            "start",
+            "starting",
+            "starting date",
+            "earliest possible start",
+            "earliest possible starting date",
+            "available",
+            "availability",
+            "notice period",
+            "commence",
+        ],
         "relocation": ["relocat"],
         "remote_preference": ["remote-friendly", "remote friendly", "remote work", "work remotely"],
         "onsite_hybrid": ["onsite", "on-site", "in office", "in-office", "hybrid", "office"],
