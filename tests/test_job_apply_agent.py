@@ -10154,6 +10154,20 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["summary"]["final_answer_intake_needs_more_specific_count"], 0)
         self.assertTrue(report["summary"]["synthetic_unblocker_proof_complete"])
         self.assertEqual(report["summary"]["synthetic_final_unblocker_update_count"], 6)
+        self.assertEqual(
+            {
+                row["id"]: row["status"]
+                for row in report["completion_verdict"]
+            }["selected_100_technical_path"],
+            "achieved",
+        )
+        self.assertEqual(
+            {
+                row["id"]: row["status"]
+                for row in report["completion_verdict"]
+            }["truthful_answer_learning"],
+            "needs_user_answers",
+        )
         self.assertEqual(report["confirmed_answer_runbook"][0]["status"], "waiting_for_user")
         self.assertIn("--validate-only", report["confirmed_answer_runbook"][2]["action"])
         self.assertIn("refresh-apply-queue", report["confirmed_answer_runbook"][5]["action"])
@@ -10190,6 +10204,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("autofill packet: waiting_for_confirmed_answers", markdown)
         self.assertIn("submission safety: safe", markdown)
         self.assertIn("final-answer fake/test markers: real 0, synthetic 5", markdown)
+        self.assertIn("Completion Verdict", markdown)
+        self.assertIn("truthful_answer_learning", markdown)
         self.assertIn("Submission Safety Audit", markdown)
         self.assertIn("Confirmed-Answer Runbook", markdown)
         self.assertIn("One-Command Resume", markdown)
@@ -10204,6 +10220,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("GitHub URL", html)
         self.assertIn("Queue refresh", html)
         self.assertIn("Safety audit", html)
+        self.assertIn("Completion Verdict", html)
+        self.assertIn("truthful_answer_learning", html)
         self.assertIn("Synthetic fake markers", html)
         self.assertIn("Submission Safety Audit", html)
         self.assertIn("Confirmed-Answer Runbook", html)
@@ -11085,6 +11103,13 @@ class JobApplyAgentTests(unittest.TestCase):
             }["confirmed_answer_gate"],
             "needs_user_answers",
         )
+        self.assertEqual(
+            {
+                row["id"]: row["status"]
+                for row in audit["requirements"]
+            }["global_truthful_answer_gate"],
+            "needs_user_answers",
+        )
 
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -11201,6 +11226,13 @@ class JobApplyAgentTests(unittest.TestCase):
                 for row in audit["requirements"]
             }["confirmed_answer_gate"],
             "achieved",
+        )
+        self.assertEqual(
+            {
+                row["id"]: row["status"]
+                for row in audit["requirements"]
+            }["global_truthful_answer_gate"],
+            "needs_user_answers",
         )
 
     def test_apply_queue_autofill_packet_ready_writes_outputs(self) -> None:

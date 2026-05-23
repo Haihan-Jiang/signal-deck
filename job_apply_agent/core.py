@@ -12366,6 +12366,15 @@ def _position_execution_requirements(summary: dict[str, Any]) -> list[dict[str, 
                 ("global_remaining_user_answers", summary.get("global_remaining_user_answer_count", 0)),
             ),
         },
+        {
+            "id": "global_truthful_answer_gate",
+            "status": "needs_user_answers" if summary.get("global_remaining_user_answer_count") else "achieved",
+            "evidence": evidence(
+                ("global_remaining_user_answers", summary.get("global_remaining_user_answer_count", 0)),
+                ("selected_queue_remaining_user_answers", summary.get("remaining_user_answer_count", 0)),
+                ("goal_complete", summary.get("goal_complete", False)),
+            ),
+        },
     ]
 
 
@@ -15714,6 +15723,7 @@ def build_automation_handoff_report(
             open_browser=True,
         ),
         "requirements": _automation_handoff_requirement_rows(goal),
+        "completion_verdict": _automation_handoff_completion_verdict_rows(summary, goal),
         "confirmed_answer_runbook": _automation_handoff_confirmed_answer_runbook(summary),
         "final_answer_intake": final_answer_intake_rows,
         "answer_impact_queue": answer_queue,
@@ -15785,6 +15795,87 @@ def write_automation_handoff_report(
     return report
 
 
+def _automation_handoff_completion_verdict_rows(
+    summary: dict[str, Any],
+    goal: dict[str, Any],
+) -> list[dict[str, Any]]:
+    goal_summary = goal.get("blocker_summary") if isinstance(goal.get("blocker_summary"), dict) else {}
+    target = int(summary.get("position_execution_target_count") or 100)
+    audited = int(summary.get("position_execution_audited_count") or 0)
+    ready_after_answers = int(summary.get("position_execution_ready_after_answers_count") or 0)
+    selector_misses = int(summary.get("position_execution_selector_miss_count") or 0)
+    final_submit_stops = int(summary.get("position_execution_final_submit_stop_count") or 0)
+    local_synthetic_submits = int(
+        summary.get("autofill_local_synthetic_submit_count")
+        or summary.get("autofill_packet_local_synthetic_submit_count")
+        or 0
+    )
+    final_missing = int(
+        summary.get("final_answer_intake_missing_count")
+        or summary.get("updates_waiting_after_update_count")
+        or goal_summary.get("final_answer_waiting_count_after_drafts")
+        or 0
+    )
+    data_blockers_after = int(
+        summary.get("updates_data_blocking_prompts_after")
+        or goal_summary.get("draft_data_blocking_prompt_count_after_updates")
+        or 0
+    )
+    technical_ready = bool(
+        audited >= target
+        and ready_after_answers >= target
+        and selector_misses == 0
+        and local_synthetic_submits >= target
+        and final_submit_stops >= target
+    )
+    safety_ok = bool(summary.get("submission_safety_safe")) and int(
+        summary.get("submission_safety_issue_count") or 0
+    ) == 0
+    answer_learning_ready = final_missing == 0 and data_blockers_after == 0
+    return [
+        {
+            "id": "selected_100_technical_path",
+            "status": "achieved" if technical_ready else "needs_attention",
+            "blocking": not technical_ready,
+            "evidence": (
+                f"audited={audited}/{target}; ready_after_answers={ready_after_answers}; "
+                f"selector_misses={selector_misses}; local_synthetic_submits={local_synthetic_submits}; "
+                f"final_submit_stops={final_submit_stops}"
+            ),
+            "next_action": "rerun position-execution-audit or fix selectors" if not technical_ready else "none",
+        },
+        {
+            "id": "truthful_answer_learning",
+            "status": "achieved" if answer_learning_ready else "needs_user_answers",
+            "blocking": not answer_learning_ready,
+            "evidence": f"final_answer_missing={final_missing}; data_blockers_after_updates={data_blockers_after}",
+            "next_action": (
+                "fill the final-answer reply template with truthful values"
+                if not answer_learning_ready
+                else "none"
+            ),
+        },
+        {
+            "id": "submission_safety",
+            "status": "achieved" if safety_ok else "hard_stop",
+            "blocking": not safety_ok,
+            "evidence": (
+                f"safe={str(bool(summary.get('submission_safety_safe'))).lower()}; "
+                f"issues={summary.get('submission_safety_issue_count', 0)}; "
+                f"real_fake_markers={summary.get('submission_safety_real_final_answer_fake_marker_count', 0)}"
+            ),
+            "next_action": "fix submission-safety-audit issues" if not safety_ok else "none",
+        },
+        {
+            "id": "real_employer_final_submit",
+            "status": "supervised_policy_gate",
+            "blocking": False,
+            "evidence": "real employer final submit, CAPTCHA/security, and protected-class answers remain supervised",
+            "next_action": "open pages for supervised autofill; final submit still needs explicit per-application confirmation",
+        },
+    ]
+
+
 def render_automation_handoff_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") or {}
     lines = [
@@ -15819,14 +15910,36 @@ def render_automation_handoff_markdown(report: dict[str, Any]) -> str:
         f"- submission safety: {summary.get('submission_safety_status') or 'missing'}, safe {str(bool(summary.get('submission_safety_safe'))).lower()}, issues {summary.get('submission_safety_issue_count', 0)}, warnings {summary.get('submission_safety_warning_count', 0)}",
         f"- final-answer fake/test markers: real {summary.get('submission_safety_real_final_answer_fake_marker_count', 0)}, synthetic {summary.get('submission_safety_synthetic_final_answer_fake_marker_count', 0)}, packet final-submit stops {summary.get('submission_safety_apply_packet_final_submit_stop_count', 0)}",
         "",
-        "## One-Command Resume",
-        "",
-        f"- save/apply/live-check/build packet: `{report.get('one_command_resume')}`",
-        f"- save/apply/live-check/open verified pages: `{report.get('one_command_resume_and_open')}`",
-        "",
-        "## Requirement Status",
+        "## Completion Verdict",
         "",
     ]
+    lines.extend(
+        _simple_markdown_table(
+            ["ID", "Status", "Blocking", "Evidence", "Next action"],
+            [
+                [
+                    row.get("id"),
+                    row.get("status"),
+                    row.get("blocking"),
+                    row.get("evidence"),
+                    row.get("next_action"),
+                ]
+                for row in report.get("completion_verdict", [])
+            ],
+        )
+    )
+    lines.extend(
+        [
+            "",
+            "## One-Command Resume",
+            "",
+            f"- save/apply/live-check/build packet: `{report.get('one_command_resume')}`",
+            f"- save/apply/live-check/open verified pages: `{report.get('one_command_resume_and_open')}`",
+            "",
+            "## Requirement Status",
+            "",
+        ]
+    )
     lines.extend(
         _simple_markdown_table(
             ["ID", "Status", "Requirement", "Evidence"],
@@ -16032,6 +16145,21 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
                     ("Safety final stops", summary.get("submission_safety_apply_packet_final_submit_stop_count", 0)),
                 ]
             ),
+            "<section><h2>Completion Verdict</h2>",
+            _html_table(
+                ["ID", "Status", "Blocking", "Evidence", "Next action"],
+                [
+                    [
+                        row.get("id"),
+                        row.get("status"),
+                        _yes_no(row.get("blocking")),
+                        row.get("evidence"),
+                        row.get("next_action"),
+                    ]
+                    for row in report.get("completion_verdict", [])
+                ],
+            ),
+            "</section>",
             "<section><h2>One-Command Resume</h2>",
             _html_table(
                 ["Mode", "Command"],
