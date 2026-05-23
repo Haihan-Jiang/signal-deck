@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import argparse
 import tempfile
 import unittest
 import urllib.error
@@ -194,6 +195,10 @@ from job_apply_agent.core import (
     write_synthetic_apply_execution,
     write_synthetic_application_simulation,
     write_synthetic_browser_action_execution,
+)
+from job_apply_agent.__main__ import (
+    _post_answer_pipeline_summary,
+    _validate_final_answer_intake_server_post_answer_args,
 )
 
 
@@ -6744,6 +6749,74 @@ class JobApplyAgentTests(unittest.TestCase):
                     "high_risk_user_confirmed"
                 ]
             )
+
+    def test_final_answer_intake_server_post_answer_flags_are_guarded(self) -> None:
+        base_args = {
+            "run_post_answer_pipeline": False,
+            "post_answer_apply": False,
+            "post_answer_live_check": False,
+            "post_answer_include_values": False,
+            "post_answer_open_browser": False,
+        }
+
+        _validate_final_answer_intake_server_post_answer_args(argparse.Namespace(**base_args))
+
+        with self.assertRaisesRegex(ValueError, "requires --run-post-answer-pipeline"):
+            _validate_final_answer_intake_server_post_answer_args(
+                argparse.Namespace(**{**base_args, "post_answer_apply": True})
+            )
+        with self.assertRaisesRegex(ValueError, "require --post-answer-apply"):
+            _validate_final_answer_intake_server_post_answer_args(
+                argparse.Namespace(
+                    **{
+                        **base_args,
+                        "run_post_answer_pipeline": True,
+                        "post_answer_live_check": True,
+                    }
+                )
+            )
+        with self.assertRaisesRegex(ValueError, "requires --post-answer-live-check"):
+            _validate_final_answer_intake_server_post_answer_args(
+                argparse.Namespace(
+                    **{
+                        **base_args,
+                        "run_post_answer_pipeline": True,
+                        "post_answer_apply": True,
+                        "post_answer_open_browser": True,
+                    }
+                )
+            )
+        _validate_final_answer_intake_server_post_answer_args(
+            argparse.Namespace(
+                **{
+                    **base_args,
+                    "run_post_answer_pipeline": True,
+                    "post_answer_apply": True,
+                    "post_answer_live_check": True,
+                    "post_answer_open_browser": True,
+                }
+            )
+        )
+
+        summary = _post_answer_pipeline_summary(
+            {
+                "status": "ready_for_supervised_autofill",
+                "ready_for_workflow": True,
+                "apply_requested": True,
+                "live_check_requested": True,
+                "open_browser_requested": False,
+                "handoff_status": "open_ready",
+                "handoff_open_ready": 100,
+                "autofill_packet_status": "ready_for_supervised_browser_autofill",
+                "autofill_packet_selected": 100,
+                "opened_count": 0,
+                "policy": {"submits_real_applications": False},
+            }
+        )
+        self.assertEqual(summary["status"], "ready_for_supervised_autofill")
+        self.assertTrue(summary["ready_for_workflow"])
+        self.assertEqual(summary["handoff_open_ready"], 100)
+        self.assertFalse(summary["policy"]["submits_real_applications"])
 
     def test_critical_input_updates_readiness_blocks_blanks_and_unconfirmed_high_risk(self) -> None:
         learning_tasks = {

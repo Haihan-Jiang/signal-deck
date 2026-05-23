@@ -772,6 +772,32 @@ template, compact-update, and intake-report artifacts after you fill the form.
 It still only writes outbox files; it does not write profile/memory and does
 not submit applications.
 
+To have the local form continue into the post-answer reports immediately after
+a ready save, start it with:
+
+```bash
+python3 -m job_apply_agent final-answer-intake-server \
+  --open-browser \
+  --run-post-answer-pipeline
+```
+
+That still does not write profile/memory. To explicitly write the confirmed
+answers into the local profile/memory, live-check pages, and rebuild the
+supervised autofill packet after saving the form, use:
+
+```bash
+python3 -m job_apply_agent final-answer-intake-server \
+  --open-browser \
+  --run-post-answer-pipeline \
+  --post-answer-apply \
+  --post-answer-live-check \
+  --post-answer-include-values
+```
+
+Opening refreshed job URLs for review is a separate explicit step with
+`--post-answer-open-browser`; it requires `--post-answer-live-check` and still
+does not click real employer final submit.
+
 ```bash
 python3 -m job_apply_agent final-answer-intake \
   --answers job_apply_agent/outbox/final_answer_intake_template_latest.json \

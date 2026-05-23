@@ -933,6 +933,43 @@ def main() -> int:
     final_answer_intake_server_parser.add_argument("--once", action="store_true")
     final_answer_intake_server_parser.add_argument("--finalize", action="store_true")
     final_answer_intake_server_parser.add_argument("--confirm-high-risk", action="store_true")
+    final_answer_intake_server_parser.add_argument(
+        "--run-post-answer-pipeline",
+        action="store_true",
+        help="after a ready save, run post-answer-pipeline with the saved intake JSON",
+    )
+    final_answer_intake_server_parser.add_argument(
+        "--post-answer-apply",
+        action="store_true",
+        help="with --run-post-answer-pipeline, write approved answers to local profile/memory",
+    )
+    final_answer_intake_server_parser.add_argument(
+        "--post-answer-live-check",
+        action="store_true",
+        help="with --post-answer-apply, live-check apply pages before rebuilding the handoff",
+    )
+    final_answer_intake_server_parser.add_argument("--post-answer-live-check-limit", type=int, default=100)
+    final_answer_intake_server_parser.add_argument("--post-answer-live-check-timeout", type=float, default=25.0)
+    final_answer_intake_server_parser.add_argument(
+        "--post-answer-include-values",
+        action="store_true",
+        help="with --post-answer-apply, include actual values in the supervised autofill packet",
+    )
+    final_answer_intake_server_parser.add_argument(
+        "--post-answer-open-browser",
+        action="store_true",
+        help="with --post-answer-live-check, open the refreshed open-ready job URLs for review",
+    )
+    final_answer_intake_server_parser.add_argument("--post-answer-open-limit", type=int, default=100)
+    final_answer_intake_server_parser.add_argument("--review-log", default=str(DEFAULT_REVIEW_LOG))
+    final_answer_intake_server_parser.add_argument(
+        "--post-answer-json-output",
+        default=str(DEFAULT_POST_ANSWER_PIPELINE_JSON),
+    )
+    final_answer_intake_server_parser.add_argument(
+        "--post-answer-markdown-output",
+        default=str(DEFAULT_POST_ANSWER_PIPELINE_MARKDOWN),
+    )
 
     post_answer_pipeline_parser = subparsers.add_parser(
         "post-answer-pipeline",
@@ -3872,7 +3909,80 @@ def _load_optional_json(path_value: str | None) -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _validate_final_answer_intake_server_post_answer_args(args: argparse.Namespace) -> None:
+    if not args.run_post_answer_pipeline:
+        for flag_name in [
+            "post_answer_apply",
+            "post_answer_live_check",
+            "post_answer_include_values",
+            "post_answer_open_browser",
+        ]:
+            if getattr(args, flag_name):
+                raise ValueError(f"--{flag_name.replace('_', '-')} requires --run-post-answer-pipeline")
+        return
+    if (args.post_answer_live_check or args.post_answer_include_values) and not args.post_answer_apply:
+        raise ValueError("--post-answer-live-check and --post-answer-include-values require --post-answer-apply")
+    if args.post_answer_open_browser and not args.post_answer_live_check:
+        raise ValueError("--post-answer-open-browser requires --post-answer-live-check")
+
+
+def _post_answer_pipeline_summary(report: dict | None) -> dict[str, object]:
+    if not isinstance(report, dict):
+        return {}
+    return {
+        "status": report.get("status"),
+        "ready_for_workflow": bool(report.get("ready_for_workflow")),
+        "apply_requested": bool(report.get("apply_requested")),
+        "live_check_requested": bool(report.get("live_check_requested")),
+        "open_browser_requested": bool(report.get("open_browser_requested")),
+        "handoff_status": report.get("handoff_status"),
+        "handoff_open_ready": report.get("handoff_open_ready", 0),
+        "autofill_packet_status": report.get("autofill_packet_status"),
+        "autofill_packet_selected": report.get("autofill_packet_selected", 0),
+        "opened_count": report.get("opened_count", 0),
+        "policy": report.get("policy") or {},
+    }
+
+
+def _run_post_answer_pipeline_from_intake_server(args: argparse.Namespace) -> dict[str, object]:
+    pipeline_args = argparse.Namespace(
+        compact_updates=args.compact_updates_output,
+        full_template=args.full_template,
+        unblockers=args.unblockers,
+        confirmed_updates_output=args.confirmed_updates_output,
+        confirmed_report_json_output=args.confirmed_report_json_output,
+        confirmed_report_markdown_output=args.confirmed_report_markdown_output,
+        final_answer_intake_json=args.template_output,
+        final_answer_intake_report_json=args.json_output,
+        final_answer_intake_report_markdown=args.markdown_output,
+        confirm_high_risk=args.confirm_high_risk,
+        synthetic_final_answers=False,
+        synthetic_rehearse_queue=False,
+        apply=args.post_answer_apply,
+        live_check=args.post_answer_live_check,
+        live_check_limit=args.post_answer_live_check_limit,
+        live_check_timeout=args.post_answer_live_check_timeout,
+        include_values=args.post_answer_include_values,
+        open_browser=args.post_answer_open_browser,
+        open_limit=args.post_answer_open_limit,
+        review_log=args.review_log,
+        json_output=args.post_answer_json_output,
+        markdown_output=args.post_answer_markdown_output,
+        fail_on_not_ready=True,
+    )
+    exit_code = _run_post_answer_pipeline(pipeline_args)
+    report = _load_optional_json(args.post_answer_json_output) or {}
+    return {
+        "ran": True,
+        "exit_code": exit_code,
+        "json_output": str(args.post_answer_json_output),
+        "markdown_output": str(args.post_answer_markdown_output),
+        "summary": _post_answer_pipeline_summary(report),
+    }
+
+
 def _run_final_answer_intake_server(args: argparse.Namespace) -> int:
+    _validate_final_answer_intake_server_post_answer_args(args)
     unblockers_path = Path(args.unblockers)
     if not unblockers_path.exists():
         raise FileNotFoundError(f"critical input unblockers not found: {args.unblockers}")
@@ -3951,6 +4061,14 @@ def _run_final_answer_intake_server(args: argparse.Namespace) -> int:
                     confirmed_report_markdown_output=args.confirmed_report_markdown_output,
                 )
                 write_server_html(current_template())
+                if args.run_post_answer_pipeline:
+                    if result.get("ready_for_finalize"):
+                        result["post_answer_pipeline"] = _run_post_answer_pipeline_from_intake_server(args)
+                    else:
+                        result["post_answer_pipeline"] = {
+                            "ran": False,
+                            "reason": "intake_not_ready",
+                        }
                 write_response(self, 200, result)
                 if args.once and result.get("ready_for_finalize"):
                     threading.Thread(target=server_ref["server"].shutdown, daemon=True).start()
