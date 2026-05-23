@@ -15654,6 +15654,12 @@ def build_automation_handoff_report(
     final_intake_update = final_answer_intake_update or {}
     final_intake_summary = final_intake_update.get("summary") or {}
     blocker_summary = goal.get("blocker_summary") or {}
+    goal_completion_verdict = (
+        goal.get("completion_verdict") if isinstance(goal.get("completion_verdict"), dict) else {}
+    )
+    goal_completion_checklist = (
+        goal.get("completion_checklist") if isinstance(goal.get("completion_checklist"), list) else []
+    )
     impact_summary = impact.get("summary") or {}
     final_answer_intake_rows = _final_answer_intake_export_rows(
         final_answer_intake_template,
@@ -15690,6 +15696,25 @@ def build_automation_handoff_report(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "goal_status": goal.get("status", "unknown"),
         "goal_complete": bool(goal.get("goal_complete")),
+        "goal_completion_status": goal_completion_verdict.get("status", ""),
+        "goal_completion_satisfied_requirement_count": int(
+            goal_completion_verdict.get("satisfied_requirement_count") or 0
+        ),
+        "goal_completion_total_requirement_count": int(
+            goal_completion_verdict.get("total_requirement_count") or 0
+        ),
+        "goal_completion_blocking_requirement_count": int(
+            goal_completion_verdict.get("blocking_requirement_count") or 0
+        ),
+        "goal_completion_blocking_requirement_ids": _string_list(
+            goal_completion_verdict.get("blocking_requirement_ids")
+        ),
+        "goal_completion_blocking_final_answer_aliases": _string_list(
+            goal_completion_verdict.get("blocking_final_answer_aliases")
+        ),
+        "goal_completion_direct_autopilot_command": goal_completion_verdict.get(
+            "direct_autopilot_command", ""
+        ),
         "can_unattended_submit_real_employers": False,
         "data_blocking_prompt_count": int(blocker_summary.get("data_blocking_prompt_count") or 0),
         "critical_waiting_count": int(blocker_summary.get("critical_waiting_count") or 0),
@@ -15846,6 +15871,8 @@ def build_automation_handoff_report(
             open_browser=True,
         ),
         "requirements": _automation_handoff_requirement_rows(goal),
+        "goal_completion_verdict": goal_completion_verdict,
+        "goal_completion_checklist": goal_completion_checklist,
         "completion_verdict": _automation_handoff_completion_verdict_rows(summary, goal),
         "confirmed_answer_runbook": _automation_handoff_confirmed_answer_runbook(summary),
         "final_answer_intake": final_answer_intake_rows,
@@ -16033,9 +16060,39 @@ def render_automation_handoff_markdown(report: dict[str, Any]) -> str:
         f"- submission safety: {summary.get('submission_safety_status') or 'missing'}, safe {str(bool(summary.get('submission_safety_safe'))).lower()}, issues {summary.get('submission_safety_issue_count', 0)}, warnings {summary.get('submission_safety_warning_count', 0)}",
         f"- final-answer fake/test markers: real {summary.get('submission_safety_real_final_answer_fake_marker_count', 0)}, synthetic {summary.get('submission_safety_synthetic_final_answer_fake_marker_count', 0)}, packet final-submit stops {summary.get('submission_safety_apply_packet_final_submit_stop_count', 0)}",
         "",
-        "## Completion Verdict",
+        "## Goal Completion Verdict",
+        "",
+        f"- status: {summary.get('goal_completion_status', '')}",
+        f"- satisfied requirements: {summary.get('goal_completion_satisfied_requirement_count', 0)} / {summary.get('goal_completion_total_requirement_count', 0)}",
+        f"- blocking requirements: {summary.get('goal_completion_blocking_requirement_count', 0)}",
+        "- blocking requirement IDs: "
+        + (", ".join(summary.get("goal_completion_blocking_requirement_ids") or []) or "none"),
+        "- blocking final-answer aliases: "
+        + (", ".join(summary.get("goal_completion_blocking_final_answer_aliases") or []) or "none"),
+        f"- direct autopilot command: `{summary.get('goal_completion_direct_autopilot_command', '')}`",
         "",
     ]
+    lines.extend(
+        _simple_markdown_table(
+            ["ID", "Status", "Counts as complete", "Blocking"],
+            [
+                [
+                    row.get("id"),
+                    row.get("status"),
+                    row.get("counts_as_complete"),
+                    row.get("blocking"),
+                ]
+                for row in report.get("goal_completion_checklist", [])
+            ],
+        )
+    )
+    lines.extend(
+        [
+            "",
+            "## Completion Verdict",
+            "",
+        ]
+    )
     lines.extend(
         _simple_markdown_table(
             ["ID", "Status", "Blocking", "Evidence", "Next action"],
@@ -16228,6 +16285,12 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
             _html_kpis(
                 [
                     ("Status", report.get("status")),
+                    ("Goal completion", summary.get("goal_completion_status") or "unknown"),
+                    (
+                        "Goal requirements",
+                        f"{summary.get('goal_completion_satisfied_requirement_count', 0)} / {summary.get('goal_completion_total_requirement_count', 0)}",
+                    ),
+                    ("Goal blockers", summary.get("goal_completion_blocking_requirement_count", 0)),
                     ("Data blockers", summary.get("data_blocking_prompt_count", 0)),
                     ("Critical waiting", summary.get("critical_waiting_count", 0)),
                     ("Questionnaire", f"{summary.get('questionnaire_answerable_count', 0)} / {summary.get('questionnaire_question_count', 0)}"),
@@ -16268,6 +16331,40 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
                     ("Safety final stops", summary.get("submission_safety_apply_packet_final_submit_stop_count", 0)),
                 ]
             ),
+            "<section><h2>Goal Completion Verdict</h2>",
+            _html_table(
+                ["Metric", "Value"],
+                [
+                    ["Status", summary.get("goal_completion_status")],
+                    [
+                        "Satisfied requirements",
+                        f"{summary.get('goal_completion_satisfied_requirement_count', 0)} / {summary.get('goal_completion_total_requirement_count', 0)}",
+                    ],
+                    ["Blocking requirements", summary.get("goal_completion_blocking_requirement_count", 0)],
+                    [
+                        "Blocking requirement IDs",
+                        ", ".join(summary.get("goal_completion_blocking_requirement_ids") or []) or "none",
+                    ],
+                    [
+                        "Blocking final-answer aliases",
+                        ", ".join(summary.get("goal_completion_blocking_final_answer_aliases") or []) or "none",
+                    ],
+                    ["Direct autopilot command", summary.get("goal_completion_direct_autopilot_command")],
+                ],
+            ),
+            _html_table(
+                ["ID", "Status", "Counts as complete", "Blocking"],
+                [
+                    [
+                        row.get("id"),
+                        row.get("status"),
+                        _yes_no(row.get("counts_as_complete")),
+                        _yes_no(row.get("blocking")),
+                    ]
+                    for row in report.get("goal_completion_checklist", [])
+                ],
+            ),
+            "</section>",
             "<section><h2>Completion Verdict</h2>",
             _html_table(
                 ["ID", "Status", "Blocking", "Evidence", "Next action"],
@@ -16620,6 +16717,7 @@ def _automation_handoff_next_commands(summary: dict[str, Any]) -> list[str]:
         "python3 -m job_apply_agent rehearse-after-answers",
         "python3 -m job_apply_agent resume-after-answers --reply-text '<filled final-answer lines>' --validate-only",
         f"python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --run-post-answer-pipeline --fail-on-not-ready",
+        "python3 -m job_apply_agent final-answer-autopilot --reply-text '<filled final-answer lines>' --apply --live-check --include-values --fail-on-not-ready",
         "python3 -m job_apply_agent resume-after-answers",
         "python3 -m job_apply_agent resume-after-answers --open-browser --open-limit 100",
         "python3 -m job_apply_agent post-answer-pipeline --synthetic-final-answers --synthetic-rehearse-queue --fail-on-not-ready",

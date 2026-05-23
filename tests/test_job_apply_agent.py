@@ -10102,6 +10102,36 @@ class JobApplyAgentTests(unittest.TestCase):
                     "evidence": {"data_blocking_prompt_count": 253},
                 }
             ],
+            "completion_verdict": {
+                "status": "waiting_for_truthful_user_answers",
+                "total_requirement_count": 12,
+                "satisfied_requirement_count": 11,
+                "blocking_requirement_count": 1,
+                "blocking_requirement_ids": ["real_user_answer_learning"],
+                "blocking_final_answer_aliases": [
+                    "zip_or_postal_code",
+                    "citizenship_status",
+                ],
+                "direct_autopilot_command": (
+                    "python3 -m job_apply_agent final-answer-autopilot "
+                    "--reply-text '<filled final-answer lines>' --apply --live-check "
+                    "--include-values --fail-on-not-ready"
+                ),
+            },
+            "completion_checklist": [
+                {
+                    "id": "selected_100_technical_path",
+                    "status": "achieved",
+                    "counts_as_complete": True,
+                    "blocking": False,
+                },
+                {
+                    "id": "real_user_answer_learning",
+                    "status": "needs_user_answers",
+                    "counts_as_complete": False,
+                    "blocking": True,
+                },
+            ],
         }
         critical_input_questionnaire = {
             "question_count": 2,
@@ -10367,6 +10397,21 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["summary"]["final_answer_intake_needs_more_specific_count"], 0)
         self.assertTrue(report["summary"]["synthetic_unblocker_proof_complete"])
         self.assertEqual(report["summary"]["synthetic_final_unblocker_update_count"], 6)
+        self.assertEqual(report["summary"]["goal_completion_status"], "waiting_for_truthful_user_answers")
+        self.assertEqual(report["summary"]["goal_completion_satisfied_requirement_count"], 11)
+        self.assertEqual(report["summary"]["goal_completion_total_requirement_count"], 12)
+        self.assertEqual(report["summary"]["goal_completion_blocking_requirement_count"], 1)
+        self.assertEqual(
+            report["summary"]["goal_completion_blocking_requirement_ids"],
+            ["real_user_answer_learning"],
+        )
+        self.assertEqual(
+            report["summary"]["goal_completion_blocking_final_answer_aliases"],
+            ["zip_or_postal_code", "citizenship_status"],
+        )
+        self.assertIn("--reply-text", report["summary"]["goal_completion_direct_autopilot_command"])
+        self.assertEqual(report["goal_completion_verdict"]["status"], "waiting_for_truthful_user_answers")
+        self.assertEqual(report["goal_completion_checklist"][1]["id"], "real_user_answer_learning")
         self.assertEqual(
             {
                 row["id"]: row["status"]
@@ -10396,12 +10441,12 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("final-answer-reply --reply-file", report["next_commands"][4])
         self.assertIn("job_apply_agent/outbox/final_answer_reply_template_latest.txt", report["next_commands"][4])
         self.assertIn("--run-post-answer-pipeline", report["next_commands"][4])
-        self.assertIn("resume-after-answers", report["next_commands"][5])
+        self.assertIn("final-answer-autopilot --reply-text", report["next_commands"][5])
         self.assertIn("resume-after-answers", report["next_commands"][6])
-        self.assertIn("--open-browser", report["next_commands"][6])
-        self.assertIn("post-answer-pipeline --synthetic-final-answers --synthetic-rehearse-queue", report["next_commands"][7])
-        self.assertIn("post-answer-pipeline --fail-on-not-ready", report["next_commands"][8])
-        self.assertIn("post-answer-pipeline --apply --live-check", report["next_commands"][9])
+        self.assertIn("--open-browser", report["next_commands"][7])
+        self.assertIn("post-answer-pipeline --synthetic-final-answers --synthetic-rehearse-queue", report["next_commands"][8])
+        self.assertIn("post-answer-pipeline --fail-on-not-ready", report["next_commands"][9])
+        self.assertIn("post-answer-pipeline --apply --live-check", report["next_commands"][10])
         self.assertIn("refresh-apply-queue --max-rounds 2", " ".join(report["next_commands"]))
         self.assertIn("closed-preflight --jobs", " ".join(report["next_commands"]))
         self.assertEqual(report["answer_impact_queue"][0]["input_id"], "answer_memory_citizenship_status_default_policy")
@@ -10417,6 +10462,9 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("autofill packet: waiting_for_confirmed_answers", markdown)
         self.assertIn("submission safety: safe", markdown)
         self.assertIn("final-answer fake/test markers: real 0, synthetic 5", markdown)
+        self.assertIn("Goal Completion Verdict", markdown)
+        self.assertIn("blocking final-answer aliases: zip_or_postal_code, citizenship_status", markdown)
+        self.assertIn("final-answer-autopilot --reply-text", markdown)
         self.assertIn("Completion Verdict", markdown)
         self.assertIn("truthful_answer_learning", markdown)
         self.assertIn("Submission Safety Audit", markdown)
@@ -10433,6 +10481,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("GitHub URL", html)
         self.assertIn("Queue refresh", html)
         self.assertIn("Safety audit", html)
+        self.assertIn("Goal Completion Verdict", html)
+        self.assertIn("waiting_for_truthful_user_answers", html)
         self.assertIn("Completion Verdict", html)
         self.assertIn("truthful_answer_learning", html)
         self.assertIn("Synthetic fake markers", html)
