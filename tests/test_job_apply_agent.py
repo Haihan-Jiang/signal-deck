@@ -1013,7 +1013,40 @@ class JobApplyAgentTests(unittest.TestCase):
                 fetcher=failing_fetcher,
             )
             self.assertEqual(result["checks"][0]["error"], "timed out")
+            self.assertEqual(result["checks"][0]["attempt_count"], 2)
+            self.assertEqual(result["checks"][0]["fetch_errors"], ["timed out", "timed out"])
             self.assertFalse(is_job_closed(submissions[0], result["closed_jobs"]))
+
+    def test_live_check_retries_transient_errors_before_notifying(self) -> None:
+        submissions = [
+            {
+                "platform": "LinkedIn",
+                "job_id": "1",
+                "company": "RetryCo",
+                "title": "SRE",
+                "apply_url": "https://www.linkedin.com/jobs/view/1/",
+            }
+        ]
+        calls = {"count": 0}
+
+        def flaky_fetcher(url: str, timeout: float) -> str:
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise TimeoutError("temporary timeout")
+            return "<html>Apply now</html>"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            closed_path = Path(temp_dir) / "closed_jobs.json"
+            result = refresh_closed_jobs_from_live_pages(
+                submissions,
+                closed_path,
+                fetcher=flaky_fetcher,
+            )
+            self.assertEqual(calls["count"], 2)
+            self.assertFalse(result["checks"][0]["closed"])
+            self.assertNotIn("error", result["checks"][0])
+            self.assertEqual(result["checks"][0]["attempt_count"], 2)
+            self.assertEqual(result["checks"][0]["fetch_errors"], ["temporary timeout"])
 
     def test_live_check_404_records_closed_job(self) -> None:
         submissions = [
@@ -1181,15 +1214,52 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(report["status_counts"]["closed_live_text"], 1)
             self.assertEqual(report["status_counts"]["open_live_checked"], 1)
             self.assertEqual(report["status_counts"]["check_error"], 1)
+            self.assertEqual(report["retry_attempts"], 1)
+            self.assertEqual(report["fetch_attempt_count"], 4)
+            self.assertEqual(report["checks"][3]["attempt_count"], 2)
             self.assertTrue(is_job_closed(candidates[1], load_closed_jobs(closed_path)))
             self.assertEqual(report["open_candidates"][0]["company"], "OpenCo")
             self.assertTrue(json_output.exists())
             markdown = markdown_output.read_text(encoding="utf-8")
             self.assertIn("Closed Posting Preflight", markdown)
+            self.assertIn("Retry attempts: 1", markdown)
             self.assertIn("OpenCo", markdown)
             self.assertIn("LiveClosed", markdown)
             self.assertIn("timed out", markdown)
             self.assertIn("closed_live_text", render_closed_posting_preflight_markdown(report))
+
+    def test_closed_preflight_retries_transient_errors_before_marking_uncertain(self) -> None:
+        candidates = [
+            {
+                "platform": "Lever",
+                "job_id": "retry",
+                "company": "RetryCo",
+                "title": "Platform Engineer",
+                "apply_url": "https://jobs.lever.co/retry/1",
+            }
+        ]
+        calls = {"count": 0}
+
+        def flaky_fetcher(url: str, timeout: float) -> str:
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise TimeoutError("temporary timeout")
+            return "<html>Apply now</html>"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            closed_path = Path(temp_dir) / "closed_jobs.json"
+            report = build_closed_posting_preflight(
+                candidates,
+                closed_path,
+                fetcher=flaky_fetcher,
+                max_checks=1,
+            )
+            self.assertEqual(calls["count"], 2)
+            self.assertEqual(report["open_eligible_count"], 1)
+            self.assertEqual(report["uncertain_count"], 0)
+            self.assertEqual(report["checks"][0]["status"], "open_live_checked")
+            self.assertEqual(report["checks"][0]["attempt_count"], 2)
+            self.assertEqual(report["checks"][0]["fetch_errors"], ["temporary timeout"])
 
     def test_browser_review_record_has_next_action(self) -> None:
         record = build_browser_review_record(

@@ -494,6 +494,26 @@ def _closed_fetch_error_phrase(exc: Exception) -> str:
     return ""
 
 
+def _fetch_live_page_text_with_retries(
+    fetch_page: Any,
+    url: str,
+    timeout: float,
+    retry_attempts: int = 1,
+) -> tuple[str, int, list[str], Exception | None]:
+    max_attempts = max(1, int(retry_attempts or 0) + 1)
+    errors: list[str] = []
+    last_exc: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return fetch_page(url, timeout), attempt, errors, None
+        except Exception as exc:  # noqa: BLE001 - caller classifies final error.
+            last_exc = exc
+            errors.append(str(exc))
+            if _closed_fetch_error_phrase(exc):
+                return "", attempt, errors, exc
+    return "", max_attempts, errors, last_exc
+
+
 def _closed_application_match_text(text: str, source_field: str) -> ClosedApplicationMatch | None:
     normalized_text = _normalize(text)
     if not normalized_text:
@@ -19607,6 +19627,8 @@ def render_closed_posting_preflight_markdown(report: dict[str, Any]) -> str:
         f"Open eligible: {report.get('open_eligible_count', 0)}",
         f"Uncertain: {report.get('uncertain_count', 0)}",
         f"Errors: {report.get('error_count', 0)}",
+        f"Retry attempts: {report.get('retry_attempts', 0)}",
+        f"Fetch attempts: {report.get('fetch_attempt_count', 0)}",
         "",
         "## Status Counts",
         "",
@@ -19674,6 +19696,7 @@ def refresh_closed_jobs_from_live_pages(
     closed_jobs_path: str | Path,
     max_checks: int | None = DEFAULT_LIVE_CHECK_LIMIT,
     timeout: float = 15.0,
+    retry_attempts: int = 1,
     fetcher: Any | None = None,
     source: str = "live_http_check",
 ) -> dict[str, Any]:
@@ -19700,14 +19723,21 @@ def refresh_closed_jobs_from_live_pages(
             "job_id": submission.get("job_id"),
             "closed": False,
         }
-        try:
-            page_text = fetch_page(url, timeout)
-        except Exception as exc:  # noqa: BLE001 - live checks should not block notification.
-            closed_error_phrase = _closed_fetch_error_phrase(exc)
+        page_text, attempt_count, fetch_errors, fetch_error = _fetch_live_page_text_with_retries(
+            fetch_page,
+            url,
+            timeout,
+            retry_attempts=retry_attempts,
+        )
+        check["attempt_count"] = attempt_count
+        if fetch_errors:
+            check["fetch_errors"] = fetch_errors
+        if fetch_error:
+            closed_error_phrase = _closed_fetch_error_phrase(fetch_error)
             if closed_error_phrase:
                 check["closed"] = True
                 check["reason"] = closed_error_phrase
-                check["error"] = str(exc)
+                check["error"] = str(fetch_error)
                 record_closed_job(
                     closed_jobs_path,
                     {**submission, "apply_url": url},
@@ -19717,7 +19747,7 @@ def refresh_closed_jobs_from_live_pages(
                 closed_jobs = load_closed_jobs(closed_jobs_path)
                 checks.append(check)
                 continue
-            check["error"] = str(exc)
+            check["error"] = str(fetch_error)
             checks.append(check)
             continue
         phrase = closed_application_phrase({"page_text": page_text})
@@ -19740,6 +19770,7 @@ def build_closed_posting_preflight(
     closed_jobs_path: str | Path,
     max_checks: int | None = DEFAULT_LIVE_CHECK_LIMIT,
     timeout: float = 15.0,
+    retry_attempts: int = 1,
     fetcher: Any | None = None,
     source: str = "closed_posting_preflight",
 ) -> dict[str, Any]:
@@ -19821,17 +19852,24 @@ def build_closed_posting_preflight(
             continue
 
         live_checked_count += 1
-        try:
-            page_text = fetch_page(short_url, timeout)
-        except Exception as exc:  # noqa: BLE001 - preflight reports the uncertainty.
-            closed_error_phrase = _closed_fetch_error_phrase(exc)
+        page_text, attempt_count, fetch_errors, fetch_error = _fetch_live_page_text_with_retries(
+            fetch_page,
+            short_url,
+            timeout,
+            retry_attempts=retry_attempts,
+        )
+        check["attempt_count"] = attempt_count
+        if fetch_errors:
+            check["fetch_errors"] = fetch_errors
+        if fetch_error:
+            closed_error_phrase = _closed_fetch_error_phrase(fetch_error)
             if closed_error_phrase:
                 check.update(
                     {
                         "status": "closed_fetch_error",
                         "closed": True,
                         "reason": closed_error_phrase,
-                        "error": str(exc),
+                        "error": str(fetch_error),
                     }
                 )
                 record_closed_job(
@@ -19844,7 +19882,7 @@ def build_closed_posting_preflight(
                 newly_closed_count += 1
                 checks.append(check)
                 continue
-            check.update({"status": "check_error", "error": str(exc)})
+            check.update({"status": "check_error", "error": str(fetch_error)})
             checks.append(check)
             continue
 
@@ -19896,6 +19934,8 @@ def build_closed_posting_preflight(
         "open_eligible_count": len(open_checks),
         "uncertain_count": len(uncertain_checks),
         "error_count": len(error_checks),
+        "retry_attempts": max(0, int(retry_attempts or 0)),
+        "fetch_attempt_count": sum(int(check.get("attempt_count") or 0) for check in checks),
         "status_counts": _count_by(checks, "status"),
         "max_checks": max_checks,
         "checks": checks,
@@ -19917,6 +19957,7 @@ def write_closed_posting_preflight(
     markdown_output: str | Path,
     max_checks: int | None = DEFAULT_LIVE_CHECK_LIMIT,
     timeout: float = 15.0,
+    retry_attempts: int = 1,
     fetcher: Any | None = None,
     source: str = "closed_posting_preflight",
 ) -> dict[str, Any]:
@@ -19925,6 +19966,7 @@ def write_closed_posting_preflight(
         closed_jobs_path,
         max_checks=max_checks,
         timeout=timeout,
+        retry_attempts=retry_attempts,
         fetcher=fetcher,
         source=source,
     )
