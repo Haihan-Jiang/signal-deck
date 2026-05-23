@@ -18,6 +18,7 @@ from job_apply_agent.core import (
     build_application_draft,
     build_application_playbook,
     build_application_research,
+    build_automation_handoff_report,
     build_autofill_batch_plan,
     build_collection_plan_from_coverage_gate,
     build_critical_input_answer_template,
@@ -75,6 +76,8 @@ from job_apply_agent.core import (
     render_answer_gap_markdown,
     render_apply_run_audit_markdown,
     render_application_playbook_markdown,
+    render_automation_handoff_html,
+    render_automation_handoff_markdown,
     render_autofill_batch_plan_html,
     render_autofill_batch_plan_markdown,
     render_candidate_observation_markdown,
@@ -120,6 +123,7 @@ from job_apply_agent.core import (
     write_apply_run_audit,
     write_application_playbook,
     write_application_research_report,
+    write_automation_handoff_report,
     write_autofill_batch_plan,
     write_browser_action_manifest,
     write_candidate_observation_report,
@@ -6120,6 +6124,161 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(markdown_output.exists())
             self.assertIn("Real employer unattended submit: false", markdown_output.read_text())
 
+    def test_automation_handoff_report_prioritizes_answers_and_stop_actions(self) -> None:
+        goal_readiness_audit = {
+            "status": "needs_user_answers",
+            "goal_complete": False,
+            "can_unattended_submit_real_employers": False,
+            "blocker_summary": {
+                "data_blocking_prompt_count": 253,
+                "critical_waiting_count": 10,
+                "critical_supervised_only_count": 1,
+            },
+            "requirements": [
+                {
+                    "id": "real_user_answer_learning",
+                    "requirement": "Learn the remaining truthful user answers.",
+                    "status": "needs_user_answers",
+                    "evidence": {"data_blocking_prompt_count": 253},
+                }
+            ],
+        }
+        critical_input_questionnaire = {
+            "question_count": 2,
+            "answerable_question_count": 1,
+            "high_risk_question_count": 1,
+            "questions": [
+                {
+                    "impact_rank": 1,
+                    "input_id": "answer_memory_citizenship_status_default_policy",
+                    "input_type": "category_default_policy",
+                    "question": "What should automation answer for citizenship status questions?",
+                    "required_user_response": "Confirm the truthful reusable policy.",
+                    "approval_risk": "high",
+                    "high_risk": True,
+                    "supervised_only": False,
+                    "suggested_answer": "",
+                    "impact": {
+                        "data_blocking_prompts_delta": -17,
+                        "ready_prompts_delta": 17,
+                        "positions_ready_for_autofill_delta": 13,
+                    },
+                    "required_count": 17,
+                    "platforms": ["Greenhouse", "Ashby"],
+                    "labels": ["Citizenship status"],
+                },
+                {
+                    "impact_rank": 2,
+                    "input_id": "supervised_confirmation_policy_acknowledgement",
+                    "input_type": "supervised_browser_review_only",
+                    "question": "Confirm policy acknowledgement.",
+                    "required_user_response": "Review in browser.",
+                    "approval_risk": "supervised_only",
+                    "high_risk": True,
+                    "supervised_only": True,
+                    "impact": {
+                        "data_blocking_prompts_delta": 0,
+                        "ready_prompts_delta": 0,
+                        "positions_ready_for_autofill_delta": 0,
+                    },
+                },
+            ],
+        }
+        critical_input_impact = {
+            "summary": {
+                "combined_data_blocking_prompts_delta": -66,
+                "combined_positions_ready_for_autofill_delta": 171,
+                "top_input_id": "answer_memory_citizenship_status_default_policy",
+            },
+            "input_impacts": [],
+        }
+        autofill_batch = {
+            "selected_count": 100,
+            "selected_autofill_allowed_count": 100,
+            "browser_action_count": 502,
+            "stop_action_count": 167,
+            "selector_miss_count": 0,
+            "would_submit_count": 0,
+            "selected_stop_action_counts": {
+                "final_submit_confirmation | Submit application": 100,
+                "sensitive_not_stored | Disability status": 10,
+            },
+            "blocked_stop_action_counts": {
+                "missing_profile_value | GitHub URL": 3,
+                "missing_profile_value | Website": 11,
+            },
+            "selected_stop_actions": [
+                {
+                    "scope": "selected",
+                    "position_index": 1,
+                    "platform": "Greenhouse",
+                    "company": "DoorDash",
+                    "title": "SRE",
+                    "apply_url": "https://job-boards.greenhouse.io/doordash/jobs/1",
+                    "status": "final_submit_confirmation",
+                    "label": "Submit application",
+                    "handling": "stop before final submit and wait for explicit approval",
+                }
+            ],
+            "blocked_candidate_stop_actions": [
+                {
+                    "scope": "blocked_candidate",
+                    "position_index": 1,
+                    "platform": "Lever",
+                    "company": "Example",
+                    "title": "Platform Engineer",
+                    "apply_url": "https://jobs.lever.co/example/1",
+                    "status": "missing_profile_value",
+                    "label": "GitHub URL",
+                }
+            ],
+        }
+        answer_memory = {"answers": [{"sample_question": "Expected compensation?", "answer": "100000+"}]}
+        closed_jobs = {"jobs": [{"key": "linkedin:4415090263", "reason": "No longer accepting applications"}]}
+
+        report = build_automation_handoff_report(
+            goal_readiness_audit,
+            critical_input_questionnaire,
+            critical_input_impact,
+            autofill_batch,
+            answer_memory=answer_memory,
+            closed_jobs=closed_jobs,
+        )
+        markdown = render_automation_handoff_markdown(report)
+        html = render_automation_handoff_html(report)
+
+        self.assertEqual(report["status"], "waiting_for_confirmed_answers")
+        self.assertEqual(report["summary"]["autofill_selected_count"], 100)
+        self.assertEqual(report["summary"]["closed_registry_count"], 1)
+        self.assertEqual(report["answer_impact_queue"][0]["input_id"], "answer_memory_citizenship_status_default_policy")
+        self.assertEqual(report["answer_impact_queue"][0]["handoff_action"], "confirm_truthful_answer_before_persisting")
+        self.assertEqual(report["selected_stop_action_summary"][0]["status"], "final_submit_confirmation")
+        self.assertEqual(report["missing_profile_inputs"][0]["label"], "Website")
+        self.assertIn("Application Automation Handoff", markdown)
+        self.assertIn("100-Position Stop Actions", markdown)
+        self.assertIn("GitHub URL", html)
+        self.assertIn("Answer Impact Queue", html)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            json_output = Path(temp_dir) / "handoff.json"
+            markdown_output = Path(temp_dir) / "handoff.md"
+            html_output = Path(temp_dir) / "handoff.html"
+            written = write_automation_handoff_report(
+                goal_readiness_audit,
+                critical_input_questionnaire,
+                critical_input_impact,
+                autofill_batch,
+                json_output,
+                markdown_output,
+                html_output,
+                answer_memory=answer_memory,
+                closed_jobs=closed_jobs,
+            )
+            self.assertEqual(written["status"], "waiting_for_confirmed_answers")
+            self.assertTrue(json_output.exists())
+            self.assertTrue(markdown_output.exists())
+            self.assertTrue(html_output.exists())
+
     def test_collection_plan_turns_coverage_shortfalls_into_search_tasks(self) -> None:
         gate = {
             "position_target": 100,
@@ -7702,6 +7861,67 @@ class JobApplyAgentTests(unittest.TestCase):
                 }
             ]
         }
+        automation_handoff = {
+            "status": "waiting_for_confirmed_answers",
+            "summary": {
+                "goal_status": "needs_user_answers",
+                "data_blocking_prompt_count": 3,
+                "critical_waiting_count": 1,
+                "autofill_selected_count": 1,
+            },
+            "requirements": [
+                {
+                    "id": "real_user_answer_learning",
+                    "status": "needs_user_answers",
+                    "requirement": "Learn remaining truthful answers.",
+                    "evidence": "data_blocking_prompt_count=3",
+                }
+            ],
+            "answer_impact_queue": [
+                {
+                    "rank": 1,
+                    "input_id": "profile_zip_or_postal_code",
+                    "approval_risk": "needs_review",
+                    "high_risk": False,
+                    "supervised_only": False,
+                    "question": "What ZIP/postal code should automation use?",
+                    "required_user_response": "Provide exact ZIP/postal code.",
+                    "suggested_answer": "98004",
+                    "data_blocking_prompts_delta": -2,
+                    "ready_prompts_delta": 2,
+                    "positions_ready_for_autofill_delta": 3,
+                    "handoff_action": "review_suggestion_then_approve_or_replace",
+                }
+            ],
+            "selected_stop_action_summary": [
+                {
+                    "scope": "selected_100_position_batch",
+                    "status": "final_submit_confirmation",
+                    "label": "Submit application",
+                    "count": 1,
+                    "handling": "pause before real final submit and wait for explicit approval",
+                }
+            ],
+            "blocked_candidate_stop_action_summary": [
+                {
+                    "scope": "blocked_candidate_pool",
+                    "status": "missing_profile_value",
+                    "label": "GitHub URL",
+                    "count": 1,
+                    "handling": "add this stable profile/link/material value before selecting these candidates",
+                }
+            ],
+            "missing_profile_inputs": [
+                {
+                    "label": "GitHub URL",
+                    "count": 1,
+                    "sample_positions": "Lever: Example - SRE",
+                    "handling": "add this stable profile/link/material value before selecting these candidates",
+                }
+            ],
+            "policy": {"final_submit": "supervised"},
+            "next_commands": ["python3 -m job_apply_agent automation-handoff"],
+        }
 
         export = build_question_export(
             gaps,
@@ -7720,6 +7940,7 @@ class JobApplyAgentTests(unittest.TestCase):
             critical_input_preflight=critical_input_preflight,
             critical_input_impact=critical_input_impact,
             autofill_batch=autofill_batch,
+            automation_handoff=automation_handoff,
             answer_memory=answer_memory,
             closed_jobs=closed_jobs,
         )
@@ -7739,6 +7960,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Critical Input Impact", html)
         self.assertIn("Critical Input Preflight", html)
         self.assertIn("Autofill Batch", html)
+        self.assertIn("Automation Handoff", html)
+        self.assertIn("review_suggestion_then_approve_or_replace", html)
         self.assertIn("Submit application", html)
         self.assertIn("Impact blockers", html)
         self.assertIn("Fake Learning Probe", html)
@@ -7786,6 +8009,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 critical_input_preflight=critical_input_preflight,
                 critical_input_impact=critical_input_impact,
                 autofill_batch=autofill_batch,
+                automation_handoff=automation_handoff,
                 answer_memory=answer_memory,
                 closed_jobs=closed_jobs,
             )
@@ -7802,6 +8026,8 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(result["summary"]["critical_questionnaire_question_count"], 1)
             self.assertEqual(result["summary"]["critical_impact_top_input_id"], "profile_zip_or_postal_code")
             self.assertEqual(result["summary"]["autofill_batch_selected_count"], 1)
+            self.assertEqual(result["summary"]["automation_handoff_status"], "waiting_for_confirmed_answers")
+            self.assertEqual(result["summary"]["automation_handoff_answer_queue_count"], 1)
             self.assertEqual(result["summary"]["answer_memory_count"], 1)
             self.assertEqual(result["summary"]["closed_posting_count"], 1)
             self.assertTrue(xlsx_output.exists())
@@ -7817,7 +8043,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 self.assertIn("xl/worksheets/sheet28.xml", names)
                 self.assertIn("xl/worksheets/sheet29.xml", names)
                 self.assertIn("xl/worksheets/sheet30.xml", names)
-                self.assertIn("xl/worksheets/sheet34.xml", names)
+                self.assertIn("xl/worksheets/sheet39.xml", names)
                 critical_inputs = workbook.read("xl/worksheets/sheet2.xml").decode("utf-8")
                 self.assertIn("exact_prompt_answer", critical_inputs)
                 self.assertIn("user_answer", critical_inputs)
@@ -7844,25 +8070,31 @@ class JobApplyAgentTests(unittest.TestCase):
                 self.assertIn("final_submit_confirmation", autofill_positions)
                 autofill_stops = workbook.read("xl/worksheets/sheet15.xml").decode("utf-8")
                 self.assertIn("Submit application", autofill_stops)
-                problem_buckets = workbook.read("xl/worksheets/sheet16.xml").decode("utf-8")
+                handoff_sheet = workbook.read("xl/worksheets/sheet16.xml").decode("utf-8")
+                self.assertIn("waiting_for_confirmed_answers", handoff_sheet)
+                handoff_answer_queue = workbook.read("xl/worksheets/sheet18.xml").decode("utf-8")
+                self.assertIn("profile_zip_or_postal_code", handoff_answer_queue)
+                handoff_stop_summary = workbook.read("xl/worksheets/sheet19.xml").decode("utf-8")
+                self.assertIn("final_submit_confirmation", handoff_stop_summary)
+                problem_buckets = workbook.read("xl/worksheets/sheet21.xml").decode("utf-8")
                 self.assertIn("needs_user_confirmation", problem_buckets)
-                user_questions = workbook.read("xl/worksheets/sheet17.xml").decode("utf-8")
+                user_questions = workbook.read("xl/worksheets/sheet22.xml").decode("utf-8")
                 self.assertIn("Have you worked at DoorDash?", user_questions)
-                platform_role_summary = workbook.read("xl/worksheets/sheet21.xml").decode("utf-8")
+                platform_role_summary = workbook.read("xl/worksheets/sheet26.xml").decode("utf-8")
                 self.assertIn("Software Backend", platform_role_summary)
-                platform_role_blockers = workbook.read("xl/worksheets/sheet22.xml").decode("utf-8")
+                platform_role_blockers = workbook.read("xl/worksheets/sheet27.xml").decode("utf-8")
                 self.assertIn("Have you worked at DoorDash?", platform_role_blockers)
-                platform_shortfalls = workbook.read("xl/worksheets/sheet24.xml").decode("utf-8")
+                platform_shortfalls = workbook.read("xl/worksheets/sheet29.xml").decode("utf-8")
                 self.assertIn("Greenhouse", platform_shortfalls)
-                closed_postings = workbook.read("xl/worksheets/sheet29.xml").decode("utf-8")
+                closed_postings = workbook.read("xl/worksheets/sheet34.xml").decode("utf-8")
                 self.assertIn("No longer accepting applications", closed_postings)
-                approval_buckets = workbook.read("xl/worksheets/sheet30.xml").decode("utf-8")
+                approval_buckets = workbook.read("xl/worksheets/sheet35.xml").decode("utf-8")
                 self.assertIn("exact_prompt_answer", approval_buckets)
-                approval_tasks = workbook.read("xl/worksheets/sheet31.xml").decode("utf-8")
+                approval_tasks = workbook.read("xl/worksheets/sheet36.xml").decode("utf-8")
                 self.assertIn("Have you worked at DoorDash?", approval_tasks)
-                goal_audit = workbook.read("xl/worksheets/sheet33.xml").decode("utf-8")
+                goal_audit = workbook.read("xl/worksheets/sheet38.xml").decode("utf-8")
                 self.assertIn("needs_user_answers", goal_audit)
-                critical_suggestions = workbook.read("xl/worksheets/sheet34.xml").decode("utf-8")
+                critical_suggestions = workbook.read("xl/worksheets/sheet39.xml").decode("utf-8")
                 self.assertIn("profile_zip_or_postal_code", critical_suggestions)
 
 

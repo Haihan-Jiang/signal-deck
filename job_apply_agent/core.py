@@ -9282,6 +9282,607 @@ def _goal_next_actions(
     return actions
 
 
+def build_automation_handoff_report(
+    goal_readiness_audit: dict[str, Any] | None = None,
+    critical_input_questionnaire: dict[str, Any] | None = None,
+    critical_input_impact: dict[str, Any] | None = None,
+    autofill_batch: dict[str, Any] | None = None,
+    answer_memory: dict[str, Any] | None = None,
+    closed_jobs: dict[str, Any] | None = None,
+    source_artifacts: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    goal = goal_readiness_audit or {}
+    questionnaire = critical_input_questionnaire or {}
+    impact = critical_input_impact or {}
+    batch = autofill_batch or {}
+    blocker_summary = goal.get("blocker_summary") or {}
+    impact_summary = impact.get("summary") or {}
+    answer_queue = _automation_handoff_answer_queue_rows(questionnaire, impact)
+    selected_stop_summary = _automation_handoff_stop_summary_rows(
+        batch.get("selected_stop_action_counts") or {},
+        "selected_100_position_batch",
+    )
+    blocked_stop_summary = _automation_handoff_stop_summary_rows(
+        batch.get("blocked_stop_action_counts") or {},
+        "blocked_candidate_pool",
+    )
+    stop_samples = _automation_handoff_stop_sample_rows(batch)
+    missing_profile_inputs = _automation_handoff_missing_profile_rows(batch)
+    summary = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "goal_status": goal.get("status", "unknown"),
+        "goal_complete": bool(goal.get("goal_complete")),
+        "can_unattended_submit_real_employers": False,
+        "data_blocking_prompt_count": int(blocker_summary.get("data_blocking_prompt_count") or 0),
+        "critical_waiting_count": int(blocker_summary.get("critical_waiting_count") or 0),
+        "critical_supervised_only_count": int(
+            blocker_summary.get("critical_supervised_only_count") or 0
+        ),
+        "questionnaire_question_count": int(questionnaire.get("question_count") or len(answer_queue)),
+        "questionnaire_answerable_count": int(questionnaire.get("answerable_question_count") or 0),
+        "questionnaire_high_risk_count": int(questionnaire.get("high_risk_question_count") or 0),
+        "combined_data_blocking_prompts_delta": int(
+            impact_summary.get("combined_data_blocking_prompts_delta") or 0
+        ),
+        "combined_positions_ready_for_autofill_delta": int(
+            impact_summary.get("combined_positions_ready_for_autofill_delta") or 0
+        ),
+        "top_input_id": impact_summary.get("top_input_id", ""),
+        "autofill_selected_count": int(batch.get("selected_count") or 0),
+        "autofill_allowed_count": int(batch.get("selected_autofill_allowed_count") or 0),
+        "autofill_browser_action_count": int(batch.get("browser_action_count") or 0),
+        "autofill_stop_action_count": int(batch.get("stop_action_count") or 0),
+        "autofill_selector_miss_count": int(batch.get("selector_miss_count") or 0),
+        "autofill_would_submit_count": int(batch.get("would_submit_count") or 0),
+        "selected_stop_group_count": len(selected_stop_summary),
+        "blocked_stop_group_count": len(blocked_stop_summary),
+        "missing_profile_input_count": len(missing_profile_inputs),
+        "answer_memory_count": _automation_handoff_answer_memory_count(answer_memory),
+        "closed_registry_count": _closed_registry_count(closed_jobs),
+    }
+    status = str(summary["goal_status"] or "unknown")
+    if summary["goal_complete"]:
+        handoff_status = "ready_for_supervised_autofill"
+    elif summary["data_blocking_prompt_count"] or summary["critical_waiting_count"]:
+        handoff_status = "waiting_for_confirmed_answers"
+    elif summary["autofill_selected_count"] >= 100 and summary["autofill_selector_miss_count"] == 0:
+        handoff_status = "ready_with_supervised_submit_gates"
+    else:
+        handoff_status = status
+    return {
+        "generated_at": summary["generated_at"],
+        "source": "automation_handoff_report",
+        "status": handoff_status,
+        "summary": summary,
+        "requirements": _automation_handoff_requirement_rows(goal),
+        "answer_impact_queue": answer_queue,
+        "selected_stop_action_summary": selected_stop_summary,
+        "blocked_candidate_stop_action_summary": blocked_stop_summary,
+        "stop_action_samples": stop_samples[:250],
+        "missing_profile_inputs": missing_profile_inputs,
+        "source_artifacts": source_artifacts or [],
+        "policy": {
+            "fake_data": "Fake candidate data is limited to local/sandbox rehearsal and is never submitted to real employers.",
+            "closed_postings": "Any page with No longer accepting applications is persisted and skipped before notify/open/apply.",
+            "final_submit": "Real employer final submit stays supervised and requires explicit user confirmation.",
+            "sensitive_answers": "Protected-class/self-ID answers are supervised-only and are not stored for reuse.",
+            "security": "CAPTCHA, login, MFA, and other security challenges are not bypassed.",
+        },
+        "next_commands": [
+            "python3 -m job_apply_agent critical-inputs-workflow --updates <confirmed_answers.json> --approve --apply",
+            "python3 -m job_apply_agent autofill-batch --limit 100",
+            "python3 -m job_apply_agent automation-handoff",
+            "python3 -m job_apply_agent export-questions",
+        ],
+    }
+
+
+def write_automation_handoff_report(
+    goal_readiness_audit: dict[str, Any] | None,
+    critical_input_questionnaire: dict[str, Any] | None,
+    critical_input_impact: dict[str, Any] | None,
+    autofill_batch: dict[str, Any] | None,
+    json_output: str | Path,
+    markdown_output: str | Path,
+    html_output: str | Path,
+    answer_memory: dict[str, Any] | None = None,
+    closed_jobs: dict[str, Any] | None = None,
+    source_artifacts: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    report = build_automation_handoff_report(
+        goal_readiness_audit,
+        critical_input_questionnaire,
+        critical_input_impact,
+        autofill_batch,
+        answer_memory=answer_memory,
+        closed_jobs=closed_jobs,
+        source_artifacts=source_artifacts,
+    )
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    html_path = Path(html_output)
+    for path in [json_path, markdown_path, html_path]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(render_automation_handoff_markdown(report), encoding="utf-8")
+    html_path.write_text(render_automation_handoff_html(report), encoding="utf-8")
+    return report
+
+
+def render_automation_handoff_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    lines = [
+        "# Application Automation Handoff",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        f"Status: {report.get('status')}",
+        f"Goal status: {summary.get('goal_status', 'unknown')}",
+        f"Goal complete: {str(bool(summary.get('goal_complete'))).lower()}",
+        "Real employer unattended submit: false",
+        "",
+        "## Summary",
+        "",
+        f"- data-blocking prompts: {summary.get('data_blocking_prompt_count', 0)}",
+        f"- critical waiting answers: {summary.get('critical_waiting_count', 0)}",
+        f"- critical supervised-only inputs: {summary.get('critical_supervised_only_count', 0)}",
+        f"- questionnaire answers: {summary.get('questionnaire_answerable_count', 0)} / {summary.get('questionnaire_question_count', 0)}",
+        f"- impact if confirmed: {summary.get('combined_data_blocking_prompts_delta', 0)} data blockers, {summary.get('combined_positions_ready_for_autofill_delta', 0)} positions ready",
+        f"- autofill batch: {summary.get('autofill_allowed_count', 0)} / {summary.get('autofill_selected_count', 0)} selected, selector misses {summary.get('autofill_selector_miss_count', 0)}",
+        "",
+        "## Requirement Status",
+        "",
+    ]
+    lines.extend(
+        _simple_markdown_table(
+            ["ID", "Status", "Requirement", "Evidence"],
+            [
+                [
+                    row.get("id"),
+                    row.get("status"),
+                    row.get("requirement"),
+                    row.get("evidence"),
+                ]
+                for row in report.get("requirements", [])
+            ],
+        )
+    )
+    lines.extend(["", "## Answer Impact Queue", ""])
+    lines.extend(
+        _simple_markdown_table(
+            [
+                "Rank",
+                "Input ID",
+                "Risk",
+                "Question",
+                "Data blockers delta",
+                "Autofill positions delta",
+                "Action",
+            ],
+            [
+                [
+                    row.get("rank"),
+                    row.get("input_id"),
+                    row.get("approval_risk"),
+                    row.get("question"),
+                    row.get("data_blocking_prompts_delta"),
+                    row.get("positions_ready_for_autofill_delta"),
+                    row.get("handoff_action"),
+                ]
+                for row in report.get("answer_impact_queue", [])[:25]
+            ],
+        )
+    )
+    lines.extend(["", "## 100-Position Stop Actions", ""])
+    lines.extend(["Selected batch:"])
+    lines.extend(
+        _simple_markdown_table(
+            ["Status", "Label", "Count", "Handling"],
+            [
+                [row.get("status"), row.get("label"), row.get("count"), row.get("handling")]
+                for row in report.get("selected_stop_action_summary", [])
+            ],
+        )
+    )
+    lines.extend(["", "Blocked candidate pool:"])
+    lines.extend(
+        _simple_markdown_table(
+            ["Status", "Label", "Count", "Handling"],
+            [
+                [row.get("status"), row.get("label"), row.get("count"), row.get("handling")]
+                for row in report.get("blocked_candidate_stop_action_summary", [])[:25]
+            ],
+        )
+    )
+    lines.extend(["", "## Missing Profile Inputs", ""])
+    lines.extend(
+        _simple_markdown_table(
+            ["Label", "Count", "Sample positions", "Handling"],
+            [
+                [row.get("label"), row.get("count"), row.get("sample_positions"), row.get("handling")]
+                for row in report.get("missing_profile_inputs", [])
+            ],
+        )
+    )
+    lines.extend(["", "## Policy Boundaries", ""])
+    for key, value in sorted((report.get("policy") or {}).items()):
+        lines.append(f"- {key}: {value}")
+    lines.extend(["", "## Next Commands", ""])
+    for command in report.get("next_commands") or []:
+        lines.append(f"- `{command}`")
+    return "\n".join(lines) + "\n"
+
+
+def render_automation_handoff_html(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    return "\n".join(
+        [
+            "<!doctype html>",
+            '<html lang="en">',
+            "<head>",
+            '<meta charset="utf-8">',
+            '<meta name="viewport" content="width=device-width, initial-scale=1">',
+            "<title>Application Automation Handoff</title>",
+            "<style>",
+            _question_export_css(),
+            "</style>",
+            "</head>",
+            "<body>",
+            "<main>",
+            "<h1>Application Automation Handoff</h1>",
+            f"<p class=\"muted\">Generated: {_html_escape(report.get('generated_at'))}</p>",
+            _html_kpis(
+                [
+                    ("Status", report.get("status")),
+                    ("Data blockers", summary.get("data_blocking_prompt_count", 0)),
+                    ("Critical waiting", summary.get("critical_waiting_count", 0)),
+                    ("Questionnaire", f"{summary.get('questionnaire_answerable_count', 0)} / {summary.get('questionnaire_question_count', 0)}"),
+                    ("Impact blockers", summary.get("combined_data_blocking_prompts_delta", 0)),
+                    ("Impact positions", summary.get("combined_positions_ready_for_autofill_delta", 0)),
+                    ("Autofill selected", summary.get("autofill_selected_count", 0)),
+                    ("Selector misses", summary.get("autofill_selector_miss_count", 0)),
+                ]
+            ),
+            "<section><h2>Requirement Status</h2>",
+            _html_table(
+                ["ID", "Status", "Requirement", "Evidence"],
+                [
+                    [
+                        row.get("id"),
+                        row.get("status"),
+                        row.get("requirement"),
+                        row.get("evidence"),
+                    ]
+                    for row in report.get("requirements", [])
+                ],
+            ),
+            "</section>",
+            "<section><h2>Answer Impact Queue</h2>",
+            _html_table(
+                [
+                    "Rank",
+                    "Input ID",
+                    "Risk",
+                    "High risk",
+                    "Question",
+                    "Needed",
+                    "Suggested answer",
+                    "Data blockers delta",
+                    "Ready prompts delta",
+                    "Autofill positions delta",
+                    "Action",
+                ],
+                [
+                    [
+                        row.get("rank"),
+                        row.get("input_id"),
+                        row.get("approval_risk"),
+                        _yes_no(row.get("high_risk")),
+                        row.get("question"),
+                        row.get("required_user_response"),
+                        row.get("suggested_answer"),
+                        row.get("data_blocking_prompts_delta"),
+                        row.get("ready_prompts_delta"),
+                        row.get("positions_ready_for_autofill_delta"),
+                        row.get("handoff_action"),
+                    ]
+                    for row in report.get("answer_impact_queue", [])
+                ],
+            ),
+            "</section>",
+            "<section><h2>100-Position Stop Actions</h2>",
+            _html_table(
+                ["Scope", "Status", "Label", "Count", "Handling"],
+                [
+                    [
+                        row.get("scope"),
+                        row.get("status"),
+                        row.get("label"),
+                        row.get("count"),
+                        row.get("handling"),
+                    ]
+                    for row in [
+                        *(report.get("selected_stop_action_summary") or []),
+                        *(report.get("blocked_candidate_stop_action_summary") or []),
+                    ]
+                ],
+            ),
+            "</section>",
+            "<section><h2>Missing Profile Inputs</h2>",
+            _html_table(
+                ["Label", "Count", "Sample positions", "Handling"],
+                [
+                    [
+                        row.get("label"),
+                        row.get("count"),
+                        row.get("sample_positions"),
+                        row.get("handling"),
+                    ]
+                    for row in report.get("missing_profile_inputs", [])
+                ],
+            ),
+            "</section>",
+            "<section><h2>Stop Action Samples</h2>",
+            _html_table(
+                ["Scope", "Position", "Platform", "Company", "Title", "Status", "Label", "Handling", "URL"],
+                [
+                    [
+                        row.get("scope"),
+                        row.get("position_index"),
+                        row.get("platform"),
+                        row.get("company"),
+                        row.get("title"),
+                        row.get("status"),
+                        row.get("label"),
+                        row.get("handling"),
+                        row.get("apply_url"),
+                    ]
+                    for row in report.get("stop_action_samples", [])
+                ],
+            ),
+            "</section>",
+            "<section><h2>Policy Boundaries</h2>",
+            _html_key_value_table(report.get("policy") or {}),
+            "</section>",
+            "<section><h2>Next Commands</h2>",
+            _html_table(["Command"], [[command] for command in report.get("next_commands") or []]),
+            "</section>",
+            "<section><h2>Source Artifacts</h2>",
+            _html_table(
+                ["Name", "Path", "Exists", "Size bytes", "Updated at"],
+                [
+                    [
+                        row.get("name"),
+                        row.get("path"),
+                        _yes_no(row.get("exists")),
+                        row.get("size_bytes"),
+                        row.get("updated_at"),
+                    ]
+                    for row in report.get("source_artifacts", [])
+                ],
+            ),
+            "</section>",
+            "</main>",
+            "</body>",
+            "</html>",
+        ]
+    )
+
+
+def _automation_handoff_requirement_rows(goal: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for item in goal.get("requirements") or []:
+        if not isinstance(item, dict):
+            continue
+        evidence = item.get("evidence") or {}
+        rows.append(
+            {
+                "id": item.get("id"),
+                "status": item.get("status"),
+                "requirement": item.get("requirement"),
+                "evidence": "; ".join(f"{key}={value}" for key, value in evidence.items()),
+            }
+        )
+    return rows
+
+
+def _automation_handoff_answer_queue_rows(
+    questionnaire: dict[str, Any],
+    impact: dict[str, Any],
+) -> list[dict[str, Any]]:
+    impact_by_id = {
+        str(item.get("input_id") or ""): item
+        for item in impact.get("input_impacts") or []
+        if isinstance(item, dict)
+    }
+    rows: list[dict[str, Any]] = []
+    for index, item in enumerate(questionnaire.get("questions") or [], start=1):
+        if not isinstance(item, dict):
+            continue
+        input_id = str(item.get("input_id") or "")
+        impact_row = item.get("impact") if isinstance(item.get("impact"), dict) else {}
+        if not impact_row:
+            impact_row = impact_by_id.get(input_id, {})
+        supervised_only = bool(item.get("supervised_only"))
+        high_risk = bool(item.get("high_risk"))
+        suggested = str(item.get("suggested_answer") or "").strip()
+        if supervised_only:
+            action = "supervised_browser_review_only"
+        elif high_risk:
+            action = "confirm_truthful_answer_before_persisting"
+        elif suggested:
+            action = "review_suggestion_then_approve_or_replace"
+        else:
+            action = "provide_truthful_answer"
+        rows.append(
+            {
+                "rank": item.get("impact_rank") or index,
+                "input_id": input_id,
+                "input_type": item.get("input_type"),
+                "approval_risk": item.get("approval_risk"),
+                "high_risk": high_risk,
+                "supervised_only": supervised_only,
+                "question": item.get("question"),
+                "required_user_response": item.get("required_user_response"),
+                "suggested_answer": item.get("suggested_answer"),
+                "suggestion_source": item.get("suggestion_source"),
+                "suggestion_confidence": item.get("suggestion_confidence"),
+                "data_blocking_prompts_delta": int(
+                    impact_row.get("data_blocking_prompts_delta") or 0
+                ),
+                "ready_prompts_delta": int(impact_row.get("ready_prompts_delta") or 0),
+                "positions_ready_for_autofill_delta": int(
+                    impact_row.get("positions_ready_for_autofill_delta") or 0
+                ),
+                "workflow_update_shape": item.get("workflow_update_shape"),
+                "required_count": int(item.get("required_count") or 0),
+                "platforms": ", ".join(_string_list(item.get("platforms"))),
+                "labels": "\n".join(_string_list(item.get("labels"))),
+                "handoff_action": action,
+            }
+        )
+    rows.sort(
+        key=lambda row: (
+            int(row.get("rank") or 9999),
+            int(row.get("data_blocking_prompts_delta") or 0),
+            -int(row.get("positions_ready_for_autofill_delta") or 0),
+            str(row.get("input_id") or ""),
+        )
+    )
+    return rows
+
+
+def _automation_handoff_stop_summary_rows(
+    counts: dict[str, Any],
+    scope: str,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for key, count in sorted(
+        (counts or {}).items(),
+        key=lambda item: (-int(item[1] or 0), str(item[0])),
+    ):
+        status, label = _split_stop_count_key(str(key))
+        rows.append(
+            {
+                "scope": scope,
+                "status": status,
+                "label": label,
+                "count": int(count or 0),
+                "handling": _automation_handoff_stop_handling(status, label),
+            }
+        )
+    return rows
+
+
+def _automation_handoff_stop_sample_rows(batch: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for source_key in ["selected_stop_actions", "blocked_candidate_stop_actions"]:
+        for item in batch.get(source_key) or []:
+            if not isinstance(item, dict):
+                continue
+            rows.append(
+                {
+                    "scope": item.get("scope"),
+                    "position_index": item.get("position_index"),
+                    "platform": item.get("platform"),
+                    "company": item.get("company"),
+                    "title": item.get("title"),
+                    "role_family": item.get("role_family"),
+                    "apply_url": item.get("apply_url"),
+                    "status": item.get("status"),
+                    "label": item.get("label"),
+                    "category": item.get("category"),
+                    "required": bool(item.get("required")),
+                    "handling": item.get("handling")
+                    or _automation_handoff_stop_handling(str(item.get("status") or ""), item.get("label")),
+                }
+            )
+    return rows
+
+
+def _automation_handoff_missing_profile_rows(batch: dict[str, Any]) -> list[dict[str, Any]]:
+    samples_by_label: dict[str, list[str]] = {}
+    for item in batch.get("blocked_candidate_stop_actions") or []:
+        if not isinstance(item, dict) or item.get("status") != "missing_profile_value":
+            continue
+        label = str(item.get("label") or "Unlabeled").strip()
+        position = "{platform}: {company} - {title}".format(
+            platform=item.get("platform") or "Unknown",
+            company=item.get("company") or "Unknown company",
+            title=item.get("title") or "Unknown title",
+        )
+        samples_by_label.setdefault(label, [])
+        if position not in samples_by_label[label]:
+            samples_by_label[label].append(position)
+    rows: list[dict[str, Any]] = []
+    for key, count in sorted(
+        (batch.get("blocked_stop_action_counts") or {}).items(),
+        key=lambda item: (-int(item[1] or 0), str(item[0])),
+    ):
+        status, label = _split_stop_count_key(str(key))
+        if status != "missing_profile_value":
+            continue
+        rows.append(
+            {
+                "label": label,
+                "count": int(count or 0),
+                "sample_positions": "\n".join(samples_by_label.get(label, [])[:5]),
+                "handling": _automation_handoff_stop_handling(status, label),
+            }
+        )
+    return rows
+
+
+def _automation_handoff_answer_memory_count(answer_memory: dict[str, Any] | None) -> int:
+    if not answer_memory:
+        return 0
+    entries = answer_memory.get("answers") or []
+    if isinstance(entries, dict):
+        return len(entries)
+    if isinstance(entries, list):
+        return len(entries)
+    return 0
+
+
+def _split_stop_count_key(key: str) -> tuple[str, str]:
+    if " | " in key:
+        status, label = key.split(" | ", 1)
+        return status, label
+    return key, ""
+
+
+def _automation_handoff_stop_handling(status: str, label: Any = "") -> str:
+    status = str(status or "")
+    if status == "final_submit_confirmation":
+        return "pause before real final submit and wait for explicit approval"
+    if status == "sensitive_not_stored":
+        return "ask during supervised review; do not persist protected-class answer"
+    if status == "missing_profile_value":
+        return "add this stable profile/link/material value before selecting these candidates"
+    if status == "needs_human_review":
+        return "surface to review queue because answer is job-specific or ambiguous"
+    if status == "manual_security_step":
+        return "pause for login, CAPTCHA, MFA, or external security check"
+    if status == "closed_skip":
+        return "skip and persist closed posting"
+    return "inspect before automation"
+
+
+def _simple_markdown_table(headers: list[str], rows: list[list[Any]]) -> list[str]:
+    if not rows:
+        return ["- None"]
+    lines = [
+        "| " + " | ".join(_markdown_cell(header) for header in headers) + " |",
+        "| " + " | ".join("---" for _header in headers) + " |",
+    ]
+    for row in rows:
+        lines.append(
+            "| "
+            + " | ".join(_markdown_cell(row[index] if index < len(row) else "") for index in range(len(headers)))
+            + " |"
+        )
+    return lines
+
+
 def _closed_registry_count(closed_jobs: dict[str, Any] | None) -> int:
     if not closed_jobs:
         return 0
@@ -9877,6 +10478,7 @@ def write_question_export(
     critical_input_preflight: dict[str, Any] | None = None,
     critical_input_impact: dict[str, Any] | None = None,
     autofill_batch: dict[str, Any] | None = None,
+    automation_handoff: dict[str, Any] | None = None,
     learning_approval_pack: dict[str, Any] | None = None,
     answer_memory: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
@@ -9898,6 +10500,7 @@ def write_question_export(
         critical_input_preflight=critical_input_preflight,
         critical_input_impact=critical_input_impact,
         autofill_batch=autofill_batch,
+        automation_handoff=automation_handoff,
         learning_approval_pack=learning_approval_pack,
         answer_memory=answer_memory,
         closed_jobs=closed_jobs,
@@ -9929,6 +10532,7 @@ def build_question_export(
     critical_input_preflight: dict[str, Any] | None = None,
     critical_input_impact: dict[str, Any] | None = None,
     autofill_batch: dict[str, Any] | None = None,
+    automation_handoff: dict[str, Any] | None = None,
     learning_approval_pack: dict[str, Any] | None = None,
     answer_memory: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
@@ -9974,6 +10578,39 @@ def build_question_export(
     autofill_batch_rows = _autofill_batch_export_rows(autofill_batch)
     autofill_batch_position_rows = _autofill_batch_position_export_rows(autofill_batch)
     autofill_batch_stop_rows = _autofill_batch_stop_action_export_rows(autofill_batch)
+    automation_handoff_rows = _automation_handoff_export_rows(automation_handoff)
+    automation_handoff_requirement_rows = _table_dict_subset_rows(
+        (automation_handoff or {}).get("requirements") or [],
+        ["id", "status", "requirement", "evidence"],
+    )
+    automation_handoff_answer_rows = _table_dict_subset_rows(
+        (automation_handoff or {}).get("answer_impact_queue") or [],
+        [
+            "rank",
+            "input_id",
+            "approval_risk",
+            "high_risk",
+            "supervised_only",
+            "question",
+            "required_user_response",
+            "suggested_answer",
+            "data_blocking_prompts_delta",
+            "ready_prompts_delta",
+            "positions_ready_for_autofill_delta",
+            "handoff_action",
+        ],
+    )
+    automation_handoff_stop_rows = _table_dict_subset_rows(
+        [
+            *((automation_handoff or {}).get("selected_stop_action_summary") or []),
+            *((automation_handoff or {}).get("blocked_candidate_stop_action_summary") or []),
+        ],
+        ["scope", "status", "label", "count", "handling"],
+    )
+    automation_handoff_profile_rows = _table_dict_subset_rows(
+        (automation_handoff or {}).get("missing_profile_inputs") or [],
+        ["label", "count", "sample_positions", "handling"],
+    )
     answer_memory_rows = _answer_memory_export_rows(answer_memory)
     closed_posting_rows = _closed_posting_export_rows(closed_jobs)
     platform_role_summary_rows = _platform_role_summary_export_rows(readiness)
@@ -10153,6 +10790,9 @@ def build_question_export(
         "autofill_batch_selector_miss_count": int(
             (autofill_batch or {}).get("selector_miss_count") or 0
         ),
+        "automation_handoff_status": (automation_handoff or {}).get("status", ""),
+        "automation_handoff_answer_queue_count": len(automation_handoff_answer_rows),
+        "automation_handoff_missing_profile_input_count": len(automation_handoff_profile_rows),
     }
     return {
         "generated_at": summary["generated_at"],
@@ -10179,6 +10819,11 @@ def build_question_export(
         "autofill_batch": autofill_batch_rows,
         "autofill_batch_positions": autofill_batch_position_rows,
         "autofill_batch_stop_actions": autofill_batch_stop_rows,
+        "automation_handoff": automation_handoff_rows,
+        "automation_handoff_requirements": automation_handoff_requirement_rows,
+        "automation_handoff_answer_queue": automation_handoff_answer_rows,
+        "automation_handoff_stop_summary": automation_handoff_stop_rows,
+        "automation_handoff_missing_profile": automation_handoff_profile_rows,
         "platform_role_summary": platform_role_summary_rows,
         "platform_role_blockers": platform_role_blocker_rows,
         "answer_memory": answer_memory_rows,
@@ -10375,6 +11020,42 @@ def render_question_export_html(export: dict[str, Any]) -> str:
                 ["Eligible synthetic submit achieved", _yes_no(summary.get("eligible_synthetic_submit_achieved"))],
                 ["Expected synthetic blocker count", summary.get("expected_synthetic_blocker_count", 0)],
                 ["Actual real submit count", summary.get("real_submit_count", 0)],
+            ],
+        ),
+        "</section>",
+        "<section><h2>Automation Handoff</h2>",
+        _html_table(
+            ["Section", "Metric", "Value"],
+            [
+                [row.get("section"), row.get("metric"), row.get("value")]
+                for row in export.get("automation_handoff", [])
+            ],
+        ),
+        _html_table(
+            ["Input ID", "Risk", "Question", "Data blockers delta", "Autofill positions delta", "Action"],
+            [
+                [
+                    row.get("input_id"),
+                    row.get("approval_risk"),
+                    row.get("question"),
+                    row.get("data_blocking_prompts_delta"),
+                    row.get("positions_ready_for_autofill_delta"),
+                    row.get("handoff_action"),
+                ]
+                for row in export.get("automation_handoff_answer_queue", [])
+            ],
+        ),
+        _html_table(
+            ["Scope", "Status", "Label", "Count", "Handling"],
+            [
+                [
+                    row.get("scope"),
+                    row.get("status"),
+                    row.get("label"),
+                    row.get("count"),
+                    row.get("handling"),
+                ]
+                for row in export.get("automation_handoff_stop_summary", [])
             ],
         ),
         "</section>",
@@ -17967,6 +18648,37 @@ def _autofill_batch_stop_action_export_rows(
     return rows
 
 
+def _automation_handoff_export_rows(
+    automation_handoff: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if not automation_handoff:
+        return []
+    rows = [
+        {"section": "summary", "metric": "status", "value": automation_handoff.get("status")},
+        {
+            "section": "summary",
+            "metric": "source",
+            "value": automation_handoff.get("source"),
+        },
+    ]
+    for key, value in sorted((automation_handoff.get("summary") or {}).items()):
+        rows.append({"section": "summary", "metric": key, "value": value})
+    for key, value in sorted((automation_handoff.get("policy") or {}).items()):
+        rows.append({"section": "policy", "metric": key, "value": value})
+    for command in automation_handoff.get("next_commands") or []:
+        rows.append({"section": "next_command", "metric": "command", "value": command})
+    return rows
+
+
+def _table_dict_subset_rows(items: list[dict[str, Any]], keys: list[str]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        rows.append({key: item.get(key) for key in keys})
+    return rows
+
+
 def _answer_memory_export_rows(answer_memory: dict[str, Any] | None) -> list[dict[str, Any]]:
     if not answer_memory:
         return []
@@ -18374,6 +19086,11 @@ def _write_question_export_xlsx(export: dict[str, Any], path: Path) -> None:
         ("Autofill Batch", _table_rows(export.get("autofill_batch", []))),
         ("Autofill Batch Positions", _table_rows(export.get("autofill_batch_positions", []))),
         ("Autofill Batch Stops", _table_rows(export.get("autofill_batch_stop_actions", []))),
+        ("Automation Handoff", _table_rows(export.get("automation_handoff", []))),
+        ("Handoff Requirements", _table_rows(export.get("automation_handoff_requirements", []))),
+        ("Handoff Answer Queue", _table_rows(export.get("automation_handoff_answer_queue", []))),
+        ("Handoff Stop Summary", _table_rows(export.get("automation_handoff_stop_summary", []))),
+        ("Handoff Profile Gaps", _table_rows(export.get("automation_handoff_missing_profile", []))),
         ("Problem Buckets", _table_rows(export.get("problem_buckets", []))),
         ("User Questions", _table_rows(export.get("user_questions", []))),
         ("Blocking Prompts", _table_rows(export.get("blocker_rows", []))),

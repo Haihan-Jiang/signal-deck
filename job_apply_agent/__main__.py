@@ -30,6 +30,7 @@ from .core import (
     write_apply_run_audit,
     write_application_playbook,
     write_application_research_report,
+    write_automation_handoff_report,
     write_autofill_batch_plan,
     write_browser_action_manifest,
     write_candidate_observation_report,
@@ -78,6 +79,9 @@ DEFAULT_READINESS_MARKDOWN = Path(__file__).with_name("outbox") / "automation_re
 DEFAULT_AUTOFILL_BATCH_JSON = Path(__file__).with_name("outbox") / "autofill_batch_latest.json"
 DEFAULT_AUTOFILL_BATCH_MARKDOWN = Path(__file__).with_name("outbox") / "autofill_batch_latest.md"
 DEFAULT_AUTOFILL_BATCH_HTML = Path(__file__).with_name("outbox") / "autofill_batch_latest.html"
+DEFAULT_AUTOMATION_HANDOFF_JSON = Path(__file__).with_name("outbox") / "automation_handoff_latest.json"
+DEFAULT_AUTOMATION_HANDOFF_MARKDOWN = Path(__file__).with_name("outbox") / "automation_handoff_latest.md"
+DEFAULT_AUTOMATION_HANDOFF_HTML = Path(__file__).with_name("outbox") / "automation_handoff_latest.html"
 DEFAULT_FILL_PLAN_JSON = Path(__file__).with_name("outbox") / "form_fill_plan_latest.json"
 DEFAULT_FILL_PLAN_MARKDOWN = Path(__file__).with_name("outbox") / "form_fill_plan_latest.md"
 DEFAULT_APPLY_AUDIT_JSON = Path(__file__).with_name("outbox") / "apply_run_audit_latest.json"
@@ -323,6 +327,26 @@ def main() -> int:
     autofill_batch_parser.add_argument("--json-output", default=str(DEFAULT_AUTOFILL_BATCH_JSON))
     autofill_batch_parser.add_argument("--markdown-output", default=str(DEFAULT_AUTOFILL_BATCH_MARKDOWN))
     autofill_batch_parser.add_argument("--html-output", default=str(DEFAULT_AUTOFILL_BATCH_HTML))
+
+    automation_handoff_parser = subparsers.add_parser(
+        "automation-handoff",
+        help="write a handoff dashboard for confirmed answers, stop actions, and supervised gates",
+    )
+    automation_handoff_parser.add_argument("--goal-audit-json", default=str(DEFAULT_GOAL_AUDIT_JSON))
+    automation_handoff_parser.add_argument(
+        "--critical-input-questionnaire-json",
+        default=str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_JSON),
+    )
+    automation_handoff_parser.add_argument(
+        "--critical-input-impact-json",
+        default=str(DEFAULT_CRITICAL_INPUT_IMPACT_JSON),
+    )
+    automation_handoff_parser.add_argument("--autofill-batch-json", default=str(DEFAULT_AUTOFILL_BATCH_JSON))
+    automation_handoff_parser.add_argument("--answer-memory-json", default=str(DEFAULT_MEMORY))
+    automation_handoff_parser.add_argument("--closed-jobs-json", default=str(DEFAULT_CLOSED_JOBS))
+    automation_handoff_parser.add_argument("--json-output", default=str(DEFAULT_AUTOMATION_HANDOFF_JSON))
+    automation_handoff_parser.add_argument("--markdown-output", default=str(DEFAULT_AUTOMATION_HANDOFF_MARKDOWN))
+    automation_handoff_parser.add_argument("--html-output", default=str(DEFAULT_AUTOMATION_HANDOFF_HTML))
 
     fill_plan_parser = subparsers.add_parser(
         "fill-plan",
@@ -854,6 +878,8 @@ def main() -> int:
     export_questions_parser.add_argument("--goal-audit-json", default=str(DEFAULT_GOAL_AUDIT_JSON))
     export_questions_parser.add_argument("--autofill-batch-json", default=str(DEFAULT_AUTOFILL_BATCH_JSON))
     export_questions_parser.add_argument("--autofill-batch-html", default=str(DEFAULT_AUTOFILL_BATCH_HTML))
+    export_questions_parser.add_argument("--automation-handoff-json", default=str(DEFAULT_AUTOMATION_HANDOFF_JSON))
+    export_questions_parser.add_argument("--automation-handoff-html", default=str(DEFAULT_AUTOMATION_HANDOFF_HTML))
     export_questions_parser.add_argument(
         "--critical-input-suggestions-json",
         default=str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON),
@@ -1046,6 +1072,8 @@ def main() -> int:
                     "Goal readiness audit": args.goal_audit_json,
                     "Autofill batch": args.autofill_batch_json,
                     "Autofill batch HTML": args.autofill_batch_html,
+                    "Automation handoff": args.automation_handoff_json,
+                    "Automation handoff HTML": args.automation_handoff_html,
                     "Critical input suggestions": args.critical_input_suggestions_json,
                     "Critical input questionnaire": args.critical_input_questionnaire_json,
                     "Critical input questionnaire HTML": args.critical_input_questionnaire_html,
@@ -1065,6 +1093,7 @@ def main() -> int:
             critical_input_preflight=_load_optional_json(args.critical_input_preflight_json),
             critical_input_impact=_load_optional_json(args.critical_input_impact_json),
             autofill_batch=_load_optional_json(args.autofill_batch_json),
+            automation_handoff=_load_optional_json(args.automation_handoff_json),
             learning_approval_pack=_load_optional_json(args.learning_approval_pack_json),
             answer_memory=_load_optional_json(args.answer_memory_json),
             closed_jobs=_load_optional_json(args.closed_jobs_json),
@@ -1223,6 +1252,38 @@ def main() -> int:
         print(f"Browser actions: {report.get('browser_action_count', 0)}")
         print(f"Selector misses: {report.get('selector_miss_count', 0)}")
         print(f"Would submit: {report.get('would_submit_count', 0)}")
+        return 0
+
+    if args.command == "automation-handoff":
+        report = write_automation_handoff_report(
+            _load_optional_json(args.goal_audit_json),
+            _load_optional_json(args.critical_input_questionnaire_json),
+            _load_optional_json(args.critical_input_impact_json),
+            _load_optional_json(args.autofill_batch_json),
+            args.json_output,
+            args.markdown_output,
+            args.html_output,
+            answer_memory=_load_optional_json(args.answer_memory_json),
+            closed_jobs=_load_optional_json(args.closed_jobs_json),
+            source_artifacts=_question_export_source_artifacts(
+                {
+                    "Goal readiness audit": args.goal_audit_json,
+                    "Critical input questionnaire": args.critical_input_questionnaire_json,
+                    "Critical input impact": args.critical_input_impact_json,
+                    "Autofill batch": args.autofill_batch_json,
+                    "Answer memory": args.answer_memory_json,
+                    "Closed postings": args.closed_jobs_json,
+                }
+            ),
+        )
+        summary = report.get("summary") or {}
+        print(f"Wrote automation handoff JSON to {args.json_output}")
+        print(f"Wrote automation handoff Markdown to {args.markdown_output}")
+        print(f"Wrote automation handoff HTML to {args.html_output}")
+        print(f"Status: {report.get('status')}")
+        print(f"Data blockers: {summary.get('data_blocking_prompt_count', 0)}")
+        print(f"Critical waiting: {summary.get('critical_waiting_count', 0)}")
+        print(f"Autofill selected: {summary.get('autofill_selected_count', 0)}")
         return 0
 
     if args.command == "fill-plan":
@@ -2131,6 +2192,27 @@ def _refresh_application_automation_reports() -> dict[str, object]:
         autofill_batch_plan=_load_optional_json(str(DEFAULT_AUTOFILL_BATCH_JSON)),
         closed_jobs=_load_optional_json(str(DEFAULT_CLOSED_JOBS)),
     )
+    automation_handoff = write_automation_handoff_report(
+        goal,
+        _load_optional_json(str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_JSON)),
+        _load_optional_json(str(DEFAULT_CRITICAL_INPUT_IMPACT_JSON)),
+        _load_optional_json(str(DEFAULT_AUTOFILL_BATCH_JSON)),
+        DEFAULT_AUTOMATION_HANDOFF_JSON,
+        DEFAULT_AUTOMATION_HANDOFF_MARKDOWN,
+        DEFAULT_AUTOMATION_HANDOFF_HTML,
+        answer_memory=_load_optional_json(str(DEFAULT_MEMORY)),
+        closed_jobs=_load_optional_json(str(DEFAULT_CLOSED_JOBS)),
+        source_artifacts=_question_export_source_artifacts(
+            {
+                "Goal readiness audit": str(DEFAULT_GOAL_AUDIT_JSON),
+                "Critical input questionnaire": str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_JSON),
+                "Critical input impact": str(DEFAULT_CRITICAL_INPUT_IMPACT_JSON),
+                "Autofill batch": str(DEFAULT_AUTOFILL_BATCH_JSON),
+                "Answer memory": str(DEFAULT_MEMORY),
+                "Closed postings": str(DEFAULT_CLOSED_JOBS),
+            }
+        ),
+    )
     if DEFAULT_COLLECTION_PLAN_JSON.exists() and DEFAULT_LEARNING_TASKS_JSON.exists():
         write_question_export(
             gaps,
@@ -2158,6 +2240,8 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                     "Goal readiness audit": str(DEFAULT_GOAL_AUDIT_JSON),
                     "Autofill batch": str(DEFAULT_AUTOFILL_BATCH_JSON),
                     "Autofill batch HTML": str(DEFAULT_AUTOFILL_BATCH_HTML),
+                    "Automation handoff": str(DEFAULT_AUTOMATION_HANDOFF_JSON),
+                    "Automation handoff HTML": str(DEFAULT_AUTOMATION_HANDOFF_HTML),
                     "Critical input suggestions": str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON),
                     "Critical input questionnaire": str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_JSON),
                     "Critical input questionnaire HTML": str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_HTML),
@@ -2177,6 +2261,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             critical_input_preflight=_load_optional_json(str(DEFAULT_CRITICAL_INPUT_PREFLIGHT_JSON)),
             critical_input_impact=_load_optional_json(str(DEFAULT_CRITICAL_INPUT_IMPACT_JSON)),
             autofill_batch=_load_optional_json(str(DEFAULT_AUTOFILL_BATCH_JSON)),
+            automation_handoff=automation_handoff,
             learning_approval_pack=approval_pack,
             answer_memory=_load_optional_json(str(DEFAULT_MEMORY)),
             closed_jobs=_load_optional_json(str(DEFAULT_CLOSED_JOBS)),
@@ -2192,6 +2277,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             "critical-inputs-impact",
             "autofill-batch",
             "goal-audit",
+            "automation-handoff",
             "export-questions",
         ],
         "goal_status": goal.get("status"),
