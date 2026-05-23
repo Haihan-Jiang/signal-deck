@@ -186,6 +186,19 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(extract_linkedin_job_id(slug_job["apply_url"]), "4338540053")
         self.assertEqual(job_registry_key(slug_job), "linkedin:4338540053")
 
+    def test_ats_job_registry_key_canonicalizes_tracking_and_trailing_slash(self) -> None:
+        ashby_a = {
+            "apply_url": "https://jobs.ashbyhq.com/scribe/ccafdcaf-3249-4a85-adb0-7c865dbd045b/?src=LinkedIn",
+        }
+        ashby_b = {
+            "apply_url": "https://jobs.ashbyhq.com/scribe/ccafdcaf-3249-4a85-adb0-7c865dbd045b",
+        }
+        self.assertEqual(job_registry_key(ashby_a), job_registry_key(ashby_b))
+        self.assertEqual(
+            shorten_apply_url(ashby_a["apply_url"]),
+            "https://jobs.ashbyhq.com/scribe/ccafdcaf-3249-4a85-adb0-7c865dbd045b",
+        )
+
     def test_answer_generation_uses_known_profile_facts(self) -> None:
         draft = build_application_draft(self.profile, self.jobs[0])
         why_answer = draft.answers["Why are you interested in this role?"]

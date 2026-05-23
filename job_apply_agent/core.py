@@ -5753,7 +5753,7 @@ def write_closed_posting_preflight(
     return report
 
 
-def fetch_live_page_text(url: str, timeout: float = 15.0, max_bytes: int = 8_000_000) -> str:
+def fetch_live_page_text(url: str, timeout: float = 15.0, max_bytes: int = 128_000_000) -> str:
     request = urllib.request.Request(
         url,
         headers={
@@ -6019,7 +6019,8 @@ def shorten_apply_url(url: str, submission: dict[str, Any] | None = None) -> str
             return f"https://www.linkedin.com/jobs/view/{job_id}/"
 
     if any(domain in host for domain in ["greenhouse.io", "ashbyhq.com", "lever.co"]):
-        return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
+        path = "/" + "/".join(part for part in parsed.path.split("/") if part)
+        return urllib.parse.urlunparse((parsed.scheme.lower(), host, path, "", "", ""))
 
     tracking_keys = {
         "ebp",
