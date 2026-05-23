@@ -7822,6 +7822,25 @@ class JobApplyAgentTests(unittest.TestCase):
                 }
             ],
         }
+        apply_queue_handoff = {
+            "status": "waiting_for_confirmed_answers",
+            "open_ready_count": 0,
+            "open_after_answers_count": 100,
+            "manual_live_check_count": 0,
+            "closed_or_skipped_count": 0,
+        }
+        apply_queue_autofill_packet = {
+            "status": "waiting_for_confirmed_answers",
+            "ready_for_supervised_browser_autofill": False,
+            "ready_after_confirmed_answers": True,
+            "selected_count": 100,
+            "summary": {
+                "browser_action_count": 101,
+                "final_submit_stop_count": 100,
+                "selector_miss_count": 0,
+                "local_synthetic_submit_count": 100,
+            },
+        }
         answer_memory = {"answers": [{"sample_question": "Expected compensation?", "answer": "100000+"}]}
         closed_jobs = {"jobs": [{"key": "linkedin:4415090263", "reason": "No longer accepting applications"}]}
 
@@ -7832,6 +7851,8 @@ class JobApplyAgentTests(unittest.TestCase):
             autofill_batch,
             answer_memory=answer_memory,
             closed_jobs=closed_jobs,
+            apply_queue_handoff=apply_queue_handoff,
+            apply_queue_autofill_packet=apply_queue_autofill_packet,
         )
         markdown = render_automation_handoff_markdown(report)
         html = render_automation_handoff_html(report)
@@ -7844,8 +7865,14 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["summary"]["combined_remaining_data_blocker_count"], 12)
         self.assertTrue(report["summary"]["individual_impact_truncated"])
         self.assertEqual(report["summary"]["closed_registry_count"], 1)
+        self.assertEqual(report["summary"]["apply_queue_open_after_answers_count"], 100)
+        self.assertEqual(report["summary"]["autofill_packet_browser_action_count"], 101)
+        self.assertEqual(report["summary"]["autofill_packet_final_submit_stop_count"], 100)
         self.assertTrue(report["summary"]["synthetic_unblocker_proof_complete"])
         self.assertEqual(report["summary"]["synthetic_final_unblocker_update_count"], 6)
+        self.assertEqual(report["confirmed_answer_runbook"][0]["status"], "waiting_for_user")
+        self.assertIn("--approve-high-risk", report["next_commands"][0])
+        self.assertIn("closed-preflight --jobs", " ".join(report["next_commands"]))
         self.assertEqual(report["answer_impact_queue"][0]["input_id"], "answer_memory_citizenship_status_default_policy")
         self.assertEqual(report["answer_impact_queue"][0]["handoff_action"], "confirm_truthful_answer_before_persisting")
         self.assertEqual(report["selected_stop_action_summary"][0]["status"], "final_submit_confirmation")
@@ -7854,8 +7881,11 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("data blockers after simulated confirmations: 12", markdown)
         self.assertIn("local synthetic submit proof: 100 submits", markdown)
         self.assertIn("synthetic final unblocker proof: true", markdown)
+        self.assertIn("autofill packet: waiting_for_confirmed_answers", markdown)
+        self.assertIn("Confirmed-Answer Runbook", markdown)
         self.assertIn("100-Position Stop Actions", markdown)
         self.assertIn("GitHub URL", html)
+        self.assertIn("Confirmed-Answer Runbook", html)
         self.assertIn("Answer Impact Queue", html)
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -7872,6 +7902,8 @@ class JobApplyAgentTests(unittest.TestCase):
                 html_output,
                 answer_memory=answer_memory,
                 closed_jobs=closed_jobs,
+                apply_queue_handoff=apply_queue_handoff,
+                apply_queue_autofill_packet=apply_queue_autofill_packet,
             )
             self.assertEqual(written["status"], "waiting_for_confirmed_answers")
             self.assertTrue(json_output.exists())

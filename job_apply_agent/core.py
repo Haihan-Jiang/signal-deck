@@ -12163,6 +12163,8 @@ def build_automation_handoff_report(
     answer_memory: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
     source_artifacts: list[dict[str, Any]] | None = None,
+    apply_queue_handoff: dict[str, Any] | None = None,
+    apply_queue_autofill_packet: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     goal = goal_readiness_audit or {}
     questionnaire = critical_input_questionnaire or {}
@@ -12170,6 +12172,9 @@ def build_automation_handoff_report(
     updates_readiness = critical_input_updates_readiness or {}
     updates_readiness_summary = updates_readiness.get("summary") or {}
     batch = autofill_batch or {}
+    queue_handoff = apply_queue_handoff or {}
+    autofill_packet = apply_queue_autofill_packet or {}
+    packet_summary = autofill_packet.get("summary") or {}
     blocker_summary = goal.get("blocker_summary") or {}
     impact_summary = impact.get("summary") or {}
     answer_queue = _automation_handoff_answer_queue_rows(questionnaire, impact)
@@ -12246,6 +12251,21 @@ def build_automation_handoff_report(
         "updates_data_blocking_prompts_after": int(
             updates_readiness_summary.get("data_blocking_prompts_after") or 0
         ),
+        "apply_queue_handoff_status": queue_handoff.get("status", ""),
+        "apply_queue_open_ready_count": int(queue_handoff.get("open_ready_count") or 0),
+        "apply_queue_open_after_answers_count": int(queue_handoff.get("open_after_answers_count") or 0),
+        "apply_queue_manual_live_check_count": int(queue_handoff.get("manual_live_check_count") or 0),
+        "apply_queue_closed_or_skipped_count": int(queue_handoff.get("closed_or_skipped_count") or 0),
+        "autofill_packet_status": autofill_packet.get("status", ""),
+        "autofill_packet_ready_now": bool(autofill_packet.get("ready_for_supervised_browser_autofill")),
+        "autofill_packet_ready_after_answers": bool(autofill_packet.get("ready_after_confirmed_answers")),
+        "autofill_packet_selected_count": int(autofill_packet.get("selected_count") or 0),
+        "autofill_packet_browser_action_count": int(packet_summary.get("browser_action_count") or 0),
+        "autofill_packet_final_submit_stop_count": int(packet_summary.get("final_submit_stop_count") or 0),
+        "autofill_packet_selector_miss_count": int(packet_summary.get("selector_miss_count") or 0),
+        "autofill_packet_local_synthetic_submit_count": int(
+            packet_summary.get("local_synthetic_submit_count") or 0
+        ),
         "selected_stop_group_count": len(selected_stop_summary),
         "blocked_stop_group_count": len(blocked_stop_summary),
         "missing_profile_input_count": len(missing_profile_inputs),
@@ -12267,6 +12287,7 @@ def build_automation_handoff_report(
         "status": handoff_status,
         "summary": summary,
         "requirements": _automation_handoff_requirement_rows(goal),
+        "confirmed_answer_runbook": _automation_handoff_confirmed_answer_runbook(summary),
         "answer_impact_queue": answer_queue,
         "selected_stop_action_summary": selected_stop_summary,
         "blocked_candidate_stop_action_summary": blocked_stop_summary,
@@ -12280,12 +12301,7 @@ def build_automation_handoff_report(
             "sensitive_answers": "Protected-class/self-ID answers are supervised-only and are not stored for reuse.",
             "security": "CAPTCHA, login, MFA, and other security challenges are not bypassed.",
         },
-        "next_commands": [
-            "python3 -m job_apply_agent critical-inputs-workflow --updates <confirmed_answers.json> --approve --apply",
-            "python3 -m job_apply_agent autofill-batch --limit 100",
-            "python3 -m job_apply_agent automation-handoff",
-            "python3 -m job_apply_agent export-questions",
-        ],
+        "next_commands": _automation_handoff_next_commands(summary),
     }
 
 
@@ -12301,6 +12317,8 @@ def write_automation_handoff_report(
     closed_jobs: dict[str, Any] | None = None,
     critical_input_updates_readiness: dict[str, Any] | None = None,
     source_artifacts: list[dict[str, Any]] | None = None,
+    apply_queue_handoff: dict[str, Any] | None = None,
+    apply_queue_autofill_packet: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     report = build_automation_handoff_report(
         goal_readiness_audit,
@@ -12311,6 +12329,8 @@ def write_automation_handoff_report(
         answer_memory=answer_memory,
         closed_jobs=closed_jobs,
         source_artifacts=source_artifacts,
+        apply_queue_handoff=apply_queue_handoff,
+        apply_queue_autofill_packet=apply_queue_autofill_packet,
     )
     json_path = Path(json_output)
     markdown_path = Path(markdown_output)
@@ -12348,6 +12368,8 @@ def render_automation_handoff_markdown(report: dict[str, Any]) -> str:
         f"- local synthetic submit proof: {summary.get('autofill_local_synthetic_submit_count', 0)} submits, achieved {str(bool(summary.get('autofill_local_synthetic_submit_achieved'))).lower()}, selector misses {summary.get('autofill_local_synthetic_submit_selector_miss_count', 0)}",
         f"- synthetic final unblocker proof: {str(bool(summary.get('synthetic_unblocker_proof_complete'))).lower()}, final blanks {summary.get('synthetic_final_unblocker_update_count', 0)}, prefilled drafts {summary.get('synthetic_unblocker_existing_draft_update_count', 0)}, blockers after {summary.get('synthetic_unblocker_data_blocking_prompts_after', 0)}",
         f"- updates readiness: {str(bool(summary.get('updates_ready_for_apply'))).lower()}, waiting {summary.get('updates_waiting_after_update_count', 0)}, high-risk unconfirmed {summary.get('updates_high_risk_unconfirmed_count', 0)}, blockers after {summary.get('updates_data_blocking_prompts_after', 0)}",
+        f"- apply queue handoff: {summary.get('apply_queue_handoff_status') or 'missing'}, open ready {summary.get('apply_queue_open_ready_count', 0)}, open after answers {summary.get('apply_queue_open_after_answers_count', 0)}, manual live checks {summary.get('apply_queue_manual_live_check_count', 0)}",
+        f"- autofill packet: {summary.get('autofill_packet_status') or 'missing'}, selected {summary.get('autofill_packet_selected_count', 0)}, browser actions {summary.get('autofill_packet_browser_action_count', 0)}, final-submit stops {summary.get('autofill_packet_final_submit_stop_count', 0)}, selector misses {summary.get('autofill_packet_selector_miss_count', 0)}",
         "",
         "## Requirement Status",
         "",
@@ -12363,6 +12385,22 @@ def render_automation_handoff_markdown(report: dict[str, Any]) -> str:
                     row.get("evidence"),
                 ]
                 for row in report.get("requirements", [])
+            ],
+        )
+    )
+    lines.extend(["", "## Confirmed-Answer Runbook", ""])
+    lines.extend(
+        _simple_markdown_table(
+            ["Step", "Name", "Status", "Action", "Expected result"],
+            [
+                [
+                    row.get("step"),
+                    row.get("name"),
+                    row.get("status"),
+                    row.get("action"),
+                    row.get("expected_result"),
+                ]
+                for row in report.get("confirmed_answer_runbook", [])
             ],
         )
     )
@@ -12469,6 +12507,11 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
                     ("Prefilled drafts", summary.get("synthetic_unblocker_existing_draft_update_count", 0)),
                     ("Updates ready", str(bool(summary.get("updates_ready_for_apply"))).lower()),
                     ("Updates waiting", summary.get("updates_waiting_after_update_count", 0)),
+                    ("Queue handoff", summary.get("apply_queue_handoff_status") or "missing"),
+                    ("Open after answers", summary.get("apply_queue_open_after_answers_count", 0)),
+                    ("Packet status", summary.get("autofill_packet_status") or "missing"),
+                    ("Packet actions", summary.get("autofill_packet_browser_action_count", 0)),
+                    ("Final submit stops", summary.get("autofill_packet_final_submit_stop_count", 0)),
                 ]
             ),
             "<section><h2>Requirement Status</h2>",
@@ -12482,6 +12525,21 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
                         row.get("evidence"),
                     ]
                     for row in report.get("requirements", [])
+                ],
+            ),
+            "</section>",
+            "<section><h2>Confirmed-Answer Runbook</h2>",
+            _html_table(
+                ["Step", "Name", "Status", "Action", "Expected result"],
+                [
+                    [
+                        row.get("step"),
+                        row.get("name"),
+                        row.get("status"),
+                        row.get("action"),
+                        row.get("expected_result"),
+                    ]
+                    for row in report.get("confirmed_answer_runbook", [])
                 ],
             ),
             "</section>",
@@ -12595,6 +12653,86 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
             "</html>",
         ]
     )
+
+
+def _automation_handoff_confirmed_answer_runbook(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    final_blanks = int(
+        summary.get("updates_waiting_after_update_count")
+        or summary.get("synthetic_final_unblocker_update_count")
+        or 0
+    )
+    open_after_answers = int(summary.get("apply_queue_open_after_answers_count") or 0)
+    manual_live_checks = int(summary.get("apply_queue_manual_live_check_count") or 0)
+    packet_selected = int(summary.get("autofill_packet_selected_count") or 0)
+    packet_selector_misses = int(summary.get("autofill_packet_selector_miss_count") or 0)
+    packet_submit_stops = int(summary.get("autofill_packet_final_submit_stop_count") or 0)
+    return [
+        {
+            "step": 1,
+            "name": "Confirm final answer blanks",
+            "status": "waiting_for_user" if final_blanks else "ready",
+            "action": "Fill job_apply_agent/outbox/critical_input_unblockers_updates_template.json with truthful values.",
+            "expected_result": f"{final_blanks} final blanks become approved reusable answers.",
+        },
+        {
+            "step": 2,
+            "name": "Apply approved answers",
+            "status": "ready_after_confirmation" if final_blanks else "ready",
+            "action": "python3 -m job_apply_agent critical-inputs-workflow --updates job_apply_agent/outbox/critical_input_unblockers_updates_template.json --approve --approve-high-risk --apply",
+            "expected_result": "Profile and answer memory are updated, then reports are refreshed.",
+        },
+        {
+            "step": 3,
+            "name": "Refresh 100-position queue",
+            "status": "ready_after_answers",
+            "action": "python3 -m job_apply_agent apply-queue",
+            "expected_result": "A fresh live-check job payload is written for the 100-position queue.",
+        },
+        {
+            "step": 4,
+            "name": "Recheck live postings",
+            "status": "ready_after_answers",
+            "action": "python3 -m job_apply_agent closed-preflight --jobs job_apply_agent/outbox/apply_queue_live_check_jobs_latest.json --live-check-limit 100 --live-check-timeout 25",
+            "expected_result": "Pages that now say No longer accepting applications are persisted and excluded.",
+        },
+        {
+            "step": 5,
+            "name": "Build open-page handoff",
+            "status": "ready_after_answers" if manual_live_checks == 0 else "manual_live_check_needed",
+            "action": "python3 -m job_apply_agent apply-queue-handoff",
+            "expected_result": f"{open_after_answers} open-after-answer rows become open-ready after answers and live checks.",
+        },
+        {
+            "step": 6,
+            "name": "Build supervised autofill packet",
+            "status": "ready_after_answers" if packet_selector_misses == 0 else "fix_selectors",
+            "action": "python3 -m job_apply_agent apply-queue-autofill-packet --include-values",
+            "expected_result": f"{packet_selected} selected rows, {packet_submit_stops} final-submit stops, 0 selector misses.",
+        },
+        {
+            "step": 7,
+            "name": "Open verified pages",
+            "status": "supervised_only",
+            "action": "python3 -m job_apply_agent apply-queue-handoff --open-browser --open-limit 100",
+            "expected_result": "Only live-verified pages open; final submit stays supervised.",
+        },
+    ]
+
+
+def _automation_handoff_next_commands(summary: dict[str, Any]) -> list[str]:
+    commands = [
+        "python3 -m job_apply_agent critical-inputs-workflow --updates job_apply_agent/outbox/critical_input_unblockers_updates_template.json --approve --approve-high-risk --apply",
+        "python3 -m job_apply_agent apply-queue",
+        "python3 -m job_apply_agent closed-preflight --jobs job_apply_agent/outbox/apply_queue_live_check_jobs_latest.json --live-check-limit 100 --live-check-timeout 25",
+        "python3 -m job_apply_agent apply-queue-handoff",
+        "python3 -m job_apply_agent apply-queue-autofill-packet --include-values",
+        "python3 -m job_apply_agent apply-queue-handoff --open-browser --open-limit 100",
+        "python3 -m job_apply_agent automation-handoff",
+        "python3 -m job_apply_agent export-questions",
+    ]
+    if summary.get("updates_ready_for_apply"):
+        return commands[1:]
+    return commands
 
 
 def _automation_handoff_requirement_rows(goal: dict[str, Any]) -> list[dict[str, Any]]:

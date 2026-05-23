@@ -462,6 +462,11 @@ def main() -> int:
         default=str(DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_JSON),
     )
     automation_handoff_parser.add_argument("--autofill-batch-json", default=str(DEFAULT_AUTOFILL_BATCH_JSON))
+    automation_handoff_parser.add_argument("--apply-queue-handoff-json", default=str(DEFAULT_APPLY_QUEUE_HANDOFF_JSON))
+    automation_handoff_parser.add_argument(
+        "--apply-queue-autofill-packet-json",
+        default=str(DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_JSON),
+    )
     automation_handoff_parser.add_argument("--answer-memory-json", default=str(DEFAULT_MEMORY))
     automation_handoff_parser.add_argument("--closed-jobs-json", default=str(DEFAULT_CLOSED_JOBS))
     automation_handoff_parser.add_argument("--json-output", default=str(DEFAULT_AUTOMATION_HANDOFF_JSON))
@@ -1663,6 +1668,8 @@ def main() -> int:
             answer_memory=_load_optional_json(args.answer_memory_json),
             closed_jobs=_load_optional_json(args.closed_jobs_json),
             critical_input_updates_readiness=_load_optional_json(args.critical_input_updates_readiness_json),
+            apply_queue_handoff=_load_optional_json(args.apply_queue_handoff_json),
+            apply_queue_autofill_packet=_load_optional_json(args.apply_queue_autofill_packet_json),
             source_artifacts=_question_export_source_artifacts(
                 {
                     "Goal readiness audit": args.goal_audit_json,
@@ -1670,6 +1677,8 @@ def main() -> int:
                     "Critical input impact": args.critical_input_impact_json,
                     "Critical input updates readiness": args.critical_input_updates_readiness_json,
                     "Autofill batch": args.autofill_batch_json,
+                    "Apply queue handoff": args.apply_queue_handoff_json,
+                    "Apply queue autofill packet": args.apply_queue_autofill_packet_json,
                     "Answer memory": args.answer_memory_json,
                     "Closed postings": args.closed_jobs_json,
                 }
@@ -1682,6 +1691,9 @@ def main() -> int:
         print(f"Status: {report.get('status')}")
         print(f"Data blockers: {summary.get('data_blocking_prompt_count', 0)}")
         print(f"Critical waiting: {summary.get('critical_waiting_count', 0)}")
+        print(f"Final answer blanks: {summary.get('updates_waiting_after_update_count', 0)}")
+        print(f"Open after answers: {summary.get('apply_queue_open_after_answers_count', 0)}")
+        print(f"Autofill packet: {summary.get('autofill_packet_status') or 'missing'}")
         print(f"Autofill selected: {summary.get('autofill_selected_count', 0)}")
         return 0
 
@@ -2808,6 +2820,8 @@ def _refresh_application_automation_reports() -> dict[str, object]:
         answer_memory=_load_optional_json(str(DEFAULT_MEMORY)),
         closed_jobs=_load_optional_json(str(DEFAULT_CLOSED_JOBS)),
         critical_input_updates_readiness=_load_optional_json(str(DEFAULT_CRITICAL_INPUT_UPDATES_READINESS_JSON)),
+        apply_queue_handoff=apply_queue_handoff,
+        apply_queue_autofill_packet=apply_queue_autofill_packet,
         source_artifacts=_question_export_source_artifacts(
             {
                 "Goal readiness audit": str(DEFAULT_GOAL_AUDIT_JSON),

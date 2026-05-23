@@ -744,6 +744,27 @@ The audit separates achieved evidence, remaining user-answer blockers, and
 supervised-only gates such as CAPTCHA/security, protected-class answers, and
 real employer final submit.
 
+Create the current operator handoff and post-answer runbook:
+
+```bash
+python3 -m job_apply_agent automation-handoff
+```
+
+This writes:
+
+```text
+job_apply_agent/outbox/automation_handoff_latest.json
+job_apply_agent/outbox/automation_handoff_latest.md
+job_apply_agent/outbox/automation_handoff_latest.html
+```
+
+The handoff combines the goal audit, compact answer blockers, apply-queue
+handoff, and autofill packet into one checklist. Its confirmed-answer runbook
+starts with `critical_input_unblockers_updates_template.json`, reruns live
+closed-posting checks before opening pages, rebuilds the 100-position autofill
+packet with values only after the answers are approved, and keeps final submit
+as a supervised stop.
+
 For a captured Ashby or Greenhouse form snapshot, generate an offline fill plan:
 
 ```bash
