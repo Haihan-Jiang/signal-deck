@@ -28,6 +28,7 @@ from .core import (
     run_pipeline,
     write_answer_gap_report,
     write_apply_run_audit,
+    write_apply_queue_autofill_packet,
     write_apply_queue_handoff,
     write_apply_queue_readiness,
     write_application_playbook,
@@ -94,6 +95,15 @@ DEFAULT_APPLY_QUEUE_HANDOFF_HTML = Path(__file__).with_name("outbox") / "apply_q
 DEFAULT_APPLY_QUEUE_OPEN_READY_JOBS = Path(__file__).with_name("outbox") / "apply_queue_open_ready_jobs_latest.json"
 DEFAULT_APPLY_QUEUE_MANUAL_LIVE_CHECK_JSON = (
     Path(__file__).with_name("outbox") / "apply_queue_manual_live_check_latest.json"
+)
+DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_JSON = (
+    Path(__file__).with_name("outbox") / "apply_queue_autofill_packet_latest.json"
+)
+DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_MARKDOWN = (
+    Path(__file__).with_name("outbox") / "apply_queue_autofill_packet_latest.md"
+)
+DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_HTML = (
+    Path(__file__).with_name("outbox") / "apply_queue_autofill_packet_latest.html"
 )
 DEFAULT_AUTOMATION_HANDOFF_JSON = Path(__file__).with_name("outbox") / "automation_handoff_latest.json"
 DEFAULT_AUTOMATION_HANDOFF_MARKDOWN = Path(__file__).with_name("outbox") / "automation_handoff_latest.md"
@@ -406,6 +416,33 @@ def main() -> int:
     apply_queue_handoff_parser.add_argument("--open-browser", action="store_true")
     apply_queue_handoff_parser.add_argument("--open-limit", type=int, default=5)
     apply_queue_handoff_parser.add_argument("--review-log", default=str(DEFAULT_REVIEW_LOG))
+
+    apply_queue_autofill_parser = subparsers.add_parser(
+        "apply-queue-autofill-packet",
+        help="build the supervised browser-action packet for the live-checked apply queue",
+    )
+    apply_queue_autofill_parser.add_argument("--research-json", default=str(DEFAULT_RESEARCH_JSON))
+    apply_queue_autofill_parser.add_argument("--apply-queue-handoff-json", default=str(DEFAULT_APPLY_QUEUE_HANDOFF_JSON))
+    apply_queue_autofill_parser.add_argument(
+        "--profile",
+        default=str(DEFAULT_PERSONAL_PROFILE if DEFAULT_PERSONAL_PROFILE.exists() else DEFAULT_PROFILE),
+    )
+    apply_queue_autofill_parser.add_argument("--memory", default=str(DEFAULT_MEMORY))
+    apply_queue_autofill_parser.add_argument("--closed-jobs", default=str(DEFAULT_CLOSED_JOBS))
+    apply_queue_autofill_parser.add_argument("--limit", type=int, default=100)
+    apply_queue_autofill_parser.add_argument("--target-count", type=int, default=100)
+    apply_queue_autofill_parser.add_argument("--include-values", action="store_true")
+    apply_queue_autofill_parser.add_argument(
+        "--omit-manifest-actions",
+        action="store_true",
+        help="write only per-position summaries, not browser action details",
+    )
+    apply_queue_autofill_parser.add_argument("--json-output", default=str(DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_JSON))
+    apply_queue_autofill_parser.add_argument(
+        "--markdown-output",
+        default=str(DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_MARKDOWN),
+    )
+    apply_queue_autofill_parser.add_argument("--html-output", default=str(DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_HTML))
 
     automation_handoff_parser = subparsers.add_parser(
         "automation-handoff",
@@ -1088,6 +1125,14 @@ def main() -> int:
         default=str(DEFAULT_APPLY_QUEUE_OPEN_READY_JOBS),
     )
     export_questions_parser.add_argument(
+        "--apply-queue-autofill-packet-json",
+        default=str(DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_JSON),
+    )
+    export_questions_parser.add_argument(
+        "--apply-queue-autofill-packet-html",
+        default=str(DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_HTML),
+    )
+    export_questions_parser.add_argument(
         "--critical-input-suggestions-json",
         default=str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON),
     )
@@ -1295,6 +1340,8 @@ def main() -> int:
                     "Apply queue handoff": args.apply_queue_handoff_json,
                     "Apply queue handoff HTML": args.apply_queue_handoff_html,
                     "Apply queue open-ready jobs": args.apply_queue_open_ready_jobs_json,
+                    "Apply queue autofill packet": args.apply_queue_autofill_packet_json,
+                    "Apply queue autofill packet HTML": args.apply_queue_autofill_packet_html,
                     "Critical input suggestions": args.critical_input_suggestions_json,
                     "Critical input questionnaire": args.critical_input_questionnaire_json,
                     "Critical input questionnaire HTML": args.critical_input_questionnaire_html,
@@ -1555,6 +1602,42 @@ def main() -> int:
                 )
                 print(f"Opened {len(opened_urls)} apply URL(s) in browser")
                 print(f"Recorded browser review queue in {args.review_log}")
+        return 0
+
+    if args.command == "apply-queue-autofill-packet":
+        for label, path_value in [
+            ("research", args.research_json),
+            ("apply queue handoff", args.apply_queue_handoff_json),
+            ("profile", args.profile),
+            ("answer memory", args.memory),
+            ("closed jobs", args.closed_jobs),
+        ]:
+            if not Path(path_value).exists():
+                raise FileNotFoundError(f"{label} not found: {path_value}")
+        report = write_apply_queue_autofill_packet(
+            args.research_json,
+            args.apply_queue_handoff_json,
+            args.profile,
+            args.memory,
+            args.closed_jobs,
+            args.json_output,
+            args.markdown_output,
+            args.html_output,
+            limit=args.limit,
+            target_count=args.target_count,
+            include_values=args.include_values,
+            include_manifest_actions=not args.omit_manifest_actions,
+        )
+        summary = report.get("summary") or {}
+        print(f"Wrote apply queue autofill packet JSON to {args.json_output}")
+        print(f"Wrote apply queue autofill packet Markdown to {args.markdown_output}")
+        print(f"Wrote apply queue autofill packet HTML to {args.html_output}")
+        print(f"Status: {report.get('status')}")
+        print(f"Selected: {report.get('selected_count', 0)} / {report.get('target_count', 0)}")
+        print(f"Browser actions: {summary.get('browser_action_count', 0)}")
+        print(f"Final-submit stops: {summary.get('final_submit_stop_count', 0)}")
+        print(f"Selector misses: {summary.get('selector_miss_count', 0)}")
+        print(f"Local synthetic submits: {summary.get('local_synthetic_submit_count', 0)}")
         return 0
 
     if args.command == "automation-handoff":
@@ -2687,6 +2770,21 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             DEFAULT_APPLY_QUEUE_OPEN_READY_JOBS,
             supplemental_preflight_paths=supplemental_preflights,
         )
+    apply_queue_autofill_packet = None
+    if apply_queue_handoff:
+        apply_queue_autofill_packet = write_apply_queue_autofill_packet(
+            DEFAULT_RESEARCH_JSON,
+            DEFAULT_APPLY_QUEUE_HANDOFF_JSON,
+            profile_path,
+            DEFAULT_MEMORY,
+            DEFAULT_CLOSED_JOBS,
+            DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_JSON,
+            DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_MARKDOWN,
+            DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_HTML,
+            limit=100,
+            target_count=100,
+            include_values=False,
+        )
     automation_handoff = write_automation_handoff_report(
         goal,
         _load_optional_json(str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_JSON)),
@@ -2713,6 +2811,8 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                 "Apply queue handoff": str(DEFAULT_APPLY_QUEUE_HANDOFF_JSON),
                 "Apply queue handoff HTML": str(DEFAULT_APPLY_QUEUE_HANDOFF_HTML),
                 "Apply queue open-ready jobs": str(DEFAULT_APPLY_QUEUE_OPEN_READY_JOBS),
+                "Apply queue autofill packet": str(DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_JSON),
+                "Apply queue autofill packet HTML": str(DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_HTML),
                 "Answer memory": str(DEFAULT_MEMORY),
                 "Closed postings": str(DEFAULT_CLOSED_JOBS),
             }
@@ -2753,6 +2853,8 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                     "Apply queue handoff": str(DEFAULT_APPLY_QUEUE_HANDOFF_JSON),
                     "Apply queue handoff HTML": str(DEFAULT_APPLY_QUEUE_HANDOFF_HTML),
                     "Apply queue open-ready jobs": str(DEFAULT_APPLY_QUEUE_OPEN_READY_JOBS),
+                    "Apply queue autofill packet": str(DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_JSON),
+                    "Apply queue autofill packet HTML": str(DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_HTML),
                     "Critical input suggestions": str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON),
                     "Critical input questionnaire": str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_JSON),
                     "Critical input questionnaire HTML": str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_HTML),
@@ -2799,6 +2901,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             "goal-audit",
             "apply-queue",
             "apply-queue-handoff" if apply_queue_handoff else "apply-queue-handoff-skipped",
+            "apply-queue-autofill-packet" if apply_queue_autofill_packet else "apply-queue-autofill-packet-skipped",
             "automation-handoff",
             "export-questions",
         ],
@@ -2808,6 +2911,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
         "apply_queue_live_check_jobs": apply_queue.get("live_check_job_count", 0),
         "apply_queue_handoff_status": (apply_queue_handoff or {}).get("status"),
         "apply_queue_open_ready": (apply_queue_handoff or {}).get("open_ready_count", 0),
+        "apply_queue_autofill_packet_status": (apply_queue_autofill_packet or {}).get("status"),
         "blocking_prompts": gaps.get("blocking_prompt_count", 0),
         "critical_waiting": (critical_status.get("summary") or {}).get("waiting_count", 0),
     }

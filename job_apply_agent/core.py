@@ -9451,6 +9451,331 @@ def render_apply_queue_handoff_html(report: dict[str, Any]) -> str:
     )
 
 
+def build_apply_queue_autofill_packet(
+    research: dict[str, Any],
+    apply_queue_handoff: dict[str, Any],
+    profile: CandidateProfile | None = None,
+    answer_memory: dict[str, Any] | None = None,
+    closed_jobs: dict[str, Any] | None = None,
+    limit: int = 100,
+    target_count: int = 100,
+    include_values: bool = False,
+    include_manifest_actions: bool = True,
+) -> dict[str, Any]:
+    if not isinstance(research, dict):
+        raise ValueError("research must be a JSON object")
+    if not isinstance(apply_queue_handoff, dict):
+        raise ValueError("apply queue handoff must be a JSON object")
+    items_by_position = _research_items_by_position(research)
+    positions_by_key = _research_positions_by_key(research)
+    candidates = _apply_queue_autofill_candidate_rows(apply_queue_handoff)
+    selected = candidates[: max(int(limit), 0)]
+    rows: list[dict[str, Any]] = []
+    for index, handoff_row in enumerate(selected, start=1):
+        row = _apply_queue_autofill_packet_row(
+            index,
+            handoff_row,
+            positions_by_key,
+            items_by_position,
+            profile=profile,
+            answer_memory=answer_memory,
+            closed_jobs=closed_jobs,
+            include_values=include_values,
+            include_manifest_actions=include_manifest_actions,
+        )
+        rows.append(row)
+
+    selected_count = len(rows)
+    missing_input_count = sum(int(row.get("missing_input_count") or 0) for row in rows)
+    selector_miss_count = sum(int(row.get("local_check_selector_miss_count") or 0) for row in rows)
+    local_synthetic_submit_count = sum(int(row.get("local_synthetic_submit_count") or 0) for row in rows)
+    final_submit_stop_count = sum(int(row.get("final_submit_stop_count") or 0) for row in rows)
+    browser_action_count = sum(int(row.get("browser_action_count") or 0) for row in rows)
+    target = max(int(target_count), 0)
+    handoff_ready = bool(apply_queue_handoff.get("ready_for_supervised_open_batch"))
+    open_after_answers_count = int(apply_queue_handoff.get("open_after_answers_count") or 0)
+    manual_live_checks = int(apply_queue_handoff.get("manual_live_check_count") or 0)
+    closed_or_skipped = int(apply_queue_handoff.get("closed_or_skipped_count") or 0)
+    ready_now = bool(
+        handoff_ready
+        and selected_count >= target
+        and browser_action_count > 0
+        and selector_miss_count == 0
+        and missing_input_count == 0
+        and local_synthetic_submit_count >= target
+        and all(row.get("packet_status") == "ready_now" for row in rows[:target])
+    )
+    ready_after_answers = bool(
+        not ready_now
+        and open_after_answers_count >= target
+        and selected_count >= target
+        and browser_action_count > 0
+        and selector_miss_count == 0
+        and missing_input_count == 0
+        and local_synthetic_submit_count >= target
+        and manual_live_checks == 0
+        and closed_or_skipped == 0
+    )
+    status = "ready_for_supervised_browser_autofill" if ready_now else "waiting_for_confirmed_answers"
+    if not ready_now and not ready_after_answers:
+        status = "not_ready"
+    blockers = _apply_queue_autofill_packet_blockers(
+        target=target,
+        selected_count=selected_count,
+        handoff_ready=handoff_ready,
+        ready_after_answers=ready_after_answers,
+        missing_input_count=missing_input_count,
+        selector_miss_count=selector_miss_count,
+        local_synthetic_submit_count=local_synthetic_submit_count,
+        manual_live_checks=manual_live_checks,
+        closed_or_skipped=closed_or_skipped,
+    )
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "apply_queue_autofill_packet",
+        "status": status,
+        "ready_for_supervised_browser_autofill": ready_now,
+        "ready_after_confirmed_answers": ready_after_answers,
+        "ready_for_unattended_real_submit": False,
+        "real_platform_submission": False,
+        "include_values": bool(include_values),
+        "target_count": target,
+        "candidate_count": len(candidates),
+        "selected_count": selected_count,
+        "packet_status_counts": _count_by(rows, "packet_status"),
+        "manifest_status_counts": _count_by(rows, "manifest_status"),
+        "platform_counts": _count_by(rows, "platform"),
+        "role_family_counts": _count_by(rows, "role_family"),
+        "summary": {
+            "apply_queue_handoff_status": apply_queue_handoff.get("status"),
+            "handoff_ready_for_supervised_open_batch": handoff_ready,
+            "handoff_open_after_answers_count": open_after_answers_count,
+            "handoff_manual_live_check_count": manual_live_checks,
+            "handoff_closed_or_skipped_count": closed_or_skipped,
+            "selected_count": selected_count,
+            "browser_action_count": browser_action_count,
+            "stop_action_count": sum(int(row.get("stop_action_count") or 0) for row in rows),
+            "final_submit_stop_count": final_submit_stop_count,
+            "missing_input_count": missing_input_count,
+            "selector_miss_count": selector_miss_count,
+            "local_synthetic_submit_count": local_synthetic_submit_count,
+            "local_synthetic_submit_achieved": bool(local_synthetic_submit_count >= target and selector_miss_count == 0),
+        },
+        "global_blockers": blockers,
+        "positions": rows,
+        "next_commands": _apply_queue_autofill_packet_next_commands(status),
+        "policy": {
+            "open_only_live_verified_candidates": True,
+            "final_submit_remains_supervised": True,
+            "real_platform_submission": False,
+            "unattended_real_submit_allowed": False,
+            "captcha_or_security_not_bypassed": True,
+            "fake_data_real_submission_allowed": False,
+            "values_omitted_by_default": not bool(include_values),
+        },
+    }
+
+
+def write_apply_queue_autofill_packet(
+    research_path: str | Path,
+    apply_queue_handoff_path: str | Path,
+    profile_path: str | Path,
+    answer_memory_path: str | Path,
+    closed_jobs_path: str | Path,
+    json_output: str | Path,
+    markdown_output: str | Path,
+    html_output: str | Path,
+    limit: int = 100,
+    target_count: int = 100,
+    include_values: bool = False,
+    include_manifest_actions: bool = True,
+) -> dict[str, Any]:
+    research = _read_json_file(Path(research_path))
+    handoff = _read_json_file(Path(apply_queue_handoff_path))
+    if not isinstance(research, dict):
+        raise ValueError(f"research must be a JSON object: {research_path}")
+    if not isinstance(handoff, dict):
+        raise ValueError(f"apply queue handoff must be a JSON object: {apply_queue_handoff_path}")
+    profile = load_profile(profile_path) if Path(profile_path).exists() else None
+    answer_memory = load_answer_memory(answer_memory_path)
+    closed_jobs = load_closed_jobs(closed_jobs_path)
+    report = build_apply_queue_autofill_packet(
+        research,
+        handoff,
+        profile=profile,
+        answer_memory=answer_memory,
+        closed_jobs=closed_jobs,
+        limit=limit,
+        target_count=target_count,
+        include_values=include_values,
+        include_manifest_actions=include_manifest_actions,
+    )
+    report["source_paths"] = {
+        "research": str(research_path),
+        "apply_queue_handoff": str(apply_queue_handoff_path),
+        "profile": str(profile_path),
+        "answer_memory": str(answer_memory_path),
+        "closed_jobs": str(closed_jobs_path),
+    }
+    report["outputs"] = {
+        "json": str(json_output),
+        "markdown": str(markdown_output),
+        "html": str(html_output),
+    }
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    html_path = Path(html_output)
+    for path in [json_path, markdown_path, html_path]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(render_apply_queue_autofill_packet_markdown(report), encoding="utf-8")
+    html_path.write_text(render_apply_queue_autofill_packet_html(report), encoding="utf-8")
+    return report
+
+
+def render_apply_queue_autofill_packet_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    lines = [
+        "# Apply Queue Autofill Packet",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        f"Status: {report.get('status')}",
+        f"Ready now: {str(bool(report.get('ready_for_supervised_browser_autofill'))).lower()}",
+        f"Ready after confirmed answers: {str(bool(report.get('ready_after_confirmed_answers'))).lower()}",
+        "Ready for unattended real submit: false",
+        f"Include values: {str(bool(report.get('include_values'))).lower()}",
+        "",
+        "## Summary",
+        "",
+        f"- selected positions: {report.get('selected_count', 0)} / {report.get('target_count', 0)}",
+        f"- browser actions: {summary.get('browser_action_count', 0)}",
+        f"- stop actions: {summary.get('stop_action_count', 0)}",
+        f"- final submit stops: {summary.get('final_submit_stop_count', 0)}",
+        f"- missing inputs: {summary.get('missing_input_count', 0)}",
+        f"- selector misses: {summary.get('selector_miss_count', 0)}",
+        f"- local synthetic submits: {summary.get('local_synthetic_submit_count', 0)}",
+        f"- handoff open after answers: {summary.get('handoff_open_after_answers_count', 0)}",
+        "",
+        "## Global Blockers",
+        "",
+    ]
+    blockers = report.get("global_blockers") or []
+    if blockers:
+        for blocker in blockers:
+            lines.append(f"- {blocker}")
+    else:
+        lines.append("- None")
+    lines.extend(["", "## Packet Status Counts", ""])
+    for status, count in sorted((report.get("packet_status_counts") or {}).items()):
+        lines.append(f"- {status}: {count}")
+    lines.extend(["", "## Positions", ""])
+    for row in (report.get("positions") or [])[:120]:
+        lines.append(
+            "- {index}. {status}: {company} - {title} [{platform}; actions={actions}; final-stops={finals}; synthetic-submit={submit}]".format(
+                index=row.get("index"),
+                status=row.get("packet_status"),
+                company=row.get("company") or "Unknown company",
+                title=row.get("title") or "Unknown title",
+                platform=row.get("platform") or "Unknown",
+                actions=row.get("browser_action_count", 0),
+                finals=row.get("final_submit_stop_count", 0),
+                submit=row.get("local_synthetic_submit_count", 0),
+            )
+        )
+        if row.get("apply_url"):
+            lines.append(f"  url: {row.get('apply_url')}")
+    lines.extend(["", "## Next Commands", ""])
+    for command in report.get("next_commands") or []:
+        lines.append(f"- `{command}`")
+    return "\n".join(lines) + "\n"
+
+
+def render_apply_queue_autofill_packet_html(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    rows = [
+        [
+            row.get("index"),
+            row.get("packet_status"),
+            row.get("handoff_status"),
+            row.get("manifest_status"),
+            row.get("platform"),
+            row.get("company"),
+            row.get("title"),
+            row.get("browser_action_count", 0),
+            row.get("stop_action_count", 0),
+            row.get("final_submit_stop_count", 0),
+            row.get("local_check_selector_miss_count", 0),
+            row.get("local_synthetic_submit_count", 0),
+            row.get("apply_url"),
+        ]
+        for row in report.get("positions") or []
+    ]
+    return "\n".join(
+        [
+            "<!doctype html>",
+            '<html lang="en">',
+            "<head>",
+            '<meta charset="utf-8">',
+            '<meta name="viewport" content="width=device-width, initial-scale=1">',
+            "<title>Apply Queue Autofill Packet</title>",
+            "<style>",
+            _question_export_css(),
+            "</style>",
+            "</head>",
+            "<body>",
+            "<main>",
+            "<h1>Apply Queue Autofill Packet</h1>",
+            f"<p class=\"muted\">Generated: {_html_escape(report.get('generated_at'))}</p>",
+            _html_kpis(
+                [
+                    ("Status", report.get("status")),
+                    ("Selected", f"{report.get('selected_count', 0)} / {report.get('target_count', 0)}"),
+                    ("After answers", str(bool(report.get("ready_after_confirmed_answers"))).lower()),
+                    ("Actions", summary.get("browser_action_count", 0)),
+                    ("Final stops", summary.get("final_submit_stop_count", 0)),
+                    ("Misses", summary.get("selector_miss_count", 0)),
+                    ("Synthetic submits", summary.get("local_synthetic_submit_count", 0)),
+                    ("Values", "included" if report.get("include_values") else "omitted"),
+                ]
+            ),
+            "<section><h2>Summary</h2>",
+            _html_key_value_table(summary),
+            "</section>",
+            "<section><h2>Global Blockers</h2>",
+            _html_table(["Blocker"], [[blocker] for blocker in report.get("global_blockers") or []])
+            if report.get("global_blockers")
+            else "<p class=\"muted\">None</p>",
+            "</section>",
+            "<section><h2>Positions</h2>",
+            _html_table(
+                [
+                    "#",
+                    "Packet status",
+                    "Handoff status",
+                    "Manifest status",
+                    "Platform",
+                    "Company",
+                    "Title",
+                    "Actions",
+                    "Stops",
+                    "Final stops",
+                    "Selector misses",
+                    "Synthetic submits",
+                    "Apply URL",
+                ],
+                rows,
+            ),
+            "</section>",
+            "<section><h2>Policy</h2>",
+            _html_key_value_table(report.get("policy") or {}),
+            "</section>",
+            "</main>",
+            "</body>",
+            "</html>",
+        ]
+    )
+
+
 def render_apply_queue_readiness_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") or {}
     lines = [
@@ -9866,6 +10191,211 @@ def _apply_queue_handoff_next_commands(
     if manual_live_check_jobs:
         commands.append("rerun closed-preflight for manual_live_check_jobs before opening those URLs")
     if status == "ready_to_open_for_supervised_autofill":
+        commands.append("python3 -m job_apply_agent apply-queue-handoff --open-browser --open-limit 100")
+    return commands
+
+
+def _apply_queue_autofill_candidate_rows(apply_queue_handoff: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = []
+    for row in apply_queue_handoff.get("positions") or []:
+        if not isinstance(row, dict):
+            continue
+        if row.get("handoff_status") not in {
+            "ready_to_open_for_supervised_autofill",
+            "waiting_for_answers_before_open",
+        }:
+            continue
+        if not row.get("live_open_eligible") or row.get("live_closed"):
+            continue
+        rows.append(row)
+    return rows
+
+
+def _research_positions_by_key(research: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    positions: dict[str, dict[str, Any]] = {}
+    for position in research.get("positions") or []:
+        if not isinstance(position, dict):
+            continue
+        for key in _position_lookup_keys(position):
+            positions.setdefault(key, position)
+    return positions
+
+
+def _position_lookup_keys(position: dict[str, Any]) -> list[str]:
+    keys = [
+        str(position.get("position_key") or ""),
+        job_registry_key(position),
+        str(position.get("apply_url") or ""),
+        str(position.get("short_apply_url") or ""),
+    ]
+    apply_url = str(position.get("apply_url") or position.get("short_apply_url") or "")
+    if apply_url:
+        short_url = shorten_apply_url(apply_url, position)
+        keys.extend([short_url, f"url:{short_url}"])
+    return _unique_strings(keys)
+
+
+def _apply_queue_autofill_packet_row(
+    index: int,
+    handoff_row: dict[str, Any],
+    positions_by_key: dict[str, dict[str, Any]],
+    items_by_position: dict[str, list[dict[str, Any]]],
+    profile: CandidateProfile | None,
+    answer_memory: dict[str, Any] | None,
+    closed_jobs: dict[str, Any] | None,
+    include_values: bool,
+    include_manifest_actions: bool,
+) -> dict[str, Any]:
+    position = _lookup_research_position_for_handoff_row(handoff_row, positions_by_key)
+    position_key = str(position.get("position_key") or handoff_row.get("position_key") or "")
+    items = items_by_position.get(position_key, [])
+    snapshot = _observed_position_snapshot({**handoff_row, **position}, items)
+    plan = build_form_fill_plan(
+        snapshot,
+        profile=profile,
+        answer_memory=answer_memory,
+        include_values=include_values,
+    )
+    manifest = build_browser_action_manifest(
+        plan,
+        page_text=str(snapshot.get("page_text") or ""),
+        closed_jobs=closed_jobs,
+        include_values=include_values,
+    )
+    local_check = execute_browser_action_manifest_locally(
+        manifest,
+        snapshot,
+        allow_local_synthetic_submit=False,
+    )
+    local_submit = execute_browser_action_manifest_locally(
+        manifest,
+        snapshot,
+        allow_local_synthetic_submit=True,
+    )
+    missing_statuses = {
+        "missing_profile_value",
+        "missing_local_material",
+        "missing_answer",
+        "missing_resume_facts",
+    }
+    stop_actions = [stop for stop in manifest.get("stop_actions") or [] if isinstance(stop, dict)]
+    missing_input_count = sum(1 for stop in stop_actions if str(stop.get("status") or "") in missing_statuses)
+    final_submit_stop_count = sum(
+        1 for stop in stop_actions if str(stop.get("status") or "") == "final_submit_confirmation"
+    )
+    packet_status = (
+        "ready_now"
+        if handoff_row.get("handoff_status") == "ready_to_open_for_supervised_autofill"
+        else "ready_after_confirmed_answers"
+    )
+    if not manifest.get("autofill_allowed") or missing_input_count:
+        packet_status = "blocked_by_manifest"
+    elif int(local_check.get("selector_miss_count") or 0):
+        packet_status = "blocked_by_selector_miss"
+    row = {
+        "index": index,
+        "packet_status": packet_status,
+        "handoff_status": handoff_row.get("handoff_status"),
+        "queue_status": handoff_row.get("queue_status"),
+        "live_status": handoff_row.get("live_status"),
+        "live_open_eligible": bool(handoff_row.get("live_open_eligible")),
+        "position_key": position_key,
+        "platform": handoff_row.get("platform") or position.get("platform"),
+        "company": handoff_row.get("company") or position.get("company"),
+        "title": handoff_row.get("title") or position.get("title"),
+        "role_family": handoff_row.get("role_family") or position.get("role_family"),
+        "apply_url": handoff_row.get("apply_url") or position.get("apply_url"),
+        "manifest_status": manifest.get("status"),
+        "autofill_allowed": bool(manifest.get("autofill_allowed")),
+        "browser_action_count": int(manifest.get("action_count") or 0),
+        "stop_action_count": int(manifest.get("stop_action_count") or 0),
+        "final_submit_stop_count": final_submit_stop_count,
+        "missing_input_count": missing_input_count,
+        "manual_gate_count": int((manifest.get("audit") or {}).get("manual_gate_count") or 0),
+        "local_check_outcome": local_check.get("outcome"),
+        "local_check_policy_stop": local_check.get("policy_stop"),
+        "local_check_selector_miss_count": int(local_check.get("selector_miss_count") or 0),
+        "local_check_executed_action_count": int(local_check.get("executed_action_count") or 0),
+        "local_synthetic_submit_outcome": local_submit.get("outcome"),
+        "local_synthetic_submit_policy_stop": local_submit.get("policy_stop"),
+        "local_synthetic_submit_count": int(local_submit.get("actual_submit_count") or 0),
+        "local_synthetic_submit_selector_miss_count": int(local_submit.get("selector_miss_count") or 0),
+        "real_platform_submission": False,
+        "final_submit_allowed": False,
+        "would_submit": False,
+        "next_action": _apply_queue_autofill_row_next_action(packet_status),
+    }
+    if include_manifest_actions:
+        row["browser_actions"] = manifest.get("browser_actions") or []
+        row["stop_actions"] = stop_actions
+    return row
+
+
+def _lookup_research_position_for_handoff_row(
+    handoff_row: dict[str, Any],
+    positions_by_key: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    for key in _position_lookup_keys(handoff_row):
+        position = positions_by_key.get(key)
+        if position:
+            return position
+    return dict(handoff_row)
+
+
+def _apply_queue_autofill_row_next_action(packet_status: str) -> str:
+    if packet_status == "ready_now":
+        return "open this live-verified page, run supervised browser autofill, and stop before final submit"
+    if packet_status == "ready_after_confirmed_answers":
+        return "apply confirmed answers first, then run supervised browser autofill and stop before final submit"
+    if packet_status == "blocked_by_selector_miss":
+        return "fix selector mapping before browser autofill"
+    return "fix missing profile, material, or answer inputs before browser autofill"
+
+
+def _apply_queue_autofill_packet_blockers(
+    target: int,
+    selected_count: int,
+    handoff_ready: bool,
+    ready_after_answers: bool,
+    missing_input_count: int,
+    selector_miss_count: int,
+    local_synthetic_submit_count: int,
+    manual_live_checks: int,
+    closed_or_skipped: int,
+) -> list[str]:
+    blockers: list[str] = []
+    if selected_count < target:
+        blockers.append("autofill_packet_below_target")
+    if not handoff_ready:
+        blockers.append("confirmed_answers_not_ready")
+    if not handoff_ready and ready_after_answers:
+        blockers.append("ready_after_confirmed_answers")
+    if missing_input_count:
+        blockers.append("missing_inputs_present")
+    if selector_miss_count:
+        blockers.append("selector_misses_present")
+    if local_synthetic_submit_count < target:
+        blockers.append("local_synthetic_submit_not_proven")
+    if manual_live_checks:
+        blockers.append("manual_live_checks_remaining")
+    if closed_or_skipped:
+        blockers.append("closed_or_skipped_positions_present")
+    return _unique_strings(blockers)
+
+
+def _apply_queue_autofill_packet_next_commands(status: str) -> list[str]:
+    commands = [
+        "python3 -m job_apply_agent critical-inputs-readiness",
+        "python3 -m job_apply_agent apply-queue",
+        "python3 -m job_apply_agent apply-queue-handoff",
+        "python3 -m job_apply_agent apply-queue-autofill-packet",
+    ]
+    if status == "waiting_for_confirmed_answers":
+        commands.insert(
+            1,
+            "python3 -m job_apply_agent critical-inputs-workflow --updates job_apply_agent/outbox/critical_input_full_updates_template.json --approve --approve-high-risk --apply",
+        )
+    if status == "ready_for_supervised_browser_autofill":
         commands.append("python3 -m job_apply_agent apply-queue-handoff --open-browser --open-limit 100")
     return commands
 

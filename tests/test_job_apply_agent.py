@@ -14,6 +14,7 @@ from job_apply_agent.core import (
     apply_critical_input_answers,
     apply_learning_task_answers,
     build_answer_gap_report,
+    build_apply_queue_autofill_packet,
     build_apply_queue_handoff,
     build_apply_queue_readiness,
     build_apply_run_audit,
@@ -79,6 +80,8 @@ from job_apply_agent.core import (
     record_closed_job,
     refresh_closed_jobs_from_live_pages,
     render_answer_gap_markdown,
+    render_apply_queue_autofill_packet_html,
+    render_apply_queue_autofill_packet_markdown,
     render_apply_queue_handoff_html,
     render_apply_queue_handoff_markdown,
     render_apply_queue_readiness_html,
@@ -133,6 +136,7 @@ from job_apply_agent.core import (
     select_candidate_topup,
     shorten_apply_url,
     write_answer_gap_report,
+    write_apply_queue_autofill_packet,
     write_apply_queue_handoff,
     write_apply_queue_readiness,
     write_apply_run_audit,
@@ -8307,6 +8311,273 @@ class JobApplyAgentTests(unittest.TestCase):
             )
             self.assertEqual(written["preflight"]["open_eligible_count"], 1)
             self.assertEqual(written["source_paths"]["supplemental_preflights"], [str(retry_path)])
+
+    def test_apply_queue_autofill_packet_builds_deferred_browser_actions(self) -> None:
+        profile = CandidateProfile(
+            name="Alan Jiang",
+            email="alan@example.com",
+            phone="555-0100",
+            location="Bellevue, WA",
+            target_titles=["SRE"],
+            target_locations=["United States"],
+            remote_ok=True,
+            keywords=[],
+            blocklist=[],
+            min_score=1,
+            resume_facts={},
+            question_answers={},
+        )
+        research = {
+            "positions": [
+                {
+                    "position_key": "url:https://jobs.lever.co/example/1",
+                    "platform": "Lever",
+                    "company": "Example",
+                    "title": "SRE",
+                    "role_family": "SRE",
+                    "apply_url": "https://jobs.lever.co/example/1",
+                },
+                {
+                    "position_key": "url:https://jobs.lever.co/example/2",
+                    "platform": "Lever",
+                    "company": "Example",
+                    "title": "Platform Engineer",
+                    "role_family": "Platform",
+                    "apply_url": "https://jobs.lever.co/example/2",
+                },
+            ],
+            "items": [
+                {
+                    "position_key": "url:https://jobs.lever.co/example/1",
+                    "label": "Email",
+                    "category": "profile_identity",
+                    "automation_action": "auto_fill_from_profile",
+                    "required": True,
+                },
+                {
+                    "position_key": "url:https://jobs.lever.co/example/1",
+                    "label": "Submit application",
+                    "category": "final_submit",
+                    "automation_action": "submit_gate",
+                    "required": True,
+                },
+                {
+                    "position_key": "url:https://jobs.lever.co/example/2",
+                    "label": "Email",
+                    "category": "profile_identity",
+                    "automation_action": "auto_fill_from_profile",
+                    "required": True,
+                },
+                {
+                    "position_key": "url:https://jobs.lever.co/example/2",
+                    "label": "Submit application",
+                    "category": "final_submit",
+                    "automation_action": "submit_gate",
+                    "required": True,
+                },
+            ],
+        }
+        handoff = {
+            "status": "waiting_for_confirmed_answers",
+            "ready_for_supervised_open_batch": False,
+            "open_after_answers_count": 2,
+            "manual_live_check_count": 0,
+            "closed_or_skipped_count": 0,
+            "positions": [
+                {
+                    "index": 1,
+                    "handoff_status": "waiting_for_answers_before_open",
+                    "queue_status": "waiting_for_confirmed_answers",
+                    "live_status": "open_live_checked",
+                    "live_open_eligible": True,
+                    "live_closed": False,
+                    "position_key": "url:https://jobs.lever.co/example/1",
+                    "platform": "Lever",
+                    "company": "Example",
+                    "title": "SRE",
+                    "role_family": "SRE",
+                    "apply_url": "https://jobs.lever.co/example/1",
+                },
+                {
+                    "index": 2,
+                    "handoff_status": "waiting_for_answers_before_open",
+                    "queue_status": "waiting_for_confirmed_answers",
+                    "live_status": "open_live_checked",
+                    "live_open_eligible": True,
+                    "live_closed": False,
+                    "position_key": "url:https://jobs.lever.co/example/2",
+                    "platform": "Lever",
+                    "company": "Example",
+                    "title": "Platform Engineer",
+                    "role_family": "Platform",
+                    "apply_url": "https://jobs.lever.co/example/2",
+                },
+            ],
+        }
+
+        report = build_apply_queue_autofill_packet(
+            research,
+            handoff,
+            profile=profile,
+            answer_memory={"version": 1, "answers": []},
+            target_count=2,
+            limit=2,
+        )
+        markdown = render_apply_queue_autofill_packet_markdown(report)
+        html = render_apply_queue_autofill_packet_html(report)
+
+        self.assertEqual(report["status"], "waiting_for_confirmed_answers")
+        self.assertTrue(report["ready_after_confirmed_answers"])
+        self.assertFalse(report["ready_for_supervised_browser_autofill"])
+        self.assertEqual(report["selected_count"], 2)
+        self.assertEqual(report["summary"]["browser_action_count"], 2)
+        self.assertEqual(report["summary"]["final_submit_stop_count"], 2)
+        self.assertEqual(report["summary"]["selector_miss_count"], 0)
+        self.assertEqual(report["summary"]["local_synthetic_submit_count"], 2)
+        self.assertEqual(report["packet_status_counts"], {"ready_after_confirmed_answers": 2})
+        self.assertIn("confirmed_answers_not_ready", report["global_blockers"])
+        self.assertIn("ready_after_confirmed_answers", report["global_blockers"])
+        action_text = json.dumps(report["positions"][0]["browser_actions"])
+        self.assertNotIn("alan@example.com", action_text)
+        self.assertNotIn('"value":', action_text)
+        self.assertIn("Apply Queue Autofill Packet", markdown)
+        self.assertIn("ready_after_confirmed_answers", html)
+
+    def test_apply_queue_autofill_packet_ready_writes_outputs(self) -> None:
+        profile_payload = {
+            "candidate": {
+                "name": "Alan Jiang",
+                "email": "alan@example.com",
+                "phone": "555-0100",
+                "location": "Bellevue, WA",
+            },
+            "targets": {"titles": ["SRE"], "locations": ["United States"], "remote_ok": True, "min_score": 1},
+            "resume_facts": {},
+            "question_answers": {},
+        }
+        research = {
+            "positions": [
+                {
+                    "position_key": "url:https://jobs.lever.co/example/1",
+                    "platform": "Lever",
+                    "company": "Example",
+                    "title": "SRE",
+                    "role_family": "SRE",
+                    "apply_url": "https://jobs.lever.co/example/1",
+                },
+                {
+                    "position_key": "url:https://jobs.lever.co/example/2",
+                    "platform": "Lever",
+                    "company": "Example",
+                    "title": "SRE II",
+                    "role_family": "SRE",
+                    "apply_url": "https://jobs.lever.co/example/2",
+                },
+            ],
+            "items": [
+                {
+                    "position_key": "url:https://jobs.lever.co/example/1",
+                    "label": "Email",
+                    "category": "profile_identity",
+                    "automation_action": "auto_fill_from_profile",
+                    "required": True,
+                },
+                {
+                    "position_key": "url:https://jobs.lever.co/example/1",
+                    "label": "Submit application",
+                    "category": "final_submit",
+                    "automation_action": "submit_gate",
+                    "required": True,
+                },
+                {
+                    "position_key": "url:https://jobs.lever.co/example/2",
+                    "label": "Email",
+                    "category": "profile_identity",
+                    "automation_action": "auto_fill_from_profile",
+                    "required": True,
+                },
+                {
+                    "position_key": "url:https://jobs.lever.co/example/2",
+                    "label": "Submit application",
+                    "category": "final_submit",
+                    "automation_action": "submit_gate",
+                    "required": True,
+                },
+            ],
+        }
+        handoff = {
+            "status": "ready_to_open_for_supervised_autofill",
+            "ready_for_supervised_open_batch": True,
+            "open_after_answers_count": 0,
+            "manual_live_check_count": 0,
+            "closed_or_skipped_count": 0,
+            "positions": [
+                {
+                    "index": 1,
+                    "handoff_status": "ready_to_open_for_supervised_autofill",
+                    "queue_status": "ready_for_live_closed_preflight",
+                    "live_status": "open_live_checked",
+                    "live_open_eligible": True,
+                    "live_closed": False,
+                    "position_key": "url:https://jobs.lever.co/example/1",
+                    "platform": "Lever",
+                    "company": "Example",
+                    "title": "SRE",
+                    "role_family": "SRE",
+                    "apply_url": "https://jobs.lever.co/example/1",
+                },
+                {
+                    "index": 2,
+                    "handoff_status": "ready_to_open_for_supervised_autofill",
+                    "queue_status": "ready_for_live_closed_preflight",
+                    "live_status": "open_live_checked",
+                    "live_open_eligible": True,
+                    "live_closed": False,
+                    "position_key": "url:https://jobs.lever.co/example/2",
+                    "platform": "Lever",
+                    "company": "Example",
+                    "title": "SRE II",
+                    "role_family": "SRE",
+                    "apply_url": "https://jobs.lever.co/example/2",
+                },
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            research_path = Path(temp_dir) / "research.json"
+            handoff_path = Path(temp_dir) / "handoff.json"
+            profile_path = Path(temp_dir) / "profile.json"
+            memory_path = Path(temp_dir) / "memory.json"
+            closed_path = Path(temp_dir) / "closed.json"
+            json_output = Path(temp_dir) / "packet.json"
+            markdown_output = Path(temp_dir) / "packet.md"
+            html_output = Path(temp_dir) / "packet.html"
+            research_path.write_text(json.dumps(research), encoding="utf-8")
+            handoff_path.write_text(json.dumps(handoff), encoding="utf-8")
+            profile_path.write_text(json.dumps(profile_payload), encoding="utf-8")
+            memory_path.write_text(json.dumps({"version": 1, "answers": []}), encoding="utf-8")
+            closed_path.write_text(json.dumps({"version": 1, "jobs": []}), encoding="utf-8")
+
+            written = write_apply_queue_autofill_packet(
+                research_path,
+                handoff_path,
+                profile_path,
+                memory_path,
+                closed_path,
+                json_output,
+                markdown_output,
+                html_output,
+                target_count=2,
+                limit=2,
+            )
+
+            self.assertEqual(written["status"], "ready_for_supervised_browser_autofill")
+            self.assertTrue(written["ready_for_supervised_browser_autofill"])
+            self.assertEqual(written["summary"]["local_synthetic_submit_count"], 2)
+            self.assertEqual(written["global_blockers"], [])
+            self.assertTrue(json_output.exists())
+            self.assertTrue(markdown_output.exists())
+            self.assertTrue(html_output.exists())
 
     def test_collection_plan_turns_coverage_shortfalls_into_search_tasks(self) -> None:
         gate = {

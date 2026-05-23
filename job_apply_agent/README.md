@@ -293,6 +293,28 @@ job_apply_agent/outbox/apply_queue_manual_live_check_latest.json
 exists, so a later successful retry can turn an uncertain row into an eligible
 open row without hand-editing the primary preflight report.
 
+After the handoff is built, prepare the supervised browser autofill packet:
+
+```bash
+python3 -m job_apply_agent apply-queue-autofill-packet
+```
+
+This writes:
+
+```text
+job_apply_agent/outbox/apply_queue_autofill_packet_latest.json
+job_apply_agent/outbox/apply_queue_autofill_packet_latest.md
+job_apply_agent/outbox/apply_queue_autofill_packet_latest.html
+```
+
+The packet bridges the live-open queue to browser actions. It rebuilds each
+selected position's fill plan, records selector misses and missing inputs,
+runs the same forms against the local synthetic executor, and inserts a stop
+before every real employer final-submit action. By default it records value
+sources but omits the actual answer values, so the packet can be reviewed or
+shared without exposing profile details. Use `--include-values` only for a
+supervised local run that is allowed to use the profile and answer-memory data.
+
 To make the 100-position target machine-checkable across real observations and
 synthetic execution evidence:
 
