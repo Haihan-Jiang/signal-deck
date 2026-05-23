@@ -10638,6 +10638,11 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("resume-after-answers", report["one_command_resume"])
         self.assertIn("--live-check-limit", report["one_command_resume"])
         self.assertIn("--open-browser", report["one_command_resume_and_open"])
+        self.assertEqual(
+            report["minimal_final_answer_reply_lines"],
+            ["\u6211\u7684\u516c\u6c11\u8eab\u4efd\u662f<fill>", "\u4ee5\u4e0a\u786e\u8ba4"],
+        )
+        self.assertIn("\u6211\u7684\u516c\u6c11\u8eab\u4efd\u662f<fill>", report["minimal_final_answer_reply"])
         self.assertIn("resume-after-answers", report["next_commands"][0])
         self.assertIn("final-answer-blockers", report["next_commands"][1])
         self.assertIn("rehearse-after-answers", report["next_commands"][2])
@@ -10675,6 +10680,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Submission Safety Audit", markdown)
         self.assertIn("Confirmed-Answer Runbook", markdown)
         self.assertIn("One-Command Resume", markdown)
+        self.assertIn("Minimal Final-Answer Reply", markdown)
+        self.assertIn("\u6211\u7684\u516c\u6c11\u8eab\u4efd\u662f<fill>", markdown)
         self.assertIn("resume-after-answers", markdown)
         self.assertIn("rehearse-after-answers", markdown)
         self.assertIn("final-answer-reply --reply-file", markdown)
@@ -10694,6 +10701,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Submission Safety Audit", html)
         self.assertIn("Confirmed-Answer Runbook", html)
         self.assertIn("One-Command Resume", html)
+        self.assertIn("Minimal Final-Answer Reply", html)
+        self.assertIn("\u6211\u7684\u516c\u6c11\u8eab\u4efd\u662f&lt;fill&gt;", html)
         self.assertIn("Final-Answer Intake", html)
         self.assertIn("Answer Impact Queue", html)
         self.assertIn("100-Position Execution Audit", html)

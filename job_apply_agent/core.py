@@ -15733,6 +15733,9 @@ def build_automation_handoff_report(
         final_answer_intake_template,
         final_answer_intake_update,
     )
+    minimal_final_answer_reply_lines = _automation_handoff_minimal_final_answer_reply_lines(
+        final_answer_intake_rows
+    )
     final_intake_count = int(
         (final_answer_intake_template or {}).get("answer_count") or len(final_answer_intake_rows)
     )
@@ -15943,6 +15946,8 @@ def build_automation_handoff_report(
         "goal_completion_checklist": goal_completion_checklist,
         "completion_verdict": _automation_handoff_completion_verdict_rows(summary, goal),
         "confirmed_answer_runbook": _automation_handoff_confirmed_answer_runbook(summary),
+        "minimal_final_answer_reply": "\n".join(minimal_final_answer_reply_lines),
+        "minimal_final_answer_reply_lines": minimal_final_answer_reply_lines,
         "final_answer_intake": final_answer_intake_rows,
         "answer_impact_queue": answer_queue,
         "selected_stop_action_summary": selected_stop_summary,
@@ -16183,6 +16188,18 @@ def render_automation_handoff_markdown(report: dict[str, Any]) -> str:
             "",
             f"- save/apply/live-check/build packet: `{report.get('one_command_resume')}`",
             f"- save/apply/live-check/open verified pages: `{report.get('one_command_resume_and_open')}`",
+            "",
+            "## Minimal Final-Answer Reply",
+            "",
+        ]
+    )
+    minimal_final_answer_reply = str(report.get("minimal_final_answer_reply") or "").strip()
+    if minimal_final_answer_reply:
+        lines.extend(["```text", minimal_final_answer_reply, "```"])
+    else:
+        lines.append("- None")
+    lines.extend(
+        [
             "",
             "## Requirement Status",
             "",
@@ -16457,6 +16474,15 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
                 ],
             ),
             "</section>",
+            "<section><h2>Minimal Final-Answer Reply</h2>",
+            (
+                "<pre>"
+                + _html_escape(str(report.get("minimal_final_answer_reply") or ""))
+                + "</pre>"
+                if report.get("minimal_final_answer_reply")
+                else "<p class=\"muted\">None</p>"
+            ),
+            "</section>",
             "<section><h2>Requirement Status</h2>",
             _html_table(
                 ["ID", "Status", "Requirement", "Evidence"],
@@ -16690,6 +16716,23 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
             "</html>",
         ]
     )
+
+
+def _automation_handoff_minimal_final_answer_reply_lines(
+    final_answer_intake_rows: list[dict[str, Any]],
+) -> list[str]:
+    blocker_rows: list[dict[str, Any]] = []
+    for row in final_answer_intake_rows:
+        if not isinstance(row, dict):
+            continue
+        status = str(row.get("status") or "").strip()
+        if status == "ready":
+            continue
+        alias = str(row.get("alias") or "").strip()
+        if not alias:
+            continue
+        blocker_rows.append({"alias": alias, "high_risk": bool(row.get("high_risk"))})
+    return _final_answer_blocker_minimal_reply_prompt_lines(blocker_rows)
 
 
 def _automation_handoff_confirmed_answer_runbook(summary: dict[str, Any]) -> list[dict[str, Any]]:
