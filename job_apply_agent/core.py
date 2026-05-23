@@ -14287,6 +14287,11 @@ def build_automation_handoff_report(
         "source": "automation_handoff_report",
         "status": handoff_status,
         "summary": summary,
+        "one_command_resume": _automation_handoff_one_command_resume(summary),
+        "one_command_resume_and_open": _automation_handoff_one_command_resume(
+            summary,
+            open_browser=True,
+        ),
         "requirements": _automation_handoff_requirement_rows(goal),
         "confirmed_answer_runbook": _automation_handoff_confirmed_answer_runbook(summary),
         "final_answer_intake": final_answer_intake_rows,
@@ -14382,6 +14387,11 @@ def render_automation_handoff_markdown(report: dict[str, Any]) -> str:
         f"- apply queue handoff: {summary.get('apply_queue_handoff_status') or 'missing'}, open ready {summary.get('apply_queue_open_ready_count', 0)}, open after answers {summary.get('apply_queue_open_after_answers_count', 0)}, manual live checks {summary.get('apply_queue_manual_live_check_count', 0)}",
         f"- autofill packet: {summary.get('autofill_packet_status') or 'missing'}, selected {summary.get('autofill_packet_selected_count', 0)}, browser actions {summary.get('autofill_packet_browser_action_count', 0)}, final-submit stops {summary.get('autofill_packet_final_submit_stop_count', 0)}, selector misses {summary.get('autofill_packet_selector_miss_count', 0)}",
         f"- position execution audit: {summary.get('position_execution_status') or 'missing'}, audited {summary.get('position_execution_audited_count', 0)} / {summary.get('position_execution_target_count', 0)}, ready after answers {summary.get('position_execution_ready_after_answers_count', 0)}, selector misses {summary.get('position_execution_selector_miss_count', 0)}",
+        "",
+        "## One-Command Resume",
+        "",
+        f"- save/apply/live-check/build packet: `{report.get('one_command_resume')}`",
+        f"- save/apply/live-check/open verified pages: `{report.get('one_command_resume_and_open')}`",
         "",
         "## Requirement Status",
         "",
@@ -14570,6 +14580,15 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
                     ("Execution misses", summary.get("position_execution_selector_miss_count", 0)),
                 ]
             ),
+            "<section><h2>One-Command Resume</h2>",
+            _html_table(
+                ["Mode", "Command"],
+                [
+                    ["Save, apply, live-check, build packet", report.get("one_command_resume")],
+                    ["Save, apply, live-check, open pages", report.get("one_command_resume_and_open")],
+                ],
+            ),
+            "</section>",
             "<section><h2>Requirement Status</h2>",
             _html_table(
                 ["ID", "Status", "Requirement", "Evidence"],
@@ -14873,6 +14892,7 @@ def _automation_handoff_confirmed_answer_runbook(summary: dict[str, Any]) -> lis
 
 def _automation_handoff_next_commands(summary: dict[str, Any]) -> list[str]:
     commands = [
+        _automation_handoff_one_command_resume(summary),
         "python3 -m job_apply_agent final-answer-intake",
         "python3 -m job_apply_agent final-answer-intake --answers job_apply_agent/outbox/final_answer_intake_template_latest.json --finalize --fail-on-not-ready",
         "python3 -m job_apply_agent post-answer-pipeline --final-answer-intake-json job_apply_agent/outbox/final_answer_intake_template_latest.json --apply --live-check --include-values --fail-on-not-ready",
@@ -14890,8 +14910,37 @@ def _automation_handoff_next_commands(summary: dict[str, Any]) -> list[str]:
         "python3 -m job_apply_agent export-questions",
     ]
     if summary.get("updates_ready_for_apply"):
-        return commands[4:]
+        return commands[5:]
     return commands
+
+
+def _automation_handoff_one_command_resume(
+    summary: dict[str, Any],
+    *,
+    open_browser: bool = False,
+) -> str:
+    command = [
+        "python3 -m job_apply_agent final-answer-intake-server",
+        "--open-browser",
+        "--once",
+        "--run-post-answer-pipeline",
+        "--post-answer-apply",
+        "--post-answer-live-check",
+        "--post-answer-live-check-limit",
+        str(max(100, int(summary.get("apply_queue_open_after_answers_count") or 0))),
+        "--post-answer-live-check-timeout",
+        "25",
+        "--post-answer-include-values",
+    ]
+    if open_browser:
+        command.extend(
+            [
+                "--post-answer-open-browser",
+                "--post-answer-open-limit",
+                str(max(100, int(summary.get("apply_queue_open_after_answers_count") or 0))),
+            ]
+        )
+    return " ".join(command)
 
 
 def _automation_handoff_requirement_rows(goal: dict[str, Any]) -> list[dict[str, Any]]:
