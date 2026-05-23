@@ -2709,16 +2709,30 @@ class JobApplyAgentTests(unittest.TestCase):
                     "platforms": ["Greenhouse"],
                     "next_action": "ask user",
                 },
+                {
+                    "label": "Candidate Personal Data Disclosure",
+                    "normalized_label": "candidate personal data disclosure",
+                    "category": "policy_acknowledgement",
+                    "coverage_status": "needs_user_confirmation",
+                    "observed_count": 4,
+                    "required_count": 4,
+                    "platforms": ["Greenhouse"],
+                    "next_action": "ask user",
+                },
             ],
         }
 
         report = build_position_readiness_report(research, gaps)
         tasks = {task["group_key"]: task for task in report["minimal_learning_tasks"]}
 
-        self.assertEqual(report["learning_queue_count"], 4)
-        self.assertEqual(report["minimal_learning_task_count"], 2)
+        self.assertEqual(report["learning_queue_count"], 5)
+        self.assertEqual(report["minimal_learning_task_count"], 3)
         self.assertEqual(tasks["answer_memory:employment_history:default_policy"]["related_prompt_count"], 2)
         self.assertEqual(tasks["answer_memory:conflict_of_interest:default_policy"]["related_prompt_count"], 2)
+        self.assertEqual(
+            tasks["answer_memory:policy_acknowledgement:candidate personal data disclosure"]["question"],
+            "Candidate Personal Data Disclosure",
+        )
         self.assertIn("prior-employer", tasks["answer_memory:employment_history:default_policy"]["question"])
         self.assertIn("conflict-of-interest", tasks["answer_memory:conflict_of_interest:default_policy"]["question"])
         template = build_learning_task_template(report)
@@ -2738,6 +2752,14 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn(
             "unless a specific employer",
             template_tasks["answer_memory:employment_history:default_policy"]["suggested_answer"],
+        )
+        self.assertEqual(
+            template_tasks["answer_memory:policy_acknowledgement:candidate personal data disclosure"]["answer_scope"],
+            "exact_prompt_labels",
+        )
+        self.assertEqual(
+            template_tasks["answer_memory:policy_acknowledgement:candidate personal data disclosure"]["suggested_answer"],
+            "Yes, I acknowledge.",
         )
         self.assertEqual(
             template_tasks["answer_memory:employment_history:default_policy"]["related_prompt_count"],

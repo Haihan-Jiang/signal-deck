@@ -15334,7 +15334,7 @@ def _minimal_learning_group_key(item: dict[str, Any]) -> str:
     if category == "communication_consent":
         return "answer_memory:communication_consent"
     if category == "policy_acknowledgement":
-        return "supervised_confirmation:policy_acknowledgement"
+        return f"answer_memory:policy_acknowledgement:{normalized_label or label}"
     if status == "needs_user_confirmation" and category in {
         "background_or_export_control",
         "citizenship_status",
@@ -15514,6 +15514,15 @@ def _standard_learning_answer_suggestion(
     text = _normalize(" ".join([str(task.get("question") or ""), *_string_list(task.get("labels"))]))
     if not text:
         return None
+    if classify_application_prompt(text).category == "policy_acknowledgement":
+        answer = (profile.question_answers.get("policy_acknowledgement") if profile else "") or "Yes, I acknowledge."
+        return _suggested_learning_answer(
+            answer,
+            "profile.question_answers.policy_acknowledgement"
+            if profile and profile.question_answers.get("policy_acknowledgement")
+            else "standard_policy_acknowledgement",
+            "Draft only for this exact policy prompt; approve after reviewing the employer text.",
+        )
     if "attended an on campus or virtual event" in text:
         return _suggested_learning_answer(
             "N/A - no specific campus or virtual event attended unless an event is confirmed.",
@@ -16264,7 +16273,7 @@ def _minimal_learning_question(item: dict[str, Any]) -> str:
     if category == "communication_consent":
         return "For recruiting updates, should automation answer yes or no to SMS/WhatsApp consent?"
     if category == "policy_acknowledgement":
-        return "May automation mark applicant privacy acknowledgement after you review the policy?"
+        return str(item.get("label") or "What exact answer should automation use after this policy prompt is reviewed?")
     category_questions = {
         "background_or_export_control": "What default answer and exceptions should automation use for background, export-control, indictment, debarment, substance, firearm, felony, or legal-eligibility questions?",
         "citizenship_status": "What citizenship, U.S. person, permanent-resident, and restricted-country answers should automation use?",
@@ -16314,7 +16323,7 @@ def _recommended_storage_for_status(status: str, category: str) -> str:
     if status == "needs_resume_facts":
         return "resume_facts"
     if status == "needs_user_confirmation":
-        return "answer_memory" if category not in {"policy_acknowledgement"} else "supervised_confirmation"
+        return "answer_memory"
     if status == "manual_security_step":
         return "do_not_automate"
     if status == "final_submit_confirmation":
