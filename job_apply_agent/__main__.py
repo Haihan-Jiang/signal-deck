@@ -2111,6 +2111,11 @@ def main() -> int:
     )
     goal_audit_parser.add_argument("--json-output", default=str(DEFAULT_GOAL_AUDIT_JSON))
     goal_audit_parser.add_argument("--markdown-output", default=str(DEFAULT_GOAL_AUDIT_MARKDOWN))
+    goal_audit_parser.add_argument(
+        "--fail-on-incomplete",
+        action="store_true",
+        help="exit non-zero unless the goal audit proves completion",
+    )
 
     args = parser.parse_args()
 
@@ -2433,6 +2438,11 @@ def main() -> int:
         print(f"Wrote goal audit JSON to {args.json_output}")
         print(f"Wrote goal audit Markdown to {args.markdown_output}")
         print(f"Status: {audit.get('status')}")
+        verdict = audit.get("completion_verdict") if isinstance(audit.get("completion_verdict"), dict) else {}
+        print(f"Completion verdict: {verdict.get('status', '')}")
+        blocking_ids = verdict.get("blocking_requirement_ids") if isinstance(verdict.get("blocking_requirement_ids"), list) else []
+        if blocking_ids:
+            print(f"Blocking requirement IDs: {', '.join(str(item) for item in blocking_ids)}")
         print(f"Missing requirements: {audit.get('missing_requirement_count', 0)}")
         summary = audit.get("blocker_summary") or {}
         print(f"Final answer blanks after drafts: {summary.get('final_answer_waiting_count_after_drafts', 0)}")
@@ -2452,6 +2462,8 @@ def main() -> int:
             f"{summary.get('draft_data_blocking_prompt_count_after_updates', 0)}"
         )
         print(f"Goal complete: {str(bool(audit.get('goal_complete'))).lower()}")
+        if args.fail_on_incomplete and not audit.get("goal_complete"):
+            return 2
         return 0
 
     if args.command == "research":

@@ -9888,6 +9888,20 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(audit["blocker_summary"]["draft_data_blocking_prompt_count_after_updates"], 1)
         self.assertEqual(audit["blocker_summary"]["final_answer_waiting_count_after_drafts"], 2)
         self.assertEqual(audit["blocker_summary"]["final_answer_waiting_high_risk_count_after_drafts"], 1)
+        self.assertEqual(audit["completion_verdict"]["status"], "waiting_for_truthful_user_answers")
+        self.assertEqual(audit["completion_verdict"]["blocking_requirement_ids"], ["real_user_answer_learning"])
+        self.assertEqual(
+            audit["completion_verdict"]["blocking_final_answer_aliases"],
+            ["zip_or_postal_code", "citizenship_status"],
+        )
+        self.assertEqual(audit["completion_verdict"]["satisfied_requirement_count"], 11)
+        self.assertEqual(audit["completion_verdict"]["blocking_requirement_count"], 1)
+        self.assertFalse(audit["completion_verdict"]["real_employer_unattended_submit_allowed"])
+        self.assertIn("--reply-text", audit["completion_verdict"]["direct_autopilot_command"])
+        self.assertEqual(len(audit["completion_checklist"]), 12)
+        self.assertTrue(audit["completion_checklist"][0]["counts_as_complete"])
+        blocking_checklist = [row for row in audit["completion_checklist"] if row["blocking"]]
+        self.assertEqual([row["id"] for row in blocking_checklist], ["real_user_answer_learning"])
         self.assertEqual(audit["final_answer_waiting_rows"][0]["alias"], "zip_or_postal_code")
         self.assertFalse(audit["final_answer_waiting_rows"][0]["high_risk"])
         self.assertEqual(audit["final_answer_waiting_rows"][1]["alias"], "citizenship_status")
@@ -9987,6 +10001,13 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertFalse(selected_ready_audit["supervised_autofill_ready_after_user_answers"])
         self.assertFalse(selected_ready_audit["goal_complete"])
         self.assertEqual(
+            selected_ready_audit["completion_verdict"]["status"],
+            "waiting_for_truthful_user_answers",
+        )
+        self.assertTrue(
+            selected_ready_audit["completion_verdict"]["selected_queue_supervised_autofill_ready"]
+        )
+        self.assertEqual(
             selected_ready_audit["blocker_summary"]["position_execution_remaining_user_answers"],
             0,
         )
@@ -9997,6 +10018,10 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(audit["requirements"][4]["status"], "achieved")
         self.assertEqual(audit["top_data_blocking_prompts"][0]["coverage_status"], "needs_user_confirmation")
         self.assertIn("Goal Readiness Audit", markdown)
+        self.assertIn("Completion Verdict", markdown)
+        self.assertIn("blocking requirement IDs: real_user_answer_learning", markdown)
+        self.assertIn("blocking final-answer aliases: zip_or_postal_code, citizenship_status", markdown)
+        self.assertIn("Completion Checklist", markdown)
         self.assertIn("needs_user_answers", markdown)
         self.assertIn("real platform coverage achieved: true", markdown)
         self.assertIn("real platform-role coverage achieved: true", markdown)
@@ -10024,6 +10049,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Top Data-Blocking Prompts", markdown)
         self.assertIn("Have you worked with us before?", markdown)
         self.assertIn("resume-after-answers", "\n".join(audit["next_actions"]))
+        self.assertIn("final-answer-autopilot --reply-text", "\n".join(audit["next_actions"]))
 
         with tempfile.TemporaryDirectory() as temp_dir:
             json_output = Path(temp_dir) / "goal.json"
@@ -10051,6 +10077,7 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(written["missing_requirement_count"], 1)
             self.assertTrue(json_output.exists())
             self.assertTrue(markdown_output.exists())
+            self.assertIn("completion_verdict", written)
             self.assertIn("Real employer unattended submit: false", markdown_output.read_text())
 
     def test_automation_handoff_report_prioritizes_answers_and_stop_actions(self) -> None:

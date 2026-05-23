@@ -14984,6 +14984,14 @@ def build_goal_readiness_audit(
         for item in requirements
         if item.get("status") not in {"achieved", "supervised_policy_gate"}
     ]
+    completion_checklist = _goal_completion_checklist(requirements)
+    completion_verdict = _goal_completion_verdict(
+        requirements,
+        missing_requirements,
+        final_answer_waiting_rows,
+        selected_queue_supervised_autofill_ready=selected_queue_supervised_autofill_ready,
+        supervised_autofill_ready_after_user_answers=supervised_autofill_ready_after_user_answers,
+    )
     status = (
         "selected_100_supervised_autofill_ready"
         if selected_queue_supervised_autofill_ready
@@ -15003,6 +15011,8 @@ def build_goal_readiness_audit(
         "can_unattended_submit_real_employers": False,
         "requirements": requirements,
         "missing_requirement_count": len(missing_requirements),
+        "completion_verdict": completion_verdict,
+        "completion_checklist": completion_checklist,
         "blocker_summary": {
             "data_blocking_prompt_count": data_blocker_count,
             "draft_data_blocking_prompt_count_after_updates": draft_data_blockers_after,
@@ -15174,6 +15184,7 @@ def write_goal_readiness_audit(
 
 def render_goal_readiness_audit_markdown(audit: dict[str, Any]) -> str:
     summary = audit.get("blocker_summary") or {}
+    verdict = audit.get("completion_verdict") if isinstance(audit.get("completion_verdict"), dict) else {}
     lines = [
         "# Goal Readiness Audit",
         "",
@@ -15184,11 +15195,47 @@ def render_goal_readiness_audit_markdown(audit: dict[str, Any]) -> str:
         f"Supervised autofill ready after user answers: {str(bool(audit.get('supervised_autofill_ready_after_user_answers'))).lower()}",
         "Real employer unattended submit: false",
         "",
-        "## Requirement Evidence",
+        "## Completion Verdict",
         "",
-        "| Requirement | Status | Evidence |",
-        "| --- | --- | --- |",
+        f"- status: {verdict.get('status', '')}",
+        f"- satisfied requirements: {verdict.get('satisfied_requirement_count', 0)} / {verdict.get('total_requirement_count', 0)}",
+        f"- achieved requirements: {verdict.get('achieved_requirement_count', 0)}",
+        f"- supervised policy gates: {verdict.get('supervised_policy_gate_count', 0)}",
+        f"- blocking requirements: {verdict.get('blocking_requirement_count', 0)}",
+        "- blocking requirement IDs: "
+        + (", ".join(verdict.get("blocking_requirement_ids") or []) or "none"),
+        "- blocking final-answer aliases: "
+        + (", ".join(verdict.get("blocking_final_answer_aliases") or []) or "none"),
+        f"- selected 100 queue ready now: {str(bool(verdict.get('selected_queue_supervised_autofill_ready'))).lower()}",
+        f"- ready after truthful answers: {str(bool(verdict.get('supervised_autofill_ready_after_user_answers'))).lower()}",
+        f"- real employer final submit supervised: {str(bool(verdict.get('real_employer_final_submit_supervised'))).lower()}",
+        f"- next command after answers: `{verdict.get('direct_autopilot_command', '')}`",
+        "",
+        "## Completion Checklist",
+        "",
+        "| ID | Status | Counts as complete | Blocking |",
+        "| --- | --- | --- | --- |",
     ]
+    for item in audit.get("completion_checklist") or []:
+        if not isinstance(item, dict):
+            continue
+        lines.append(
+            "| {id} | {status} | {complete} | {blocking} |".format(
+                id=_markdown_cell(item.get("id")),
+                status=_markdown_cell(item.get("status")),
+                complete=str(bool(item.get("counts_as_complete"))).lower(),
+                blocking=str(bool(item.get("blocking"))).lower(),
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Requirement Evidence",
+            "",
+            "| Requirement | Status | Evidence |",
+            "| --- | --- | --- |",
+        ]
+    )
     for item in audit.get("requirements") or []:
         evidence = item.get("evidence") or {}
         evidence_text = "; ".join(f"{key}={value}" for key, value in evidence.items())
@@ -15460,6 +15507,78 @@ def _goal_top_blocking_prompts(
     return rows[: max(limit, 0)]
 
 
+def _goal_completion_checklist(requirements: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    complete_statuses = {"achieved", "supervised_policy_gate"}
+    rows: list[dict[str, Any]] = []
+    for item in requirements:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status") or "")
+        rows.append(
+            {
+                "id": item.get("id"),
+                "requirement": item.get("requirement"),
+                "status": status,
+                "counts_as_complete": status in complete_statuses,
+                "blocking": status not in complete_statuses,
+                "evidence_keys": sorted((item.get("evidence") or {}).keys()),
+            }
+        )
+    return rows
+
+
+def _goal_completion_verdict(
+    requirements: list[dict[str, Any]],
+    missing_requirements: list[dict[str, Any]],
+    final_answer_waiting_rows: list[dict[str, Any]],
+    *,
+    selected_queue_supervised_autofill_ready: bool,
+    supervised_autofill_ready_after_user_answers: bool,
+) -> dict[str, Any]:
+    achieved_count = sum(1 for item in requirements if item.get("status") == "achieved")
+    policy_gate_count = sum(
+        1 for item in requirements if item.get("status") == "supervised_policy_gate"
+    )
+    blocking_ids = [
+        str(item.get("id") or "").strip()
+        for item in missing_requirements
+        if str(item.get("id") or "").strip()
+    ]
+    blocking_aliases = [
+        str(row.get("alias") or row.get("input_id") or "").strip()
+        for row in final_answer_waiting_rows
+        if str(row.get("alias") or row.get("input_id") or "").strip()
+    ]
+    status = (
+        "complete"
+        if not missing_requirements
+        else "waiting_for_truthful_user_answers"
+        if blocking_aliases
+        else "incomplete"
+    )
+    return {
+        "status": status,
+        "total_requirement_count": len(requirements),
+        "satisfied_requirement_count": achieved_count + policy_gate_count,
+        "achieved_requirement_count": achieved_count,
+        "supervised_policy_gate_count": policy_gate_count,
+        "blocking_requirement_count": len(missing_requirements),
+        "blocking_requirement_ids": blocking_ids,
+        "blocking_final_answer_aliases": blocking_aliases,
+        "selected_queue_supervised_autofill_ready": bool(selected_queue_supervised_autofill_ready),
+        "supervised_autofill_ready_after_user_answers": bool(
+            supervised_autofill_ready_after_user_answers
+        ),
+        "real_employer_final_submit_supervised": True,
+        "real_employer_unattended_submit_allowed": False,
+        "direct_autopilot_command": (
+            "python3 -m job_apply_agent final-answer-autopilot "
+            "--reply-text '<filled final-answer lines>' --apply --live-check "
+            "--include-values --fail-on-not-ready"
+        ),
+    }
+
+
 def _goal_next_actions(
     research_ready: bool,
     synthetic_ready: bool,
@@ -15480,6 +15599,10 @@ def _goal_next_actions(
             blank_count = final_answer_waiting_count or critical_waiting_count
             actions.append(
                 f"Fill the {blank_count} final-answer lines in {FINAL_ANSWER_REPLY_TEMPLATE_PATH}, then run `python3 -m job_apply_agent resume-after-answers`."
+            )
+            actions.append(
+                "Or paste those lines into Codex and run the direct path: "
+                "`python3 -m job_apply_agent final-answer-autopilot --reply-text '<filled final-answer lines>' --apply --live-check --include-values --fail-on-not-ready`."
             )
             actions.append(
                 "If you want the compact prompt again, run `python3 -m job_apply_agent final-answer-blockers --notify-telegram --telegram-dry-run` before filling the reply file."
