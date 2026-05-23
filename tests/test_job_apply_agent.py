@@ -5590,6 +5590,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["combined_answerable_input_count"], 2)
         self.assertEqual(report["summary"]["baseline_data_blocking_prompts"], 2)
         self.assertEqual(report["summary"]["combined_data_blocking_prompts_after"], 0)
+        self.assertEqual(report["combined_remaining_data_blocker_counts"]["total"], 0)
         self.assertTrue(report["policy"]["uses_fake_answers_for_impact_only"])
         impacts = {row["input_id"]: row for row in report["input_impacts"]}
         self.assertEqual(impacts["profile_zip_or_postal_code"]["data_blocking_prompts_delta"], -1)
@@ -5601,8 +5602,8 @@ class JobApplyAgentTests(unittest.TestCase):
             impacts["supervised_confirmation_policy_acknowledgement"]["temp_approved_inputs"],
             0,
         )
-        self.assertIn("Critical Input Impact Report", render_critical_input_impact_markdown(report))
-        self.assertIn("Input Priority", render_critical_input_impact_html(report))
+        self.assertIn("Remaining data blocker prompts: 0", render_critical_input_impact_markdown(report))
+        self.assertIn("Remaining Data Blockers", render_critical_input_impact_html(report))
 
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

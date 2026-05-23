@@ -5297,6 +5297,7 @@ def build_critical_input_preflight(
         },
         "update_report": {key: value for key, value in update_report.items() if key != "updated_answers"},
         "temp_apply_result": temp_apply_result,
+        "remaining_data_blocker_counts": _critical_input_preflight_blocker_counts(after_gaps),
         "remaining_data_blockers": _critical_input_preflight_blocker_rows(after_gaps),
         "policy": {
             "temp_only": True,
@@ -5656,6 +5657,19 @@ def _critical_input_preflight_blocker_rows(gaps: dict[str, Any]) -> list[dict[st
     ]
 
 
+def _critical_input_preflight_blocker_counts(gaps: dict[str, Any]) -> dict[str, Any]:
+    rows = [
+        item
+        for item in gaps.get("blocking_prompts") or []
+        if item.get("coverage_status") in _CRITICAL_INPUT_PREFLIGHT_DATA_BLOCKER_STATUSES
+    ]
+    return {
+        "total": len(rows),
+        "by_category": _count_by(rows, "category"),
+        "by_status": _count_by(rows, "coverage_status"),
+    }
+
+
 def _critical_input_data_blocker_count(gaps: dict[str, Any]) -> int:
     return sum(
         int((gaps.get("coverage_counts") or {}).get(status) or 0)
@@ -5776,6 +5790,7 @@ def build_critical_input_impact_report(
         baseline_gaps=baseline_gaps,
         baseline_readiness=baseline_readiness,
     )
+    remaining_blockers = combined.get("remaining_data_blockers") or []
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source": "critical_input_impact_report",
@@ -5802,6 +5817,8 @@ def build_critical_input_impact_report(
         },
         "input_impacts": input_impacts,
         "combined_preflight_summary": combined.get("summary", {}),
+        "combined_remaining_data_blocker_counts": combined.get("remaining_data_blocker_counts", {}),
+        "combined_remaining_data_blockers": remaining_blockers,
         "policy": {
             "uses_fake_answers_for_impact_only": True,
             "writes_real_profile_or_memory": False,
@@ -5849,6 +5866,7 @@ def write_critical_input_impact_report(
 
 def render_critical_input_impact_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") or {}
+    remaining_counts = report.get("combined_remaining_data_blocker_counts") or {}
     lines = [
         "# Critical Input Impact Report",
         "",
@@ -5860,6 +5878,7 @@ def render_critical_input_impact_markdown(report: dict[str, Any]) -> str:
         f"Combined data blocker delta: {summary.get('combined_data_blocking_prompts_delta', 0)}",
         f"Combined ready prompt delta: {summary.get('combined_ready_prompts_delta', 0)}",
         f"Combined position-ready delta: {summary.get('combined_positions_ready_for_autofill_delta', 0)}",
+        f"Remaining data blocker prompts: {remaining_counts.get('total', 0)}",
         "",
         "## Input Priority",
         "",
@@ -5884,6 +5903,26 @@ def render_critical_input_impact_markdown(report: dict[str, Any]) -> str:
             )
         )
         lines.append(f"  question: {row.get('question')}")
+    lines.extend(["", "## Remaining Data Blockers After Simulated Answers", ""])
+    category_counts = remaining_counts.get("by_category") or {}
+    if category_counts:
+        for category, count in sorted(category_counts.items(), key=lambda item: (-int(item[1]), str(item[0]))):
+            lines.append(f"- {category}: {count}")
+    else:
+        lines.append("- None")
+    remaining_rows = report.get("combined_remaining_data_blockers") or []
+    if remaining_rows:
+        lines.extend(["", "### Top Remaining Examples", ""])
+        for row in remaining_rows[:20]:
+            lines.append(
+                "- {label} [{category}; {status}; required={required}; platforms={platforms}]".format(
+                    label=row.get("label"),
+                    category=row.get("category"),
+                    status=row.get("coverage_status"),
+                    required=row.get("required_count", 0),
+                    platforms=", ".join(row.get("platforms") or []),
+                )
+            )
     lines.extend(["", "## Policy", ""])
     for key, value in sorted((report.get("policy") or {}).items()):
         lines.append(f"- {key}: {str(value).lower() if isinstance(value, bool) else value}")
@@ -5892,6 +5931,7 @@ def render_critical_input_impact_markdown(report: dict[str, Any]) -> str:
 
 def render_critical_input_impact_html(report: dict[str, Any]) -> str:
     summary = report.get("summary") or {}
+    remaining_counts = report.get("combined_remaining_data_blocker_counts") or {}
     rows = [
         [
             row.get("input_id"),
@@ -5903,6 +5943,24 @@ def render_critical_input_impact_html(report: dict[str, Any]) -> str:
             row.get("question"),
         ]
         for row in report.get("input_impacts") or []
+    ]
+    remaining_category_rows = [
+        [category, count]
+        for category, count in sorted(
+            (remaining_counts.get("by_category") or {}).items(),
+            key=lambda item: (-int(item[1]), str(item[0])),
+        )
+    ]
+    remaining_rows = [
+        [
+            row.get("coverage_status"),
+            row.get("label"),
+            row.get("category"),
+            row.get("required_count", 0),
+            ", ".join(row.get("platforms") or []),
+            row.get("next_action"),
+        ]
+        for row in report.get("combined_remaining_data_blockers") or []
     ]
     return "\n".join(
         [
@@ -5928,6 +5986,7 @@ def render_critical_input_impact_html(report: dict[str, Any]) -> str:
                     ("Blocker delta", summary.get("combined_data_blocking_prompts_delta", 0)),
                     ("Ready prompt delta", summary.get("combined_ready_prompts_delta", 0)),
                     ("Position delta", summary.get("combined_positions_ready_for_autofill_delta", 0)),
+                    ("Remaining blockers", remaining_counts.get("total", 0)),
                 ]
             ),
             "<section><h2>Input Priority</h2>",
@@ -5942,6 +6001,13 @@ def render_critical_input_impact_html(report: dict[str, Any]) -> str:
                     "Question",
                 ],
                 rows,
+            ),
+            "</section>",
+            "<section><h2>Remaining Data Blockers After Simulated Answers</h2>",
+            _html_table(["Category", "Count"], remaining_category_rows),
+            _html_table(
+                ["Status", "Label", "Category", "Required", "Platforms", "Next Action"],
+                remaining_rows,
             ),
             "</section>",
             "<section><h2>Policy</h2>",
