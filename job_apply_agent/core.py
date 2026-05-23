@@ -21459,6 +21459,10 @@ def build_final_answer_blocker_report(
         },
     }
     reply_template_lines = _final_answer_blocker_reply_template_lines(blocker_rows)
+    action_pack = _final_answer_blocker_action_pack(
+        blocker_rows,
+        ready_after_truthful_answer_reply=ready_after_truthful_answer_reply,
+    )
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source": "final_answer_blocker_report",
@@ -21466,6 +21470,7 @@ def build_final_answer_blocker_report(
         "ready_after_truthful_answer_reply": ready_after_truthful_answer_reply,
         "summary": summary,
         "automation_after_answers": automation_after_answers,
+        "action_pack": action_pack,
         "blockers": blocker_rows,
         "reply_template": "\n".join(reply_template_lines),
         "reply_template_lines": reply_template_lines,
@@ -21474,6 +21479,7 @@ def build_final_answer_blocker_report(
             "python3 -m job_apply_agent resume-after-answers --reply-text '<filled final-answer lines>' --validate-only",
             f"python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --validate-only --fail-on-not-ready",
             "python3 -m job_apply_agent resume-after-answers",
+            f"python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --run-post-answer-pipeline --fail-on-not-ready",
             "python3 -m job_apply_agent final-answer-intake-server --open-browser --once --run-post-answer-pipeline --post-answer-apply --post-answer-live-check --post-answer-include-values",
         ],
         "policy": {
@@ -21509,6 +21515,40 @@ def write_final_answer_blocker_report(
             encoding="utf-8",
         )
     return report
+
+
+def _final_answer_blocker_action_pack(
+    blockers: list[dict[str, Any]],
+    *,
+    ready_after_truthful_answer_reply: bool,
+) -> dict[str, Any]:
+    blocker_count = len(blockers)
+    high_risk_count = sum(1 for row in blockers if row.get("high_risk"))
+    return {
+        "status": "waiting_for_truthful_answers" if blocker_count else "ready_for_post_answer_pipeline",
+        "blocking_step": "truthful_answer_learning" if blocker_count else "",
+        "manual_answer_count": blocker_count,
+        "high_risk_confirmation_count": high_risk_count,
+        "reply_file": str(FINAL_ANSWER_REPLY_TEMPLATE_PATH),
+        "edit_instruction": "replace each <fill> with a truthful reusable answer; keep confirmation lines only when exact and truthful",
+        "safe_validate_command": (
+            f"python3 -m job_apply_agent final-answer-reply --reply-file "
+            f"{FINAL_ANSWER_REPLY_TEMPLATE_PATH} --validate-only --fail-on-not-ready"
+        ),
+        "safe_run_command": (
+            f"python3 -m job_apply_agent final-answer-reply --reply-file "
+            f"{FINAL_ANSWER_REPLY_TEMPLATE_PATH} --run-post-answer-pipeline --fail-on-not-ready"
+        ),
+        "open_after_answers_command": (
+            "python3 -m job_apply_agent resume-after-answers "
+            "--live-check-limit 100 --live-check-timeout 25 --open-browser --open-limit 100"
+        ),
+        "ready_after_truthful_answer_reply": ready_after_truthful_answer_reply,
+        "stores_answer_text_in_report": False,
+        "sends_answer_text_to_telegram": False,
+        "submits_real_applications": False,
+        "final_submit_remains_supervised": True,
+    }
 
 
 def attach_final_answer_blocker_notification_result(
@@ -21682,6 +21722,28 @@ def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
             f"- run command: `{automation.get('next_run_command', '')}`",
         ]
     )
+    action_pack = report.get("action_pack") if isinstance(report.get("action_pack"), dict) else {}
+    if action_pack:
+        lines.extend(
+            [
+                "",
+                "## One-Reply Action Pack",
+                "",
+                f"- status: {action_pack.get('status', '')}",
+                f"- blocking step: {action_pack.get('blocking_step', '')}",
+                f"- manual answers: {action_pack.get('manual_answer_count', 0)}",
+                f"- high-risk confirmations: {action_pack.get('high_risk_confirmation_count', 0)}",
+                f"- reply file: `{action_pack.get('reply_file', '')}`",
+                f"- edit instruction: {action_pack.get('edit_instruction', '')}",
+                f"- validate without writing: `{action_pack.get('safe_validate_command', '')}`",
+                f"- run post-answer pipeline: `{action_pack.get('safe_run_command', '')}`",
+                f"- open after answers: `{action_pack.get('open_after_answers_command', '')}`",
+                f"- stores answer text in report: {str(bool(action_pack.get('stores_answer_text_in_report'))).lower()}",
+                f"- sends answer text to Telegram: {str(bool(action_pack.get('sends_answer_text_to_telegram'))).lower()}",
+                f"- submits real applications: {str(bool(action_pack.get('submits_real_applications'))).lower()}",
+                f"- final submit remains supervised: {str(bool(action_pack.get('final_submit_remains_supervised'))).lower()}",
+            ]
+        )
     reply_template = str(report.get("reply_template") or "").strip()
     lines.extend(["", "## Reply Template", ""])
     if reply_template:
@@ -21749,6 +21811,9 @@ def build_telegram_final_answer_blocker_alert(
         lines.append("Short labels also work, e.g. \u90ae\u7f16\u662f[ZIP_CODE] or recording Yes/No...")
         lines.append(
             f"Validate locally: python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --validate-only --fail-on-not-ready"
+        )
+        lines.append(
+            f"Then run: python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --run-post-answer-pipeline --fail-on-not-ready"
         )
         lines.append("")
     lines.append("Paste filled lines back to Codex. This alert does not include your answers.")
