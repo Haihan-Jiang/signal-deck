@@ -11704,6 +11704,88 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Apply Queue Autofill Packet", markdown)
         self.assertIn("ready_after_confirmed_answers", html)
 
+    def test_apply_queue_autofill_packet_blocks_stale_handoff_preflight(self) -> None:
+        url = "https://jobs.lever.co/example/stale"
+        research = {
+            "positions": [
+                {
+                    "position_key": f"url:{url}",
+                    "platform": "Lever",
+                    "company": "StaleCo",
+                    "title": "SRE",
+                    "role_family": "SRE",
+                    "apply_url": url,
+                }
+            ],
+            "items": [
+                {
+                    "position_key": f"url:{url}",
+                    "label": "Email",
+                    "category": "profile_identity",
+                    "automation_action": "auto_fill_from_profile",
+                    "required": True,
+                },
+                {
+                    "position_key": f"url:{url}",
+                    "label": "Submit application",
+                    "category": "final_submit",
+                    "automation_action": "submit_gate",
+                    "required": True,
+                },
+            ],
+        }
+        handoff = {
+            "status": "ready_to_open_for_supervised_autofill",
+            "ready_for_supervised_open_batch": True,
+            "open_after_answers_count": 0,
+            "manual_live_check_count": 0,
+            "closed_or_skipped_count": 0,
+            "preflight": {
+                "generated_at": "2000-01-01T00:00:00+00:00",
+                "stale": False,
+                "stale_selected_check_count": 0,
+            },
+            "positions": [
+                {
+                    "index": 1,
+                    "handoff_status": "ready_to_open_for_supervised_autofill",
+                    "queue_status": "ready_for_live_closed_preflight",
+                    "live_status": "open_live_checked",
+                    "live_open_eligible": True,
+                    "live_closed": False,
+                    "position_key": f"url:{url}",
+                    "platform": "Lever",
+                    "company": "StaleCo",
+                    "title": "SRE",
+                    "role_family": "SRE",
+                    "apply_url": url,
+                }
+            ],
+        }
+
+        report = build_apply_queue_autofill_packet(
+            research,
+            handoff,
+            target_count=1,
+            limit=1,
+        )
+        markdown = render_apply_queue_autofill_packet_markdown(report)
+
+        self.assertEqual(report["status"], "needs_fresh_live_preflight")
+        self.assertFalse(report["ready_for_supervised_browser_autofill"])
+        self.assertFalse(report["ready_after_confirmed_answers"])
+        self.assertEqual(report["raw_candidate_count"], 1)
+        self.assertEqual(report["candidate_count"], 0)
+        self.assertEqual(report["selected_count"], 0)
+        self.assertEqual(report["stale_candidate_count"], 1)
+        self.assertTrue(report["summary"]["handoff_preflight_stale"])
+        self.assertIn("live_preflight_stale", report["global_blockers"])
+        self.assertIn("autofill_packet_below_target", report["global_blockers"])
+        self.assertTrue(
+            any(command.startswith("python3 -m job_apply_agent refresh-apply-queue") for command in report["next_commands"])
+        )
+        self.assertIn("handoff preflight stale: true", markdown)
+
     def test_position_execution_audit_summarizes_100_queue_evidence(self) -> None:
         packet = {
             "status": "waiting_for_confirmed_answers",

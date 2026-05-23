@@ -11603,7 +11603,23 @@ def build_apply_queue_autofill_packet(
         raise ValueError("apply queue handoff must be a JSON object")
     items_by_position = _research_items_by_position(research)
     positions_by_key = _research_positions_by_key(research)
-    candidates = _apply_queue_autofill_candidate_rows(apply_queue_handoff)
+    handoff_freshness = _apply_queue_handoff_preflight_freshness(apply_queue_handoff)
+    raw_candidates = _apply_queue_autofill_candidate_rows(apply_queue_handoff)
+    stale_candidate_count = sum(
+        1 for row in raw_candidates if _apply_queue_handoff_row_preflight_stale(row)
+    )
+    handoff_preflight_stale = bool(
+        handoff_freshness.get("stale") or stale_candidate_count
+    )
+    candidates = (
+        []
+        if handoff_preflight_stale
+        else [
+            row
+            for row in raw_candidates
+            if not _apply_queue_handoff_row_preflight_stale(row)
+        ]
+    )
     selected = candidates[: max(int(limit), 0)]
     rows: list[dict[str, Any]] = []
     for index, handoff_row in enumerate(selected, start=1):
@@ -11633,6 +11649,7 @@ def build_apply_queue_autofill_packet(
     closed_or_skipped = int(apply_queue_handoff.get("closed_or_skipped_count") or 0)
     ready_now = bool(
         handoff_ready
+        and not handoff_preflight_stale
         and selected_count >= target
         and browser_action_count > 0
         and selector_miss_count == 0
@@ -11642,6 +11659,7 @@ def build_apply_queue_autofill_packet(
     )
     ready_after_answers = bool(
         not ready_now
+        and not handoff_preflight_stale
         and open_after_answers_count >= target
         and selected_count >= target
         and browser_action_count > 0
@@ -11654,6 +11672,8 @@ def build_apply_queue_autofill_packet(
     status = "ready_for_supervised_browser_autofill" if ready_now else "waiting_for_confirmed_answers"
     if not ready_now and not ready_after_answers:
         status = "not_ready"
+    if handoff_preflight_stale:
+        status = "needs_fresh_live_preflight"
     blockers = _apply_queue_autofill_packet_blockers(
         target=target,
         selected_count=selected_count,
@@ -11664,6 +11684,7 @@ def build_apply_queue_autofill_packet(
         local_synthetic_submit_count=local_synthetic_submit_count,
         manual_live_checks=manual_live_checks,
         closed_or_skipped=closed_or_skipped,
+        live_preflight_stale=handoff_preflight_stale,
     )
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -11676,6 +11697,8 @@ def build_apply_queue_autofill_packet(
         "include_values": bool(include_values),
         "target_count": target,
         "candidate_count": len(candidates),
+        "raw_candidate_count": len(raw_candidates),
+        "stale_candidate_count": len(raw_candidates) if handoff_preflight_stale else stale_candidate_count,
         "selected_count": selected_count,
         "packet_status_counts": _count_by(rows, "packet_status"),
         "manifest_status_counts": _count_by(rows, "manifest_status"),
@@ -11687,6 +11710,12 @@ def build_apply_queue_autofill_packet(
             "handoff_open_after_answers_count": open_after_answers_count,
             "handoff_manual_live_check_count": manual_live_checks,
             "handoff_closed_or_skipped_count": closed_or_skipped,
+            "handoff_preflight_generated_at": handoff_freshness.get("generated_at", ""),
+            "handoff_preflight_age_seconds": handoff_freshness.get("age_seconds"),
+            "handoff_preflight_max_age_seconds": handoff_freshness.get("max_age_seconds"),
+            "handoff_preflight_stale": handoff_preflight_stale,
+            "handoff_preflight_stale_selected_check_count": handoff_freshness.get("stale_selected_check_count", 0),
+            "stale_candidate_count": len(raw_candidates) if handoff_preflight_stale else stale_candidate_count,
             "selected_count": selected_count,
             "browser_action_count": browser_action_count,
             "stop_action_count": sum(int(row.get("stop_action_count") or 0) for row in rows),
@@ -11701,6 +11730,7 @@ def build_apply_queue_autofill_packet(
         "next_commands": _apply_queue_autofill_packet_next_commands(status),
         "policy": {
             "open_only_live_verified_candidates": True,
+            "refuse_stale_live_preflight": True,
             "final_submit_remains_supervised": True,
             "real_platform_submission": False,
             "unattended_real_submit_allowed": False,
@@ -11786,6 +11816,8 @@ def render_apply_queue_autofill_packet_markdown(report: dict[str, Any]) -> str:
         f"- browser actions: {summary.get('browser_action_count', 0)}",
         f"- stop actions: {summary.get('stop_action_count', 0)}",
         f"- final submit stops: {summary.get('final_submit_stop_count', 0)}",
+        f"- handoff preflight stale: {str(bool(summary.get('handoff_preflight_stale'))).lower()}",
+        f"- handoff preflight age seconds: {summary.get('handoff_preflight_age_seconds')}",
         f"- missing inputs: {summary.get('missing_input_count', 0)}",
         f"- selector misses: {summary.get('selector_miss_count', 0)}",
         f"- local synthetic submits: {summary.get('local_synthetic_submit_count', 0)}",
@@ -13012,6 +13044,56 @@ def _apply_queue_autofill_candidate_rows(apply_queue_handoff: dict[str, Any]) ->
     return rows
 
 
+def _apply_queue_handoff_preflight_freshness(apply_queue_handoff: dict[str, Any]) -> dict[str, Any]:
+    preflight = apply_queue_handoff.get("preflight")
+    if not isinstance(preflight, dict):
+        return {
+            "generated_at": "",
+            "age_seconds": None,
+            "max_age_seconds": GOAL_LIVE_PREFLIGHT_MAX_AGE_SECONDS,
+            "stale": False,
+            "stale_selected_check_count": 0,
+        }
+    generated_at = str(preflight.get("generated_at") or "").strip()
+    age_seconds = _timestamp_age_seconds(generated_at)
+    if age_seconds is None and preflight.get("age_seconds") is not None:
+        try:
+            age_seconds = int(preflight.get("age_seconds") or 0)
+        except (TypeError, ValueError):
+            age_seconds = None
+    stale_selected_check_count = int(preflight.get("stale_selected_check_count") or 0)
+    stale = bool(
+        preflight.get("stale")
+        or stale_selected_check_count
+        or (
+            generated_at
+            and age_seconds is not None
+            and age_seconds > GOAL_LIVE_PREFLIGHT_MAX_AGE_SECONDS
+        )
+    )
+    return {
+        "generated_at": generated_at,
+        "age_seconds": age_seconds,
+        "max_age_seconds": GOAL_LIVE_PREFLIGHT_MAX_AGE_SECONDS,
+        "stale": stale,
+        "stale_selected_check_count": stale_selected_check_count,
+    }
+
+
+def _apply_queue_handoff_row_preflight_stale(row: dict[str, Any]) -> bool:
+    if bool(row.get("live_preflight_stale")):
+        return True
+    age_seconds: int | None = None
+    if row.get("live_preflight_age_seconds") is not None:
+        try:
+            age_seconds = int(row.get("live_preflight_age_seconds") or 0)
+        except (TypeError, ValueError):
+            age_seconds = None
+    if age_seconds is None:
+        age_seconds = _timestamp_age_seconds(row.get("live_preflight_generated_at"))
+    return bool(age_seconds is not None and age_seconds > GOAL_LIVE_PREFLIGHT_MAX_AGE_SECONDS)
+
+
 def _research_positions_by_key(research: dict[str, Any]) -> dict[str, dict[str, Any]]:
     positions: dict[str, dict[str, Any]] = {}
     for position in research.get("positions") or []:
@@ -13163,8 +13245,11 @@ def _apply_queue_autofill_packet_blockers(
     local_synthetic_submit_count: int,
     manual_live_checks: int,
     closed_or_skipped: int,
+    live_preflight_stale: bool = False,
 ) -> list[str]:
     blockers: list[str] = []
+    if live_preflight_stale:
+        blockers.append("live_preflight_stale")
     if selected_count < target:
         blockers.append("autofill_packet_below_target")
     if not handoff_ready:
@@ -13196,9 +13281,17 @@ def _apply_queue_autofill_packet_next_commands(status: str) -> list[str]:
             1,
             "python3 -m job_apply_agent critical-inputs-workflow --updates job_apply_agent/outbox/critical_input_full_updates_template.json --approve --approve-high-risk --apply",
         )
+    if status == "needs_fresh_live_preflight":
+        commands.extend(
+            [
+                "python3 -m job_apply_agent refresh-apply-queue --max-rounds 2 --live-check-limit 100 --force-rebuild",
+                "python3 -m job_apply_agent apply-queue-handoff",
+                "python3 -m job_apply_agent apply-queue-autofill-packet",
+            ]
+        )
     if status == "ready_for_supervised_browser_autofill":
         commands.append("python3 -m job_apply_agent apply-queue-handoff --open-browser --open-limit 100")
-    return commands
+    return _unique_strings(commands)
 
 
 def _fake_profile_for_learning_tasks(
