@@ -20,6 +20,7 @@ from job_apply_agent.core import (
     build_application_research,
     build_collection_plan_from_coverage_gate,
     build_critical_input_answer_template,
+    build_critical_input_status_report,
     build_question_export,
     build_browser_action_manifest,
     build_closed_posting_preflight,
@@ -74,6 +75,7 @@ from job_apply_agent.core import (
     render_browser_action_manifest_markdown,
     render_closed_posting_preflight_markdown,
     render_critical_input_answer_template_markdown,
+    render_critical_input_status_markdown,
     render_browser_dom_execution_plan_markdown,
     render_form_fill_plan_markdown,
     render_fake_learning_probe_markdown,
@@ -104,6 +106,7 @@ from job_apply_agent.core import (
     write_closed_posting_preflight,
     write_collection_plan,
     write_critical_input_answer_template,
+    write_critical_input_status_report,
     write_question_export,
     write_browser_dom_harness,
     write_form_fill_plan,
@@ -4258,6 +4261,75 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(profile["question_answers"]["zip_code"], "94105")
             memory = load_answer_memory(memory_path)
             self.assertIsNotNone(find_learned_answer(memory, "What's your favorite junk food?"))
+
+    def test_critical_input_status_report_groups_waiting_ready_and_supervised(self) -> None:
+        learning_tasks = {
+            "tasks": [
+                {
+                    "group_key": "profile:zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "recommended_storage": "profile",
+                    "labels": ["Zip Code"],
+                    "platforms": ["Ashby"],
+                    "required_count": 4,
+                    "persist_allowed": True,
+                },
+                {
+                    "group_key": "answer_memory:favorite_junk_food",
+                    "question": "What's your favorite junk food?",
+                    "recommended_storage": "answer_memory",
+                    "labels": ["What's your favorite junk food?"],
+                    "platforms": ["Greenhouse"],
+                    "required_count": 2,
+                    "persist_allowed": True,
+                },
+                {
+                    "group_key": "supervised_confirmation:policy_acknowledgement",
+                    "question": "May automation mark applicant privacy acknowledgement?",
+                    "recommended_storage": "supervised_confirmation",
+                    "answer_scope": "supervised_only",
+                    "labels": ["Privacy policy"],
+                    "platforms": ["Lever"],
+                    "required_count": 1,
+                    "persist_allowed": False,
+                },
+            ],
+        }
+        pack = build_learning_approval_pack(learning_tasks, {"manual_gates": [{"label": "Submit"}]})
+        answers = build_critical_input_answer_template(pack)
+        for item in answers["answers"]:
+            if item["group_key"] == "profile:zip_or_postal_code":
+                item["user_answer"] = "94105"
+                item["approval_decision"] = "approved"
+            elif item["group_key"] == "answer_memory:favorite_junk_food":
+                item["user_answer"] = "Potato chips"
+
+        report = build_critical_input_status_report(pack, answers)
+        self.assertEqual(report["summary"]["input_count"], 3)
+        self.assertEqual(report["summary"]["ready_to_apply_count"], 1)
+        self.assertEqual(report["summary"]["waiting_for_approval_count"], 1)
+        self.assertEqual(report["summary"]["supervised_only_count"], 1)
+        self.assertFalse(report["summary"]["ready_for_autofill_recheck"])
+        statuses = {row["group_key"]: row["status"] for row in report["rows"]}
+        self.assertEqual(statuses["profile:zip_or_postal_code"], "ready_to_apply")
+        self.assertEqual(statuses["answer_memory:favorite_junk_food"], "waiting_for_approval")
+        self.assertEqual(statuses["supervised_confirmation:policy_acknowledgement"], "supervised_only")
+        markdown = render_critical_input_status_markdown(report)
+        self.assertIn("Critical Input Status", markdown)
+        self.assertIn("waiting_for_approval", markdown)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            json_output = Path(temp_dir) / "status.json"
+            markdown_output = Path(temp_dir) / "status.md"
+            written = write_critical_input_status_report(
+                pack,
+                json_output,
+                markdown_output,
+                answers_payload=answers,
+            )
+            self.assertEqual(written["summary"]["ready_to_apply_count"], 1)
+            self.assertTrue(json_output.exists())
+            self.assertTrue(markdown_output.exists())
 
     def test_fake_learning_probe_clears_learning_blockers_without_real_submission(self) -> None:
         research = {

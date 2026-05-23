@@ -396,8 +396,21 @@ job_apply_agent/outbox/critical_input_answers_latest.md
 ```
 
 After filling `user_answer` and setting `approval_decision` to `approved` for
-truthful reusable rows in `critical_input_answers_latest.json`, apply the
-critical inputs with a dry run first:
+truthful reusable rows in `critical_input_answers_latest.json`, check what is
+ready versus still waiting:
+
+```bash
+python3 -m job_apply_agent critical-inputs-status
+```
+
+This writes:
+
+```text
+job_apply_agent/outbox/critical_input_status_latest.json
+job_apply_agent/outbox/critical_input_status_latest.md
+```
+
+Then apply the critical inputs with a dry run first:
 
 ```bash
 python3 -m job_apply_agent apply-critical-inputs \

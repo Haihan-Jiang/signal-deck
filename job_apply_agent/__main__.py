@@ -42,6 +42,7 @@ from .core import (
     write_learning_approval_pack,
     write_learning_task_template,
     write_critical_input_answer_template,
+    write_critical_input_status_report,
     write_pre_submit_review,
     write_question_export,
     write_position_readiness_report,
@@ -84,6 +85,8 @@ DEFAULT_LEARNING_APPROVAL_PACK_JSON = Path(__file__).with_name("outbox") / "lear
 DEFAULT_LEARNING_APPROVAL_PACK_MARKDOWN = Path(__file__).with_name("outbox") / "learning_approval_pack_latest.md"
 DEFAULT_CRITICAL_INPUT_ANSWERS_JSON = Path(__file__).with_name("outbox") / "critical_input_answers_latest.json"
 DEFAULT_CRITICAL_INPUT_ANSWERS_MARKDOWN = Path(__file__).with_name("outbox") / "critical_input_answers_latest.md"
+DEFAULT_CRITICAL_INPUT_STATUS_JSON = Path(__file__).with_name("outbox") / "critical_input_status_latest.json"
+DEFAULT_CRITICAL_INPUT_STATUS_MARKDOWN = Path(__file__).with_name("outbox") / "critical_input_status_latest.md"
 DEFAULT_FAKE_LEARNING_PROBE_JSON = Path(__file__).with_name("outbox") / "fake_learning_probe_latest.json"
 DEFAULT_FAKE_LEARNING_PROBE_MARKDOWN = Path(__file__).with_name("outbox") / "fake_learning_probe_latest.md"
 DEFAULT_FAKE_POSITION_REHEARSAL_JSON = Path(__file__).with_name("outbox") / "fake_position_rehearsal_latest.json"
@@ -370,6 +373,18 @@ def main() -> int:
     critical_inputs_template_parser.add_argument(
         "--markdown-output",
         default=str(DEFAULT_CRITICAL_INPUT_ANSWERS_MARKDOWN),
+    )
+
+    critical_inputs_status_parser = subparsers.add_parser(
+        "critical-inputs-status",
+        help="summarize which critical inputs are ready, waiting, or supervised-only",
+    )
+    critical_inputs_status_parser.add_argument("--approval-pack", default=str(DEFAULT_LEARNING_APPROVAL_PACK_JSON))
+    critical_inputs_status_parser.add_argument("--answers", default=str(DEFAULT_CRITICAL_INPUT_ANSWERS_JSON))
+    critical_inputs_status_parser.add_argument("--json-output", default=str(DEFAULT_CRITICAL_INPUT_STATUS_JSON))
+    critical_inputs_status_parser.add_argument(
+        "--markdown-output",
+        default=str(DEFAULT_CRITICAL_INPUT_STATUS_MARKDOWN),
     )
 
     apply_learning_parser = subparsers.add_parser(
@@ -1015,6 +1030,32 @@ def main() -> int:
         print(f"Wrote critical input answer JSON to {args.json_output}")
         print(f"Wrote critical input answer Markdown to {args.markdown_output}")
         print(f"Answers needed: {template.get('answer_count', 0)}")
+        return 0
+
+    if args.command == "critical-inputs-status":
+        approval_pack_path = Path(args.approval_pack)
+        if not approval_pack_path.exists():
+            raise FileNotFoundError(f"approval pack not found: {args.approval_pack}")
+        answers_path = Path(args.answers) if args.answers else None
+        answers_payload = (
+            json.loads(answers_path.read_text(encoding="utf-8"))
+            if answers_path and answers_path.exists()
+            else None
+        )
+        report = write_critical_input_status_report(
+            json.loads(approval_pack_path.read_text(encoding="utf-8")),
+            args.json_output,
+            args.markdown_output,
+            answers_payload=answers_payload,
+        )
+        summary = report.get("summary") or {}
+        print(f"Wrote critical input status JSON to {args.json_output}")
+        print(f"Wrote critical input status Markdown to {args.markdown_output}")
+        print(f"Inputs: {summary.get('input_count', 0)}")
+        print(f"Ready to apply: {summary.get('ready_to_apply_count', 0)}")
+        print(f"Waiting: {summary.get('waiting_count', 0)}")
+        print(f"Supervised only: {summary.get('supervised_only_count', 0)}")
+        print(f"Ready for autofill recheck: {str(bool(summary.get('ready_for_autofill_recheck'))).lower()}")
         return 0
 
     if args.command == "apply-learning":

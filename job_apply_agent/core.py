@@ -4209,6 +4209,135 @@ def render_critical_input_answer_template_markdown(template: dict[str, Any]) -> 
     return "\n".join(lines) + "\n"
 
 
+def build_critical_input_status_report(
+    approval_pack: dict[str, Any],
+    answers_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = (
+        _approval_pack_with_answer_template(approval_pack, answers_payload)
+        if isinstance(answers_payload, dict)
+        else approval_pack
+    )
+    rows: list[dict[str, Any]] = []
+    for index, item in enumerate(payload.get("critical_inputs", []), start=1):
+        if not isinstance(item, dict):
+            continue
+        status = _critical_input_answer_status(item)
+        rows.append(
+            {
+                "input_id": _critical_input_answer_id(item, index),
+                "status": status,
+                "input_type": item.get("input_type"),
+                "group_key": item.get("group_key"),
+                "question": item.get("question"),
+                "approval_decision": item.get("approval_decision", ""),
+                "has_user_answer": bool(str(item.get("user_answer") or "").strip()),
+                "approval_risk": item.get("approval_risk"),
+                "persist_allowed": bool(item.get("persist_allowed")),
+                "storage_after_approval": item.get("storage_after_approval"),
+                "automation_after_answer": item.get("automation_after_answer"),
+                "required_count": item.get("required_count", 0),
+                "platforms": item.get("platforms") or [],
+                "next_action": _critical_input_status_next_action(status),
+            }
+        )
+    status_counts = _count_by(rows, "status")
+    ready_rows = [row for row in rows if row.get("status") == "ready_to_apply"]
+    waiting_rows = [
+        row
+        for row in rows
+        if row.get("status") in {"waiting_for_answer", "waiting_for_approval", "approved_missing_answer"}
+    ]
+    summary = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "input_count": len(rows),
+        "ready_to_apply_count": len(ready_rows),
+        "waiting_count": len(waiting_rows),
+        "waiting_for_answer_count": status_counts.get("waiting_for_answer", 0),
+        "waiting_for_approval_count": status_counts.get("waiting_for_approval", 0),
+        "approved_missing_answer_count": status_counts.get("approved_missing_answer", 0),
+        "supervised_only_count": status_counts.get("supervised_only", 0),
+        "profile_ready_count": sum(1 for row in ready_rows if row.get("storage_after_approval") == "profile"),
+        "resume_fact_ready_count": sum(
+            1 for row in ready_rows if row.get("storage_after_approval") == "resume_facts"
+        ),
+        "answer_memory_ready_count": sum(
+            1 for row in ready_rows if row.get("storage_after_approval") == "answer_memory"
+        ),
+        "high_risk_ready_count": sum(
+            1 for row in ready_rows if row.get("input_type") == "high_risk_exact_confirmation"
+        ),
+        "ready_for_apply_critical_inputs": bool(ready_rows),
+        "ready_for_autofill_recheck": not waiting_rows,
+        "manual_gate_count": int((approval_pack.get("summary") or {}).get("manual_gate_count") or 0),
+        "real_submit_policy": "supervised_final_submit_only",
+    }
+    return {
+        "generated_at": summary["generated_at"],
+        "summary": summary,
+        "status_counts": status_counts,
+        "rows": rows,
+        "next_commands": [
+            "python3 -m job_apply_agent apply-critical-inputs --answers job_apply_agent/outbox/critical_input_answers_latest.json --dry-run",
+            "python3 -m job_apply_agent apply-critical-inputs --answers job_apply_agent/outbox/critical_input_answers_latest.json",
+            "python3 -m job_apply_agent gaps && python3 -m job_apply_agent readiness && python3 -m job_apply_agent export-questions",
+        ],
+    }
+
+
+def write_critical_input_status_report(
+    approval_pack: dict[str, Any],
+    json_output: str | Path,
+    markdown_output: str | Path,
+    answers_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    report = build_critical_input_status_report(approval_pack, answers_payload=answers_payload)
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(render_critical_input_status_markdown(report), encoding="utf-8")
+    return report
+
+
+def render_critical_input_status_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    lines = [
+        "# Critical Input Status",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        f"Inputs: {summary.get('input_count', 0)}",
+        f"Ready to apply: {summary.get('ready_to_apply_count', 0)}",
+        f"Waiting: {summary.get('waiting_count', 0)}",
+        f"Supervised only: {summary.get('supervised_only_count', 0)}",
+        f"Ready for autofill recheck: {str(bool(summary.get('ready_for_autofill_recheck'))).lower()}",
+        f"Real submit policy: {summary.get('real_submit_policy')}",
+        "",
+        "## Status Counts",
+        "",
+    ]
+    for status, count in sorted((report.get("status_counts") or {}).items()):
+        lines.append(f"- {status}: {count}")
+    lines.extend(["", "## Inputs", ""])
+    rows = report.get("rows") or []
+    if not rows:
+        lines.append("- None")
+    for row in rows:
+        lines.append(
+            "- {status}: {question}".format(
+                status=row.get("status"),
+                question=row.get("question") or "Unknown question",
+            )
+        )
+        lines.append(f"  input_id: {row.get('input_id')}")
+        lines.append(f"  next: {row.get('next_action')}")
+    lines.extend(["", "## Next Commands", ""])
+    for command in report.get("next_commands") or []:
+        lines.append(f"- `{command}`")
+    return "\n".join(lines) + "\n"
+
+
 def apply_learning_task_answers(
     tasks_path: str | Path,
     profile_path: str | Path,
@@ -4450,6 +4579,32 @@ def _critical_input_answer_id(item: dict[str, Any], index: int) -> str:
     question = _normalize(str(item.get("question") or ""))
     seed = group_key or question or f"critical input {index}"
     return re.sub(r"[^a-z0-9]+", "_", seed).strip("_")[:80] or f"critical_input_{index}"
+
+
+def _critical_input_answer_status(item: dict[str, Any]) -> str:
+    if item.get("input_type") == "supervised_browser_review_only":
+        return "supervised_only"
+    approved = _approval_decision_is_approved(item.get("approval_decision"))
+    has_answer = bool(str(item.get("user_answer") or "").strip())
+    if approved and has_answer:
+        return "ready_to_apply"
+    if approved and not has_answer:
+        return "approved_missing_answer"
+    if has_answer:
+        return "waiting_for_approval"
+    return "waiting_for_answer"
+
+
+def _critical_input_status_next_action(status: str) -> str:
+    if status == "ready_to_apply":
+        return "apply-critical-inputs can persist this value after dry-run review"
+    if status == "waiting_for_approval":
+        return "set approval_decision=approved if the answer is truthful and reusable"
+    if status == "approved_missing_answer":
+        return "fill user_answer before applying"
+    if status == "supervised_only":
+        return "handle in browser during supervised review; do not persist"
+    return "fill user_answer and approve only if truthful and reusable"
 
 
 def _critical_input_task_key(item: dict[str, Any]) -> str:
