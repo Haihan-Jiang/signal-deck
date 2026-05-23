@@ -66,6 +66,7 @@ from job_apply_agent.core import (
     build_telegram_final_answer_blocker_alert,
     build_telegram_job_alert,
     build_synthetic_learning_state,
+    build_synthetic_final_answer_reply_text,
     build_synthetic_unblocker_compact_updates,
     build_submission_safety_audit,
     classify_application_prompt,
@@ -8550,6 +8551,42 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(reply_report["ignored_line_count"], 0)
         self.assertTrue(reply_report["global_confirm_high_risk"])
         self.assertEqual(len(reply_report["confirmed_high_risk_aliases"]), 5)
+        self.assertTrue(intake_report["ready_for_finalize"])
+
+    def test_synthetic_final_answer_reply_text_rehearses_parser_without_real_values(self) -> None:
+        unblockers = {
+            "unblockers": [
+                {
+                    "input_id": "profile_zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "high_risk": False,
+                    "required_count": 4,
+                },
+                {
+                    "input_id": "answer_memory_citizenship_status_default_policy",
+                    "input_type": "high_risk_exact_confirmation",
+                    "question": "What citizenship answers should automation use?",
+                    "high_risk": True,
+                    "required_count": 7,
+                },
+            ]
+        }
+        template = build_final_answer_intake_template(unblockers)
+
+        reply_text = build_synthetic_final_answer_reply_text(template)
+        reply_report = build_final_answer_reply_intake(
+            template,
+            reply_text,
+            allow_synthetic_values=True,
+        )
+        intake_report = build_final_answer_intake_update(unblockers, reply_report["intake_payload"])
+
+        self.assertIn("zip_or_postal_code: 99999", reply_text)
+        self.assertIn("citizenship_status_confirmed: yes", reply_text)
+        self.assertIn("Synthetic rehearsal answer", reply_text)
+        self.assertEqual(reply_report["answer_count"], 2)
+        self.assertEqual(reply_report["fake_marker_count"], 1)
+        self.assertEqual(reply_report["confirmed_high_risk_aliases"], ["citizenship_status"])
         self.assertTrue(intake_report["ready_for_finalize"])
 
     def test_final_answer_reply_template_placeholders_do_not_finalize(self) -> None:

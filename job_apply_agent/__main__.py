@@ -80,6 +80,7 @@ from .core import (
     write_final_answer_intake_update,
     write_final_answer_blocker_report,
     write_final_answer_reply_intake,
+    build_synthetic_final_answer_reply_text,
     build_synthetic_unblocker_compact_updates,
     write_goal_readiness_audit,
     write_critical_input_suggestion_packet,
@@ -3319,27 +3320,44 @@ def main() -> int:
         args.fail_on_not_ready = True
 
     if args.command == "rehearse-after-answers":
-        args.command = "post-answer-pipeline"
-        args.compact_updates = str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_UPDATES_JSON)
+        post_answer_json_output = args.json_output
+        post_answer_markdown_output = args.markdown_output
+        template_path = Path(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON)
+        if not template_path.exists():
+            raise FileNotFoundError(f"final answer intake template not found: {template_path}")
+        args.command = "final-answer-reply"
+        args.template = str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON)
         args.full_template = str(DEFAULT_CRITICAL_INPUT_FULL_UPDATES_JSON)
         args.unblockers = str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_JSON)
+        args.reply_text = build_synthetic_final_answer_reply_text(
+            json.loads(template_path.read_text(encoding="utf-8"))
+        )
+        args.reply_file = None
+        args.reply_stdin = False
+        args.json_output = str(DEFAULT_FINAL_ANSWER_REPLY_JSON)
+        args.markdown_output = str(DEFAULT_FINAL_ANSWER_REPLY_MARKDOWN)
+        args.intake_output = str(DEFAULT_FINAL_ANSWER_REPLY_PAYLOAD_JSON)
+        args.compact_updates_output = str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_UPDATES_JSON)
         args.confirmed_updates_output = str(DEFAULT_POST_ANSWER_SYNTHETIC_CONFIRMED_UPDATES_JSON)
         args.confirmed_report_json_output = str(DEFAULT_POST_ANSWER_SYNTHETIC_CONFIRMED_UPDATES_REPORT_JSON)
         args.confirmed_report_markdown_output = str(DEFAULT_POST_ANSWER_SYNTHETIC_CONFIRMED_UPDATES_REPORT_MARKDOWN)
-        args.final_answer_intake_json = None
         args.final_answer_intake_report_json = str(DEFAULT_FINAL_ANSWER_REPLY_SYNTHETIC_INTAKE_REPORT_JSON)
         args.final_answer_intake_report_markdown = str(DEFAULT_FINAL_ANSWER_REPLY_SYNTHETIC_INTAKE_REPORT_MARKDOWN)
         args.confirm_high_risk = False
-        args.synthetic_final_answers = True
+        args.finalize = False
+        args.run_post_answer_pipeline = False
+        args.validate_only = False
         args.synthetic_rehearse_queue = True
-        args.apply = False
-        args.live_check = False
-        args.live_check_limit = 100
-        args.live_check_timeout = 25.0
-        args.include_values = False
-        args.open_browser = False
-        args.open_limit = 100
+        args.post_answer_apply = False
+        args.post_answer_live_check = False
+        args.post_answer_live_check_limit = 100
+        args.post_answer_live_check_timeout = 25.0
+        args.post_answer_include_values = False
+        args.post_answer_open_browser = False
+        args.post_answer_open_limit = 100
         args.review_log = str(DEFAULT_REVIEW_LOG)
+        args.post_answer_json_output = post_answer_json_output
+        args.post_answer_markdown_output = post_answer_markdown_output
         args.fail_on_not_ready = True
 
     if args.command == "final-answer-autopilot":

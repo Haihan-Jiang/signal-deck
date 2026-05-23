@@ -4977,6 +4977,23 @@ def build_synthetic_unblocker_compact_updates(unblocker_packet: dict[str, Any]) 
     return updates
 
 
+def build_synthetic_final_answer_reply_text(template: dict[str, Any]) -> str:
+    if not isinstance(template, dict):
+        raise ValueError("final answer intake template must be a JSON object")
+    lines: list[str] = []
+    for field in template.get("fields") or []:
+        if not isinstance(field, dict):
+            continue
+        alias = str(field.get("alias") or "").strip()
+        if not alias:
+            continue
+        answer = _synthetic_final_unblocker_answer(field)
+        lines.append(f"{alias}: {answer}")
+        if _synthetic_final_unblocker_is_high_risk(field):
+            lines.append(f"{alias}_confirmed: yes")
+    return "\n".join(lines).rstrip() + ("\n" if lines else "")
+
+
 FINAL_ANSWER_INTAKE_ALIASES = {
     "profile_zip_or_postal_code": "zip_or_postal_code",
     "answer_memory_citizenship_status_default_policy": "citizenship_status",
