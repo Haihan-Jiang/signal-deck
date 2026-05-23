@@ -1201,6 +1201,11 @@ def main() -> int:
     resume_after_answers_parser.add_argument("--open-browser", action="store_true")
     resume_after_answers_parser.add_argument("--open-limit", type=int, default=100)
     resume_after_answers_parser.add_argument("--review-log", default=str(DEFAULT_REVIEW_LOG))
+    resume_after_answers_parser.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="validate the filled reply without writing output files, applying answers, live-checking, or opening pages",
+    )
 
     rehearse_after_answers_parser = subparsers.add_parser(
         "rehearse-after-answers",
@@ -2993,6 +2998,7 @@ def main() -> int:
     if args.command == "resume-after-answers":
         resume_reply_text = getattr(args, "reply_text", None)
         resume_reply_file = None if resume_reply_text else args.reply_file
+        resume_validate_only = bool(getattr(args, "validate_only", False))
         args.command = "final-answer-reply"
         args.template = str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON)
         args.unblockers = str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_JSON)
@@ -3010,14 +3016,15 @@ def main() -> int:
         args.confirmed_report_markdown_output = str(DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_MARKDOWN)
         args.confirm_high_risk = False
         args.finalize = False
-        args.run_post_answer_pipeline = True
+        args.run_post_answer_pipeline = not resume_validate_only
+        args.validate_only = resume_validate_only
         args.synthetic_rehearse_queue = False
-        args.post_answer_apply = True
-        args.post_answer_live_check = True
+        args.post_answer_apply = not resume_validate_only
+        args.post_answer_live_check = not resume_validate_only
         args.post_answer_live_check_limit = args.live_check_limit
         args.post_answer_live_check_timeout = args.live_check_timeout
-        args.post_answer_include_values = True
-        args.post_answer_open_browser = bool(args.open_browser)
+        args.post_answer_include_values = not resume_validate_only
+        args.post_answer_open_browser = bool(args.open_browser) and not resume_validate_only
         args.post_answer_open_limit = args.open_limit
         args.post_answer_json_output = str(DEFAULT_POST_ANSWER_PIPELINE_JSON)
         args.post_answer_markdown_output = str(DEFAULT_POST_ANSWER_PIPELINE_MARKDOWN)

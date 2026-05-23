@@ -7046,7 +7046,8 @@ class JobApplyAgentTests(unittest.TestCase):
         reply_template_text = render_final_answer_reply_template_text(report)
         self.assertIn("rehearse-after-answers", report["next_commands"][0])
         self.assertIn("resume-after-answers --reply-text", report["next_commands"][1])
-        self.assertIn("--run-post-answer-pipeline", report["next_commands"][2])
+        self.assertIn("--validate-only", report["next_commands"][1])
+        self.assertIn("--validate-only", report["next_commands"][2])
         self.assertIn("resume-after-answers", report["next_commands"][3])
         self.assertIn("Final Answer Blockers", markdown)
         self.assertIn("citizenship_status", markdown)
@@ -7293,6 +7294,7 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(resume_help.returncode, 0, resume_help.stderr)
             self.assertIn("--reply-text", resume_help.stdout)
             self.assertIn("--reply-file", resume_help.stdout)
+            self.assertIn("--validate-only", resume_help.stdout)
 
     def test_final_answer_reply_accepts_chinese_colon_and_confirmations(self) -> None:
         unblockers = {
@@ -7530,6 +7532,24 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertFalse((root / "validate_payload.json").exists())
             self.assertFalse((root / "validate_compact.json").exists())
             self.assertFalse((root / "validate_intake.json").exists())
+            resume_validate_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "job_apply_agent",
+                    "resume-after-answers",
+                    "--reply-file",
+                    str(reply_path),
+                    "--validate-only",
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(resume_validate_result.returncode, 2)
+            self.assertIn("Validated final answer reply without writing files.", resume_validate_result.stdout)
+            self.assertIn("Needs specificity aliases", resume_validate_result.stdout)
 
     def test_final_answer_intake_server_post_answer_flags_are_guarded(self) -> None:
         base_args = {
@@ -9290,6 +9310,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertTrue(report["summary"]["synthetic_unblocker_proof_complete"])
         self.assertEqual(report["summary"]["synthetic_final_unblocker_update_count"], 6)
         self.assertEqual(report["confirmed_answer_runbook"][0]["status"], "waiting_for_user")
+        self.assertIn("--validate-only", report["confirmed_answer_runbook"][2]["action"])
         self.assertIn("refresh-apply-queue", report["confirmed_answer_runbook"][5]["action"])
         self.assertIn("--include-values", report["confirmed_answer_runbook"][5]["action"])
         self.assertIn("resume-after-answers", report["one_command_resume"])
@@ -9299,6 +9320,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("final-answer-blockers", report["next_commands"][1])
         self.assertIn("rehearse-after-answers", report["next_commands"][2])
         self.assertIn("resume-after-answers --reply-text", report["next_commands"][3])
+        self.assertIn("--validate-only", report["next_commands"][3])
         self.assertIn("final-answer-reply --reply-file", report["next_commands"][4])
         self.assertIn("job_apply_agent/outbox/final_answer_reply_template_latest.txt", report["next_commands"][4])
         self.assertIn("--run-post-answer-pipeline", report["next_commands"][4])

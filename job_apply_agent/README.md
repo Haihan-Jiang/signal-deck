@@ -797,14 +797,15 @@ For the plain-text reply template, validate the filled text before writing any
 main outbox artifacts:
 
 ```bash
-python3 -m job_apply_agent final-answer-reply \
+python3 -m job_apply_agent resume-after-answers \
   --reply-file job_apply_agent/outbox/final_answer_reply_template_latest.txt \
   --validate-only \
   --fail-on-not-ready
 ```
 
 This prints the missing, unconfirmed, or too-vague aliases and does not write
-profile/memory, compact updates, intake reports, or post-answer pipeline files.
+profile/memory, compact updates, intake reports, live-check results, or
+post-answer pipeline files.
 
 To have the local form continue into the post-answer reports immediately after
 a ready save, start it with:
