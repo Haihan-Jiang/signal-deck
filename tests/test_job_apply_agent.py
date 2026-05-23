@@ -7015,11 +7015,13 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("citizenship_status", markdown)
         self.assertIn("## Reply Template", markdown)
         self.assertIn("citizenship_status: <fill>", markdown)
+        self.assertIn("\u786e\u8ba4", markdown)
         self.assertIn("Job automation needs final answers", alert)
         self.assertIn("citizenship_status", alert)
         self.assertIn("Reply format:", alert)
         self.assertIn("citizenship_status: <fill>", alert)
         self.assertIn("citizenship_status_confirmed: yes", alert)
+        self.assertIn("\u786e\u8ba4", alert)
         self.assertNotIn("98004", json.dumps(report))
         self.assertNotIn("98004", markdown)
         self.assertNotIn("98004", alert)
@@ -7229,6 +7231,40 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(post_answer_report["ready_for_workflow"])
             self.assertFalse(post_answer_report["apply_requested"])
             self.assertIn("Wrote final answer intake payload JSON", cli_result.stdout)
+
+    def test_final_answer_reply_accepts_chinese_colon_and_confirmations(self) -> None:
+        unblockers = {
+            "unblockers": [
+                {
+                    "input_id": "profile_zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "high_risk": False,
+                    "required_count": 56,
+                },
+                {
+                    "input_id": "answer_memory_health_requirement_default_policy",
+                    "question": "What health requirement answer should automation use?",
+                    "high_risk": True,
+                    "required_count": 2,
+                },
+            ]
+        }
+        template = build_final_answer_intake_template(unblockers)
+        reply_text = "\n".join(
+            [
+                "1. zip_or_postal_code\uff1a98004",
+                "2. health_requirement\uff1aI can comply with standard health or vaccination requirements; no exceptions.",
+                "3. health_requirement_confirmed\uff1a\u786e\u8ba4",
+            ]
+        )
+
+        reply_report = build_final_answer_reply_intake(template, reply_text)
+        intake_report = build_final_answer_intake_update(unblockers, reply_report["intake_payload"])
+
+        self.assertEqual(reply_report["answer_count"], 2)
+        self.assertEqual(reply_report["unknown_key_count"], 0)
+        self.assertEqual(reply_report["confirmed_high_risk_aliases"], ["health_requirement"])
+        self.assertTrue(intake_report["ready_for_finalize"])
 
     def test_final_answer_intake_server_post_answer_flags_are_guarded(self) -> None:
         base_args = {

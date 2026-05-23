@@ -5371,7 +5371,7 @@ def render_final_answer_reply_intake_markdown(report: dict[str, Any]) -> str:
 
 def _split_final_answer_reply_line(line: str) -> tuple[str, str]:
     cleaned = re.sub(r"^\s*(?:[-*]\s+|\d+[.)]\s+)", "", line).strip()
-    for separator in [":", "="]:
+    for separator in [":", "\uff1a", "=", "\uff1d"]:
         if separator in cleaned:
             key, value = cleaned.split(separator, 1)
             return key.strip(), value.strip()
@@ -5401,7 +5401,26 @@ def _final_answer_reply_confirmation_alias(normalized_key: str, alias_lookup: di
 
 def _final_answer_reply_truthy(value: str) -> bool:
     normalized = re.sub(r"\s+", " ", str(value or "").strip().lower())
-    return normalized in {"1", "true", "yes", "y", "approved", "approve", "confirmed", "confirm", "ok", "okay"}
+    return normalized in {
+        "1",
+        "true",
+        "yes",
+        "y",
+        "approved",
+        "approve",
+        "confirmed",
+        "confirm",
+        "ok",
+        "okay",
+        "\u662f",
+        "\u662f\u7684",
+        "\u786e\u8ba4",
+        "\u5df2\u786e\u8ba4",
+        "\u540c\u610f",
+        "\u53ef\u4ee5",
+        "\u53ef",
+        "\u5bf9",
+    }
 
 
 def write_final_answer_intake_template(
@@ -20325,6 +20344,10 @@ def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
     lines.extend(["", "## Reply Template", ""])
     if reply_template:
         lines.extend(["```text", reply_template, "```"])
+        lines.append(
+            "Parser note: confirmation values may be `yes` or `\u786e\u8ba4`; "
+            "English `:` and Chinese `\uff1a` separators are both accepted."
+        )
     else:
         lines.append("- None")
     lines.extend(["", "## Next Commands", ""])
@@ -20373,6 +20396,7 @@ def build_telegram_final_answer_blocker_alert(
             lines.append(line)
         if len(reply_template_lines) > max_items * 2:
             lines.append("... full template in job_apply_agent/outbox/final_answer_blockers_latest.md")
+        lines.append("Confirm values can be yes or \u786e\u8ba4; : and \uff1a both work.")
         lines.append("")
     lines.append("Paste filled lines back to Codex. This alert does not include your answers.")
     return _truncate_telegram_text("\n".join(lines))
