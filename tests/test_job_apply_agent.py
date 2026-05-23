@@ -28,6 +28,7 @@ from job_apply_agent.core import (
     build_critical_input_questionnaire,
     build_critical_input_suggestion_packet,
     build_critical_input_status_report,
+    build_critical_input_unblocker_packet,
     build_question_export,
     build_browser_action_manifest,
     build_closed_posting_preflight,
@@ -98,6 +99,8 @@ from job_apply_agent.core import (
     render_critical_input_questionnaire_markdown,
     render_critical_input_suggestions_markdown,
     render_critical_input_status_markdown,
+    render_critical_input_unblocker_html,
+    render_critical_input_unblocker_markdown,
     render_browser_dom_execution_plan_markdown,
     render_form_fill_plan_markdown,
     render_fake_learning_probe_markdown,
@@ -139,6 +142,7 @@ from job_apply_agent.core import (
     write_critical_input_questionnaire,
     write_critical_input_suggestion_packet,
     write_critical_input_status_report,
+    write_critical_input_unblocker_packet,
     write_question_export,
     write_browser_dom_harness,
     write_form_fill_plan,
@@ -6010,6 +6014,101 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(json_output.exists())
             self.assertTrue(markdown_output.exists())
             self.assertIn("98004", markdown_output.read_text())
+
+    def test_critical_input_unblocker_packet_filters_only_missing_suggestions(self) -> None:
+        suggestions_payload = {
+            "critical_inputs": [
+                {
+                    "input_id": "profile_zip_or_postal_code",
+                    "input_type": "profile_or_resume_fact",
+                    "group_key": "profile:zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "required_user_response": "Provide exact ZIP/postal code.",
+                    "suggested_answer": "",
+                    "suggestion_source": "profile.location_without_zip",
+                    "suggestion_note": "Profile has city but no exact ZIP.",
+                    "required_count": 4,
+                    "platforms": ["Ashby"],
+                    "labels": ["Zip Code"],
+                },
+                {
+                    "input_id": "answer_memory_citizenship_status_default_policy",
+                    "input_type": "high_risk_exact_confirmation",
+                    "group_key": "answer_memory:citizenship_status:default_policy",
+                    "question": "What citizenship answers should automation use?",
+                    "required_user_response": "Confirm exact truthful legal answer.",
+                    "suggested_answer": "",
+                    "suggestion_source": "requires_exact_user_confirmation",
+                    "suggestion_note": "Citizenship must not be inferred.",
+                    "required_count": 2,
+                    "platforms": ["Greenhouse"],
+                    "labels": ["Are you a U.S. Citizen?"],
+                },
+                {
+                    "input_id": "answer_memory_startup_culture",
+                    "input_type": "exact_prompt_answer",
+                    "group_key": "answer_memory:startup_culture",
+                    "question": "What aspects of startup culture resonate with you?",
+                    "suggested_answer": "Ownership and fast feedback loops.",
+                    "required_count": 1,
+                    "platforms": ["Ashby"],
+                    "labels": ["What aspects of startup culture resonate with you?"],
+                },
+            ],
+        }
+        impact_payload = {
+            "input_impacts": [
+                {
+                    "input_id": "profile_zip_or_postal_code",
+                    "data_blocking_prompts_delta": -4,
+                    "ready_prompts_delta": 4,
+                    "positions_ready_for_autofill_delta": 5,
+                }
+            ]
+        }
+
+        packet = build_critical_input_unblocker_packet(
+            suggestions_payload,
+            impact_payload=impact_payload,
+        )
+        markdown = render_critical_input_unblocker_markdown(packet)
+        html = render_critical_input_unblocker_html(packet)
+
+        self.assertEqual(packet["input_count"], 2)
+        self.assertEqual(packet["high_risk_count"], 1)
+        self.assertEqual(packet["profile_or_resume_fact_count"], 1)
+        self.assertEqual(packet["unblockers"][0]["input_id"], "profile_zip_or_postal_code")
+        self.assertEqual(packet["compact_updates_template"]["profile_zip_or_postal_code"], "")
+        self.assertEqual(
+            packet["compact_updates_template"]["answer_memory_citizenship_status_default_policy"],
+            {
+                "user_answer": "",
+                "approval_decision": "approved",
+                "high_risk_user_confirmed": False,
+            },
+        )
+        self.assertNotIn("answer_memory_startup_culture", packet["compact_updates_template"])
+        self.assertIn("--approve-high-risk", packet["workflow_command"])
+        self.assertIn("Critical Input Final Unblockers", markdown)
+        self.assertIn("Build compact JSON", html)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            json_output = root / "unblockers.json"
+            markdown_output = root / "unblockers.md"
+            html_output = root / "unblockers.html"
+            written = write_critical_input_unblocker_packet(
+                suggestions_payload,
+                json_output,
+                markdown_output,
+                html_output,
+                impact_payload=impact_payload,
+            )
+
+            self.assertEqual(written["input_count"], 2)
+            self.assertTrue(json_output.exists())
+            self.assertTrue(markdown_output.exists())
+            self.assertTrue(html_output.exists())
 
     def test_critical_input_questionnaire_outputs_compact_json_html_form(self) -> None:
         learning_tasks = {

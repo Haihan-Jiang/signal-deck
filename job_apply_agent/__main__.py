@@ -44,6 +44,7 @@ from .core import (
     write_critical_input_impact_report,
     write_critical_input_preflight,
     write_critical_input_questionnaire,
+    write_critical_input_unblocker_packet,
     write_form_fill_plan,
     write_fake_learning_probe,
     write_fake_critical_input_probe,
@@ -119,6 +120,12 @@ DEFAULT_CRITICAL_INPUT_IMPACT_HTML = Path(__file__).with_name("outbox") / "criti
 DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_JSON = Path(__file__).with_name("outbox") / "critical_input_questionnaire_latest.json"
 DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_MARKDOWN = Path(__file__).with_name("outbox") / "critical_input_questionnaire_latest.md"
 DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_HTML = Path(__file__).with_name("outbox") / "critical_input_questionnaire_latest.html"
+DEFAULT_CRITICAL_INPUT_UNBLOCKERS_JSON = Path(__file__).with_name("outbox") / "critical_input_unblockers_latest.json"
+DEFAULT_CRITICAL_INPUT_UNBLOCKERS_MARKDOWN = Path(__file__).with_name("outbox") / "critical_input_unblockers_latest.md"
+DEFAULT_CRITICAL_INPUT_UNBLOCKERS_HTML = Path(__file__).with_name("outbox") / "critical_input_unblockers_latest.html"
+DEFAULT_CRITICAL_INPUT_UNBLOCKERS_UPDATES_JSON = (
+    Path(__file__).with_name("outbox") / "critical_input_unblockers_updates_template.json"
+)
 DEFAULT_FAKE_CRITICAL_INPUT_PROBE_JSON = Path(__file__).with_name("outbox") / "fake_critical_input_probe_latest.json"
 DEFAULT_FAKE_CRITICAL_INPUT_PROBE_MARKDOWN = Path(__file__).with_name("outbox") / "fake_critical_input_probe_latest.md"
 DEFAULT_FAKE_CRITICAL_INPUT_ANSWERS_JSON = Path(__file__).with_name("outbox") / "fake_critical_input_answers_latest.json"
@@ -495,6 +502,29 @@ def main() -> int:
         default=str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_MARKDOWN),
     )
     critical_inputs_questionnaire_parser.add_argument("--html-output", default=str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_HTML))
+
+    critical_inputs_unblockers_parser = subparsers.add_parser(
+        "critical-input-unblockers",
+        help="write a focused form for only critical inputs with no draft suggestion",
+    )
+    critical_inputs_unblockers_parser.add_argument(
+        "--suggestions",
+        default=str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON),
+    )
+    critical_inputs_unblockers_parser.add_argument(
+        "--impact",
+        default=str(DEFAULT_CRITICAL_INPUT_IMPACT_JSON),
+    )
+    critical_inputs_unblockers_parser.add_argument("--json-output", default=str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_JSON))
+    critical_inputs_unblockers_parser.add_argument(
+        "--markdown-output",
+        default=str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_MARKDOWN),
+    )
+    critical_inputs_unblockers_parser.add_argument("--html-output", default=str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_HTML))
+    critical_inputs_unblockers_parser.add_argument(
+        "--updates-template-output",
+        default=str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_UPDATES_JSON),
+    )
 
     critical_inputs_update_parser = subparsers.add_parser(
         "critical-inputs-update",
@@ -1528,6 +1558,31 @@ def main() -> int:
         print(f"Supervised only: {questionnaire.get('supervised_only_count', 0)}")
         return 0
 
+    if args.command == "critical-input-unblockers":
+        suggestions_path = Path(args.suggestions)
+        if not suggestions_path.exists():
+            raise FileNotFoundError(f"critical input suggestions not found: {args.suggestions}")
+        packet = write_critical_input_unblocker_packet(
+            json.loads(suggestions_path.read_text(encoding="utf-8")),
+            args.json_output,
+            args.markdown_output,
+            args.html_output,
+            impact_payload=_load_optional_json(args.impact),
+        )
+        updates_path = Path(args.updates_template_output)
+        updates_path.parent.mkdir(parents=True, exist_ok=True)
+        updates_path.write_text(
+            json.dumps(packet.get("compact_updates_template", {}), ensure_ascii=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        print(f"Wrote critical input unblockers JSON to {args.json_output}")
+        print(f"Wrote critical input unblockers Markdown to {args.markdown_output}")
+        print(f"Wrote critical input unblockers HTML to {args.html_output}")
+        print(f"Wrote critical input unblocker updates template to {args.updates_template_output}")
+        print(f"Inputs: {packet.get('input_count', 0)}")
+        print(f"High risk: {packet.get('high_risk_count', 0)}")
+        return 0
+
     if args.command == "critical-inputs-update":
         answers_path = Path(args.answers)
         updates_path = Path(args.updates)
@@ -2201,6 +2256,17 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_HTML,
             suggestions_payload=_load_optional_json(str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON)),
             impact_payload=critical_input_impact,
+        )
+        unblockers = write_critical_input_unblocker_packet(
+            _load_optional_json(str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON)) or {},
+            DEFAULT_CRITICAL_INPUT_UNBLOCKERS_JSON,
+            DEFAULT_CRITICAL_INPUT_UNBLOCKERS_MARKDOWN,
+            DEFAULT_CRITICAL_INPUT_UNBLOCKERS_HTML,
+            impact_payload=critical_input_impact,
+        )
+        DEFAULT_CRITICAL_INPUT_UNBLOCKERS_UPDATES_JSON.write_text(
+            json.dumps(unblockers.get("compact_updates_template", {}), ensure_ascii=True, indent=2) + "\n",
+            encoding="utf-8",
         )
     write_autofill_batch_plan(
         research,

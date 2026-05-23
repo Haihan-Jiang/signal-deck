@@ -4621,6 +4621,279 @@ def write_critical_input_questionnaire(
     return questionnaire
 
 
+def build_critical_input_unblocker_packet(
+    suggestions_payload: dict[str, Any],
+    impact_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if not isinstance(suggestions_payload, dict):
+        raise ValueError("critical input suggestions must be a JSON object")
+    impacts_by_id = {
+        str(row.get("input_id") or ""): row
+        for row in (impact_payload or {}).get("input_impacts", [])
+        if isinstance(row, dict)
+    }
+    rows: list[dict[str, Any]] = []
+    compact_updates_template: dict[str, Any] = {}
+    for item in suggestions_payload.get("critical_inputs", []):
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("suggested_answer") or "").strip():
+            continue
+        if item.get("input_type") == "supervised_browser_review_only":
+            continue
+        input_id = str(item.get("input_id") or "")
+        if not input_id:
+            continue
+        high_risk = item.get("input_type") == "high_risk_exact_confirmation" or str(
+            item.get("approval_risk") or ""
+        ) == "high"
+        impact = impacts_by_id.get(input_id, {})
+        row = {
+            "input_id": input_id,
+            "input_type": item.get("input_type"),
+            "group_key": item.get("group_key"),
+            "question": item.get("question"),
+            "required_user_response": item.get("required_user_response"),
+            "high_risk": high_risk,
+            "suggestion_source": item.get("suggestion_source"),
+            "why_not_inferred": item.get("suggestion_note"),
+            "required_count": int(item.get("required_count") or 0),
+            "platforms": item.get("platforms") or [],
+            "labels": item.get("labels") or [],
+            "impact": {
+                "data_blocking_prompts_delta": int(impact.get("data_blocking_prompts_delta") or 0),
+                "ready_prompts_delta": int(impact.get("ready_prompts_delta") or 0),
+                "positions_ready_for_autofill_delta": int(
+                    impact.get("positions_ready_for_autofill_delta") or 0
+                ),
+                "simulated_answer": impact.get("simulated_answer", ""),
+            },
+            "workflow_update_shape": "high_risk_object" if high_risk else "string_value",
+        }
+        rows.append(row)
+        if high_risk:
+            compact_updates_template[input_id] = {
+                "user_answer": "",
+                "approval_decision": "approved",
+                "high_risk_user_confirmed": False,
+            }
+        else:
+            compact_updates_template[input_id] = ""
+    rows.sort(
+        key=lambda row: (
+            1 if row.get("high_risk") else 0,
+            -int(row.get("required_count") or 0),
+            str(row.get("input_id") or ""),
+        )
+    )
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "critical_input_unblockers",
+        "input_count": len(rows),
+        "high_risk_count": sum(1 for row in rows if row.get("high_risk")),
+        "profile_or_resume_fact_count": sum(
+            1 for row in rows if row.get("input_type") == "profile_or_resume_fact"
+        ),
+        "instructions": (
+            "Fill only these remaining exact values, then run critical-inputs-workflow with "
+            "the resulting JSON. High-risk values require high_risk_user_confirmed=true and "
+            "--approve-high-risk. This artifact does not write profile or answer memory and "
+            "does not submit applications."
+        ),
+        "workflow_command": (
+            "python3 -m job_apply_agent critical-inputs-workflow "
+            "--updates <confirmed_unblockers.json> --approve --approve-high-risk --apply"
+        ),
+        "unblockers": rows,
+        "compact_updates_template": compact_updates_template,
+        "policy": {
+            "writes_profile_or_memory": False,
+            "submits_real_applications": False,
+            "high_risk_requires_user_confirmation": True,
+            "only_missing_suggestions_included": True,
+        },
+    }
+
+
+def write_critical_input_unblocker_packet(
+    suggestions_payload: dict[str, Any],
+    json_output: str | Path,
+    markdown_output: str | Path,
+    html_output: str | Path,
+    impact_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    packet = build_critical_input_unblocker_packet(
+        suggestions_payload,
+        impact_payload=impact_payload,
+    )
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    html_path = Path(html_output)
+    for path in [json_path, markdown_path, html_path]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(packet, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(render_critical_input_unblocker_markdown(packet), encoding="utf-8")
+    html_path.write_text(render_critical_input_unblocker_html(packet), encoding="utf-8")
+    return packet
+
+
+def render_critical_input_unblocker_markdown(packet: dict[str, Any]) -> str:
+    lines = [
+        "# Critical Input Final Unblockers",
+        "",
+        f"Generated: {packet.get('generated_at')}",
+        f"Inputs: {packet.get('input_count', 0)}",
+        f"High risk: {packet.get('high_risk_count', 0)}",
+        f"Profile/resume facts: {packet.get('profile_or_resume_fact_count', 0)}",
+        "",
+        str(packet.get("instructions") or ""),
+        "",
+        "Workflow command:",
+        "",
+        f"`{packet.get('workflow_command')}`",
+        "",
+        "## Unblockers",
+        "",
+    ]
+    rows = packet.get("unblockers") or []
+    if not rows:
+        lines.append("- None")
+    for row in rows:
+        flags = ["high-risk"] if row.get("high_risk") else ["exact value"]
+        lines.append(f"- {row.get('input_id')} ({', '.join(flags)}): {row.get('question')}")
+        lines.append(f"  needed: {row.get('required_user_response')}")
+        if row.get("why_not_inferred"):
+            lines.append(f"  why not inferred: {row.get('why_not_inferred')}")
+        labels = row.get("labels") or []
+        if labels:
+            lines.append(f"  examples: {'; '.join(str(label) for label in labels[:3])}")
+    lines.extend(
+        [
+            "",
+            "## Compact Updates Template",
+            "",
+            "```json",
+            json.dumps(packet.get("compact_updates_template", {}), ensure_ascii=True, indent=2),
+            "```",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def render_critical_input_unblocker_html(packet: dict[str, Any]) -> str:
+    cards = []
+    for row in packet.get("unblockers") or []:
+        input_id = str(row.get("input_id") or "")
+        high_risk = bool(row.get("high_risk"))
+        labels = row.get("labels") or []
+        label_list = "".join(f"<li>{_html_escape(label)}</li>" for label in labels[:5])
+        high_risk_checkbox = (
+            "<label class=\"confirm\"><input type=\"checkbox\"> I explicitly confirm this high-risk answer is truthful and reusable.</label>"
+            if high_risk
+            else ""
+        )
+        cards.append(
+            """
+<section class="question" data-question-id="{input_id}" data-high-risk="{high_risk}" data-supervised="false">
+  <div class="meta"><span>{risk}</span><span>{count} prompts</span></div>
+  <h2>{question}</h2>
+  <p><strong>Input ID:</strong> <code>{input_id}</code></p>
+  <p><strong>Needed:</strong> {needed}</p>
+  <p><strong>Why not inferred:</strong> {why}</p>
+  <ul>{labels}</ul>
+  <textarea rows="3" placeholder="Type the exact truthful answer"></textarea>
+  {high_risk_checkbox}
+</section>
+""".format(
+                input_id=_html_escape(input_id),
+                high_risk=str(high_risk).lower(),
+                risk="High risk confirmation" if high_risk else "Exact profile value",
+                count=int(row.get("required_count") or 0),
+                question=_html_escape(row.get("question")),
+                needed=_html_escape(row.get("required_user_response")),
+                why=_html_escape(row.get("why_not_inferred")),
+                labels=label_list,
+                high_risk_checkbox=high_risk_checkbox,
+            )
+        )
+    template_json = json.dumps(
+        packet.get("compact_updates_template", {}),
+        ensure_ascii=True,
+        indent=2,
+    ).replace("</", "<\\/")
+    script = """
+<script>
+function buildUnblockerUpdates() {
+  const updates = {};
+  document.querySelectorAll("[data-question-id]").forEach((card) => {
+    const textarea = card.querySelector("textarea");
+    const value = textarea ? textarea.value.trim() : "";
+    if (!value) return;
+    const id = card.dataset.questionId;
+    if (card.dataset.highRisk === "true") {
+      const checkbox = card.querySelector("input[type=checkbox]");
+      updates[id] = {
+        user_answer: value,
+        approval_decision: "approved",
+        high_risk_user_confirmed: Boolean(checkbox && checkbox.checked)
+      };
+    } else {
+      updates[id] = value;
+    }
+  });
+  document.getElementById("compact-json").value = JSON.stringify(updates, null, 2);
+}
+function loadUnblockerTemplate() {
+  document.getElementById("compact-json").value = document.getElementById("template-json").textContent.trim();
+}
+document.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("build-json").addEventListener("click", buildUnblockerUpdates);
+  document.getElementById("load-template").addEventListener("click", loadUnblockerTemplate);
+});
+</script>
+""".strip()
+    return "\n".join(
+        [
+            "<!doctype html>",
+            '<html lang="en">',
+            "<head>",
+            '<meta charset="utf-8">',
+            '<meta name="viewport" content="width=device-width, initial-scale=1">',
+            "<title>Critical Input Final Unblockers</title>",
+            "<style>",
+            _critical_input_questionnaire_css(),
+            "</style>",
+            "</head>",
+            "<body>",
+            "<main>",
+            "<h1>Critical Input Final Unblockers</h1>",
+            f"<p class=\"muted\">Generated: {_html_escape(packet.get('generated_at'))}</p>",
+            _html_kpis(
+                [
+                    ("Inputs", packet.get("input_count", 0)),
+                    ("High risk", packet.get("high_risk_count", 0)),
+                    ("Profile facts", packet.get("profile_or_resume_fact_count", 0)),
+                ]
+            ),
+            "<section>",
+            "<h2>Command</h2>",
+            f"<pre>{_html_escape(packet.get('workflow_command'))}</pre>",
+            "</section>",
+            "".join(cards),
+            "<section>",
+            "<h2>Compact JSON</h2>",
+            '<div class="actions"><button id="build-json" type="button">Build compact JSON</button><button id="load-template" type="button">Load blank template</button></div>',
+            '<textarea id="compact-json" rows="16" spellcheck="false"></textarea>',
+            f'<script type="application/json" id="template-json">{template_json}</script>',
+            "</section>",
+            "</main>",
+            script,
+            "</body>",
+            "</html>",
+        ]
+    )
+
+
 def render_critical_input_questionnaire_markdown(questionnaire: dict[str, Any]) -> str:
     lines = [
         "# Critical Input Questionnaire",
