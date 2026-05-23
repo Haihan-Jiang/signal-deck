@@ -29,6 +29,7 @@ from job_apply_agent.core import (
     build_critical_input_suggestion_packet,
     build_critical_input_status_report,
     build_critical_input_unblocker_packet,
+    build_synthetic_unblocker_proof,
     build_question_export,
     build_browser_action_manifest,
     build_closed_posting_preflight,
@@ -101,6 +102,7 @@ from job_apply_agent.core import (
     render_critical_input_status_markdown,
     render_critical_input_unblocker_html,
     render_critical_input_unblocker_markdown,
+    render_synthetic_unblocker_proof_markdown,
     render_browser_dom_execution_plan_markdown,
     render_form_fill_plan_markdown,
     render_fake_learning_probe_markdown,
@@ -143,6 +145,7 @@ from job_apply_agent.core import (
     write_critical_input_suggestion_packet,
     write_critical_input_status_report,
     write_critical_input_unblocker_packet,
+    write_synthetic_unblocker_proof,
     write_question_export,
     write_browser_dom_harness,
     write_form_fill_plan,
@@ -6109,6 +6112,165 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(json_output.exists())
             self.assertTrue(markdown_output.exists())
             self.assertTrue(html_output.exists())
+
+    def test_synthetic_unblocker_proof_clears_data_blockers_temp_only(self) -> None:
+        learning_tasks = {
+            "tasks": [
+                {
+                    "group_key": "profile:zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "recommended_storage": "profile",
+                    "labels": ["Zip Code"],
+                    "platforms": ["Ashby"],
+                    "required_count": 4,
+                    "persist_allowed": True,
+                },
+                {
+                    "group_key": "answer_memory:citizenship_status:default_policy",
+                    "question": "What citizenship answers should automation use?",
+                    "recommended_storage": "answer_memory",
+                    "answer_scope": "category_default_policy",
+                    "suggested_answer_source": "requires_exact_user_confirmation",
+                    "approval_risk": "high",
+                    "labels": ["Are you a U.S. citizen?"],
+                    "platforms": ["Greenhouse"],
+                    "required_count": 2,
+                    "persist_allowed": True,
+                },
+                {
+                    "group_key": "answer_memory:favorite_junk_food",
+                    "question": "What's your favorite junk food?",
+                    "recommended_storage": "answer_memory",
+                    "labels": ["What's your favorite junk food?"],
+                    "platforms": ["Ashby"],
+                    "required_count": 1,
+                    "persist_allowed": True,
+                },
+            ],
+        }
+        pack = build_learning_approval_pack(learning_tasks, {})
+        answers = build_critical_input_answer_template(pack)
+        for row in answers["answers"]:
+            if row["group_key"] == "answer_memory:favorite_junk_food":
+                row["user_answer"] = "Potato chips"
+
+        unblockers = {
+            "unblockers": [
+                {
+                    "input_id": "profile_zip_or_postal_code",
+                    "input_type": "profile_or_resume_fact",
+                    "group_key": "profile:zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                },
+                {
+                    "input_id": "answer_memory_citizenship_status_default_policy",
+                    "input_type": "high_risk_exact_confirmation",
+                    "group_key": "answer_memory:citizenship_status:default_policy",
+                    "question": "What citizenship answers should automation use?",
+                    "approval_risk": "high",
+                },
+            ]
+        }
+        research = {
+            "positions_observed_total": 1,
+            "positions": [
+                {
+                    "position_key": "ashby:example:sre",
+                    "platform": "Ashby",
+                    "company": "Example",
+                    "title": "Site Reliability Engineer",
+                    "role_family": "SRE",
+                }
+            ],
+            "items": [
+                {
+                    "position_key": "ashby:example:sre",
+                    "normalized_label": "zip code",
+                    "label": "Zip Code",
+                    "category": "profile_identity",
+                    "automation_action": "auto_fill_from_profile",
+                    "required": True,
+                    "platform": "Ashby",
+                    "source_file": "test",
+                },
+                {
+                    "position_key": "ashby:example:sre",
+                    "normalized_label": "what s your favorite junk food",
+                    "label": "What's your favorite junk food?",
+                    "category": "standard_preference",
+                    "automation_action": "auto_answer_from_memory",
+                    "required": True,
+                    "platform": "Ashby",
+                    "source_file": "test",
+                },
+            ],
+        }
+        profile_payload = {
+            "candidate": {"name": "Test User", "location": "Bellevue, WA"},
+            "preferences": {},
+            "resume_facts": {},
+            "question_answers": {},
+        }
+        autofill_batch = {
+            "selected_count": 100,
+            "local_synthetic_submit_count": 100,
+            "local_synthetic_submit_achieved": True,
+            "local_synthetic_submit_selector_miss_count": 0,
+        }
+
+        proof = build_synthetic_unblocker_proof(
+            pack,
+            answers,
+            unblockers,
+            research,
+            profile_payload,
+            answer_memory={"version": 1, "answers": []},
+            autofill_batch=autofill_batch,
+        )
+        summary = proof["summary"]
+
+        self.assertFalse(proof["real_platform_submission"])
+        self.assertFalse(proof["writes_real_profile_or_memory"])
+        self.assertEqual(summary["synthetic_final_unblocker_update_count"], 2)
+        self.assertEqual(summary["existing_draft_update_count"], 1)
+        self.assertEqual(summary["high_risk_confirmed_count"], 1)
+        self.assertEqual(summary["data_blocking_prompts_after"], 0)
+        self.assertTrue(summary["local_100_synthetic_apply_path_ready"])
+        self.assertTrue(summary["proof_complete"])
+        self.assertIn("Synthetic Unblocker Proof", render_synthetic_unblocker_proof_markdown(proof))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            approval_pack_path = root / "pack.json"
+            answers_path = root / "answers.json"
+            unblockers_path = root / "unblockers.json"
+            research_path = root / "research.json"
+            profile_path = root / "profile.json"
+            memory_path = root / "memory.json"
+            json_output = root / "proof.json"
+            markdown_output = root / "proof.md"
+            approval_pack_path.write_text(json.dumps(pack), encoding="utf-8")
+            answers_path.write_text(json.dumps(answers), encoding="utf-8")
+            unblockers_path.write_text(json.dumps(unblockers), encoding="utf-8")
+            research_path.write_text(json.dumps(research), encoding="utf-8")
+            profile_path.write_text(json.dumps(profile_payload), encoding="utf-8")
+
+            written = write_synthetic_unblocker_proof(
+                approval_pack_path,
+                answers_path,
+                unblockers_path,
+                research_path,
+                profile_path,
+                memory_path,
+                json_output,
+                markdown_output,
+                autofill_batch=autofill_batch,
+            )
+
+            self.assertEqual(written["summary"]["data_blocking_prompts_after"], 0)
+            self.assertTrue(json_output.exists())
+            self.assertTrue(markdown_output.exists())
+            self.assertFalse(memory_path.exists())
 
     def test_critical_input_questionnaire_outputs_compact_json_html_form(self) -> None:
         learning_tasks = {

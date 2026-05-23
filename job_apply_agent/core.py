@@ -4737,6 +4737,296 @@ def write_critical_input_unblocker_packet(
     return packet
 
 
+def build_synthetic_unblocker_proof(
+    approval_pack: dict[str, Any],
+    answers_payload: dict[str, Any],
+    unblockers_payload: dict[str, Any],
+    research: dict[str, Any],
+    profile_payload: dict[str, Any],
+    answer_memory: dict[str, Any] | None = None,
+    closed_jobs: dict[str, Any] | None = None,
+    autofill_batch: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if not isinstance(unblockers_payload, dict):
+        raise ValueError("critical input unblockers must be a JSON object")
+    updates, update_rows, missing_unblocker_ids = _synthetic_unblocker_proof_updates(
+        answers_payload,
+        unblockers_payload,
+    )
+    preflight = build_critical_input_preflight(
+        approval_pack,
+        answers_payload,
+        updates,
+        research,
+        profile_payload,
+        answer_memory=answer_memory,
+        closed_jobs=closed_jobs,
+        approve=True,
+        approve_high_risk=True,
+        source="synthetic_unblocker_proof",
+    )
+    preflight_summary = preflight.get("summary") or {}
+    batch = autofill_batch or {}
+    selected_count = int(batch.get("selected_count") or 0)
+    local_submit_count = int(batch.get("local_synthetic_submit_count") or 0)
+    selector_miss_count = int(batch.get("local_synthetic_submit_selector_miss_count") or 0)
+    local_submit_achieved = bool(batch.get("local_synthetic_submit_achieved"))
+    data_blockers_after = int(preflight_summary.get("data_blocking_prompts_after") or 0)
+    synthetic_unblocker_count = sum(
+        1 for row in update_rows if row.get("answer_source") == "synthetic_final_unblocker"
+    )
+    high_risk_confirmed_count = sum(
+        1 for row in update_rows if row.get("high_risk") and row.get("high_risk_user_confirmed")
+    )
+    local_100_path_ready = bool(
+        selected_count >= 100
+        and local_submit_count >= 100
+        and local_submit_achieved
+        and selector_miss_count == 0
+    )
+    summary = {
+        "update_entry_count": len(updates),
+        "synthetic_final_unblocker_update_count": synthetic_unblocker_count,
+        "existing_draft_update_count": sum(
+            1 for row in update_rows if row.get("answer_source") == "existing_draft_or_answer"
+        ),
+        "high_risk_confirmed_count": high_risk_confirmed_count,
+        "missing_unblocker_count": len(missing_unblocker_ids),
+        "matched_updates": int(preflight_summary.get("matched_updates") or 0),
+        "unknown_updates": int(preflight_summary.get("unknown_updates") or 0),
+        "high_risk_approval_blocked": int(preflight_summary.get("high_risk_approval_blocked") or 0),
+        "data_blocking_prompts_before": int(preflight_summary.get("data_blocking_prompts_before") or 0),
+        "data_blocking_prompts_after": data_blockers_after,
+        "data_blocking_prompts_delta": int(preflight_summary.get("data_blocking_prompts_delta") or 0),
+        "positions_ready_for_autofill_before": int(
+            preflight_summary.get("positions_ready_for_autofill_before") or 0
+        ),
+        "positions_ready_for_autofill_after": int(
+            preflight_summary.get("positions_ready_for_autofill_after") or 0
+        ),
+        "positions_ready_for_autofill_delta": int(
+            preflight_summary.get("positions_ready_for_autofill_delta") or 0
+        ),
+        "autofill_selected_count": selected_count,
+        "autofill_local_synthetic_submit_count": local_submit_count,
+        "autofill_local_synthetic_submit_achieved": local_submit_achieved,
+        "autofill_local_synthetic_submit_selector_miss_count": selector_miss_count,
+        "synthetic_unblockers_clear_data_blockers": data_blockers_after == 0,
+        "local_100_synthetic_apply_path_ready": local_100_path_ready,
+        "proof_complete": bool(
+            data_blockers_after == 0
+            and local_100_path_ready
+            and len(missing_unblocker_ids) == 0
+            and int(preflight_summary.get("unknown_updates") or 0) == 0
+            and int(preflight_summary.get("high_risk_approval_blocked") or 0) == 0
+        ),
+    }
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "synthetic_unblocker_proof",
+        "real_platform_submission": False,
+        "writes_real_profile_or_memory": False,
+        "writes_temp_profile_or_memory": True,
+        "synthetic_answers_only_for_final_unblockers": True,
+        "summary": summary,
+        "update_rows": update_rows,
+        "missing_unblocker_ids": missing_unblocker_ids,
+        "preflight_summary": preflight_summary,
+        "remaining_data_blocker_counts": preflight.get("remaining_data_blocker_counts", {}),
+        "remaining_data_blockers": preflight.get("remaining_data_blockers", []),
+        "policy": {
+            "uses_fake_candidate_data": True,
+            "dry_run_only": True,
+            "submits_real_applications": False,
+            "writes_real_profile_or_memory": False,
+            "final_submit_remains_supervised": True,
+            "real_employer_fake_submission_forbidden": True,
+        },
+        "next_commands": [
+            "python3 -m job_apply_agent critical-input-unblockers",
+            "python3 -m job_apply_agent critical-inputs-preflight --updates <truthful_answers.json> --approve --approve-high-risk",
+            "python3 -m job_apply_agent critical-inputs-workflow --updates <truthful_answers.json> --approve --approve-high-risk --apply",
+        ],
+    }
+
+
+def write_synthetic_unblocker_proof(
+    approval_pack_path: str | Path,
+    answers_path: str | Path,
+    unblockers_path: str | Path,
+    research_path: str | Path,
+    profile_path: str | Path,
+    memory_path: str | Path,
+    json_output: str | Path,
+    markdown_output: str | Path,
+    closed_jobs: dict[str, Any] | None = None,
+    autofill_batch: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    approval_pack = _read_json_file(Path(approval_pack_path))
+    answers_payload = _read_json_file(Path(answers_path))
+    unblockers_payload = _read_json_file(Path(unblockers_path))
+    research = _read_json_file(Path(research_path))
+    profile_payload = _read_json_file(Path(profile_path))
+    if not isinstance(approval_pack, dict):
+        raise ValueError("approval pack must be a JSON object")
+    if not isinstance(answers_payload, dict):
+        raise ValueError("critical input answers must be a JSON object")
+    if not isinstance(unblockers_payload, dict):
+        raise ValueError("critical input unblockers must be a JSON object")
+    if not isinstance(research, dict):
+        raise ValueError("research report must be a JSON object")
+    if not isinstance(profile_payload, dict):
+        raise ValueError("profile must be a JSON object")
+    proof = build_synthetic_unblocker_proof(
+        approval_pack,
+        answers_payload,
+        unblockers_payload,
+        research,
+        profile_payload,
+        answer_memory=load_answer_memory(memory_path),
+        closed_jobs=closed_jobs,
+        autofill_batch=autofill_batch,
+    )
+    proof["source_paths"] = {
+        "approval_pack": str(approval_pack_path),
+        "answers": str(answers_path),
+        "unblockers": str(unblockers_path),
+        "research": str(research_path),
+        "profile": str(profile_path),
+        "memory": str(memory_path),
+    }
+    proof["outputs"] = {
+        "json": str(json_output),
+        "markdown": str(markdown_output),
+    }
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    for path in [json_path, markdown_path]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(proof, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(render_synthetic_unblocker_proof_markdown(proof), encoding="utf-8")
+    return proof
+
+
+def render_synthetic_unblocker_proof_markdown(proof: dict[str, Any]) -> str:
+    summary = proof.get("summary") or {}
+    lines = [
+        "# Synthetic Unblocker Proof",
+        "",
+        f"Generated: {proof.get('generated_at')}",
+        f"Real platform submission: {str(bool(proof.get('real_platform_submission'))).lower()}",
+        f"Writes real profile or memory: {str(bool(proof.get('writes_real_profile_or_memory'))).lower()}",
+        "",
+        "## Summary",
+        "",
+        f"- update entries: {summary.get('update_entry_count', 0)}",
+        f"- synthetic final unblockers: {summary.get('synthetic_final_unblocker_update_count', 0)}",
+        f"- existing draft updates: {summary.get('existing_draft_update_count', 0)}",
+        f"- high-risk confirmations simulated: {summary.get('high_risk_confirmed_count', 0)}",
+        f"- missing unblockers: {summary.get('missing_unblocker_count', 0)}",
+        f"- matched updates: {summary.get('matched_updates', 0)}",
+        f"- unknown updates: {summary.get('unknown_updates', 0)}",
+        f"- high-risk approvals blocked: {summary.get('high_risk_approval_blocked', 0)}",
+        f"- data-blocking prompts: {summary.get('data_blocking_prompts_before', 0)} -> {summary.get('data_blocking_prompts_after', 0)}",
+        f"- positions ready for autofill: {summary.get('positions_ready_for_autofill_before', 0)} -> {summary.get('positions_ready_for_autofill_after', 0)}",
+        f"- local synthetic submits: {summary.get('autofill_local_synthetic_submit_count', 0)}",
+        f"- local 100 synthetic apply path ready: {str(bool(summary.get('local_100_synthetic_apply_path_ready'))).lower()}",
+        f"- proof complete: {str(bool(summary.get('proof_complete'))).lower()}",
+        "",
+        "## Final Unblocker Rows",
+        "",
+    ]
+    final_rows = [
+        row
+        for row in proof.get("update_rows") or []
+        if row.get("answer_source") == "synthetic_final_unblocker"
+    ]
+    if not final_rows:
+        lines.append("- None")
+    for row in final_rows:
+        flags = []
+        if row.get("high_risk"):
+            flags.append("high-risk")
+        if row.get("high_risk_user_confirmed"):
+            flags.append("confirmed")
+        flag_text = f" ({', '.join(flags)})" if flags else ""
+        lines.append(f"- {row.get('input_id')}{flag_text}: {row.get('question')}")
+    remaining_counts = proof.get("remaining_data_blocker_counts") or {}
+    lines.extend(
+        [
+            "",
+            "## Remaining Data Blockers",
+            "",
+            f"- total: {remaining_counts.get('total', 0)}",
+        ]
+    )
+    by_category = remaining_counts.get("by_category") or {}
+    for category, count in sorted(by_category.items(), key=lambda item: (-int(item[1]), str(item[0]))):
+        lines.append(f"- {category}: {count}")
+    lines.extend(["", "## Policy", ""])
+    for key, value in sorted((proof.get("policy") or {}).items()):
+        lines.append(f"- {key}: {str(value).lower() if isinstance(value, bool) else value}")
+    return "\n".join(lines) + "\n"
+
+
+def _synthetic_unblocker_proof_updates(
+    answers_payload: dict[str, Any],
+    unblockers_payload: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[str]]:
+    unblocker_by_id = {
+        str(row.get("input_id") or ""): row
+        for row in unblockers_payload.get("unblockers", [])
+        if isinstance(row, dict) and str(row.get("input_id") or "")
+    }
+    updates: dict[str, Any] = {}
+    update_rows: list[dict[str, Any]] = []
+    seen_unblocker_ids: set[str] = set()
+    for index, item in enumerate(_critical_input_answer_rows(answers_payload), start=1):
+        input_id = str(item.get("input_id") or _critical_input_answer_id(item, index))
+        if not input_id or item.get("input_type") == "supervised_browser_review_only":
+            continue
+        unblocker = unblocker_by_id.get(input_id)
+        merged_item = {**item, **(unblocker or {})}
+        high_risk = _critical_input_is_high_risk(merged_item)
+        if unblocker:
+            synthetic_item = {**item, **unblocker}
+            answer = _fake_critical_input_answer(synthetic_item)
+            answer_source = "synthetic_final_unblocker"
+            seen_unblocker_ids.add(input_id)
+        else:
+            answer = str(item.get("user_answer") or item.get("draft_answer") or "").strip()
+            answer_source = "existing_draft_or_answer"
+        if not str(answer or "").strip():
+            continue
+        if high_risk:
+            updates[input_id] = {
+                "user_answer": answer,
+                "approval_decision": "approved",
+                "high_risk_user_confirmed": True,
+            }
+        else:
+            updates[input_id] = answer
+        update_rows.append(
+            {
+                "input_id": input_id,
+                "group_key": item.get("group_key"),
+                "question": item.get("question"),
+                "answer_source": answer_source,
+                "high_risk": high_risk,
+                "high_risk_user_confirmed": bool(high_risk),
+                "updates_profile_or_memory_only_in_temp": True,
+            }
+        )
+    missing_unblocker_ids = sorted(set(unblocker_by_id) - seen_unblocker_ids)
+    update_rows.sort(
+        key=lambda row: (
+            0 if row.get("answer_source") == "synthetic_final_unblocker" else 1,
+            str(row.get("input_id") or ""),
+        )
+    )
+    return updates, update_rows, missing_unblocker_ids
+
+
 def render_critical_input_unblocker_markdown(packet: dict[str, Any]) -> str:
     lines = [
         "# Critical Input Final Unblockers",

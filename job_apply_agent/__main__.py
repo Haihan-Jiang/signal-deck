@@ -59,6 +59,7 @@ from .core import (
     write_question_export,
     write_position_readiness_report,
     write_research_coverage_gate,
+    write_synthetic_unblocker_proof,
     write_synthetic_apply_execution,
     write_synthetic_application_simulation,
     write_synthetic_browser_action_execution,
@@ -125,6 +126,10 @@ DEFAULT_CRITICAL_INPUT_UNBLOCKERS_MARKDOWN = Path(__file__).with_name("outbox") 
 DEFAULT_CRITICAL_INPUT_UNBLOCKERS_HTML = Path(__file__).with_name("outbox") / "critical_input_unblockers_latest.html"
 DEFAULT_CRITICAL_INPUT_UNBLOCKERS_UPDATES_JSON = (
     Path(__file__).with_name("outbox") / "critical_input_unblockers_updates_template.json"
+)
+DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_JSON = Path(__file__).with_name("outbox") / "synthetic_unblocker_proof_latest.json"
+DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_MARKDOWN = (
+    Path(__file__).with_name("outbox") / "synthetic_unblocker_proof_latest.md"
 )
 DEFAULT_FAKE_CRITICAL_INPUT_PROBE_JSON = Path(__file__).with_name("outbox") / "fake_critical_input_probe_latest.json"
 DEFAULT_FAKE_CRITICAL_INPUT_PROBE_MARKDOWN = Path(__file__).with_name("outbox") / "fake_critical_input_probe_latest.md"
@@ -699,6 +704,39 @@ def main() -> int:
     fake_critical_inputs_parser.add_argument(
         "--answers-markdown-output",
         default=str(DEFAULT_FAKE_CRITICAL_INPUT_ANSWERS_MARKDOWN),
+    )
+
+    synthetic_unblocker_proof_parser = subparsers.add_parser(
+        "synthetic-unblocker-proof",
+        help="prove final critical unblockers with synthetic answers in a temp-only dry run",
+    )
+    synthetic_unblocker_proof_parser.add_argument(
+        "--approval-pack",
+        default=str(DEFAULT_LEARNING_APPROVAL_PACK_JSON),
+    )
+    synthetic_unblocker_proof_parser.add_argument(
+        "--answers",
+        default=str(DEFAULT_CRITICAL_INPUT_ANSWERS_JSON),
+    )
+    synthetic_unblocker_proof_parser.add_argument(
+        "--unblockers",
+        default=str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_JSON),
+    )
+    synthetic_unblocker_proof_parser.add_argument("--research-json", default=str(DEFAULT_RESEARCH_JSON))
+    synthetic_unblocker_proof_parser.add_argument(
+        "--profile",
+        default=str(DEFAULT_PERSONAL_PROFILE if DEFAULT_PERSONAL_PROFILE.exists() else DEFAULT_PROFILE),
+    )
+    synthetic_unblocker_proof_parser.add_argument("--memory", default=str(DEFAULT_MEMORY))
+    synthetic_unblocker_proof_parser.add_argument("--closed-jobs", default=str(DEFAULT_CLOSED_JOBS))
+    synthetic_unblocker_proof_parser.add_argument("--autofill-batch", default=str(DEFAULT_AUTOFILL_BATCH_JSON))
+    synthetic_unblocker_proof_parser.add_argument(
+        "--json-output",
+        default=str(DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_JSON),
+    )
+    synthetic_unblocker_proof_parser.add_argument(
+        "--markdown-output",
+        default=str(DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_MARKDOWN),
     )
 
     fake_learning_probe_parser = subparsers.add_parser(
@@ -1797,6 +1835,41 @@ def main() -> int:
         print(f"Supervised only: {report.get('supervised_only_count', 0)}")
         return 0
 
+    if args.command == "synthetic-unblocker-proof":
+        for label, path_value in [
+            ("approval pack", args.approval_pack),
+            ("critical input answers", args.answers),
+            ("critical input unblockers", args.unblockers),
+            ("research report", args.research_json),
+            ("profile", args.profile),
+        ]:
+            if not Path(path_value).exists():
+                raise FileNotFoundError(f"{label} not found: {path_value}")
+        proof = write_synthetic_unblocker_proof(
+            args.approval_pack,
+            args.answers,
+            args.unblockers,
+            args.research_json,
+            args.profile,
+            args.memory,
+            args.json_output,
+            args.markdown_output,
+            closed_jobs=_load_optional_json(args.closed_jobs),
+            autofill_batch=_load_optional_json(args.autofill_batch),
+        )
+        summary = proof.get("summary") or {}
+        print(f"Wrote synthetic unblocker proof JSON to {args.json_output}")
+        print(f"Wrote synthetic unblocker proof Markdown to {args.markdown_output}")
+        print(f"Synthetic final unblockers: {summary.get('synthetic_final_unblocker_update_count', 0)}")
+        print(
+            "Data-blocking prompts: "
+            f"{summary.get('data_blocking_prompts_before', 0)} -> "
+            f"{summary.get('data_blocking_prompts_after', 0)}"
+        )
+        print(f"Local 100 synthetic path ready: {str(bool(summary.get('local_100_synthetic_apply_path_ready'))).lower()}")
+        print(f"Proof complete: {str(bool(summary.get('proof_complete'))).lower()}")
+        return 0
+
     if args.command == "fake-learning-probe":
         research_path = Path(args.research_json)
         tasks_path = Path(args.learning_tasks_json)
@@ -2268,7 +2341,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             json.dumps(unblockers.get("compact_updates_template", {}), ensure_ascii=True, indent=2) + "\n",
             encoding="utf-8",
         )
-    write_autofill_batch_plan(
+    autofill_batch = write_autofill_batch_plan(
         research,
         readiness,
         DEFAULT_AUTOFILL_BATCH_JSON,
@@ -2279,6 +2352,19 @@ def _refresh_application_automation_reports() -> dict[str, object]:
         closed_jobs=load_closed_jobs(DEFAULT_CLOSED_JOBS),
         limit=100,
     )
+    if answers_payload and DEFAULT_CRITICAL_INPUT_UNBLOCKERS_JSON.exists():
+        write_synthetic_unblocker_proof(
+            DEFAULT_LEARNING_APPROVAL_PACK_JSON,
+            DEFAULT_CRITICAL_INPUT_ANSWERS_JSON,
+            DEFAULT_CRITICAL_INPUT_UNBLOCKERS_JSON,
+            DEFAULT_RESEARCH_JSON,
+            profile_path,
+            DEFAULT_MEMORY,
+            DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_JSON,
+            DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_MARKDOWN,
+            closed_jobs=load_closed_jobs(DEFAULT_CLOSED_JOBS),
+            autofill_batch=autofill_batch,
+        )
     goal = write_goal_readiness_audit(
         coverage,
         gaps,
@@ -2307,6 +2393,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                 "Critical input questionnaire": str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_JSON),
                 "Critical input impact": str(DEFAULT_CRITICAL_INPUT_IMPACT_JSON),
                 "Autofill batch": str(DEFAULT_AUTOFILL_BATCH_JSON),
+                "Synthetic unblocker proof": str(DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_JSON),
                 "Answer memory": str(DEFAULT_MEMORY),
                 "Closed postings": str(DEFAULT_CLOSED_JOBS),
             }
@@ -2348,6 +2435,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                     "Critical input preflight HTML": str(DEFAULT_CRITICAL_INPUT_PREFLIGHT_HTML),
                     "Critical input impact": str(DEFAULT_CRITICAL_INPUT_IMPACT_JSON),
                     "Critical input impact HTML": str(DEFAULT_CRITICAL_INPUT_IMPACT_HTML),
+                    "Synthetic unblocker proof": str(DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_JSON),
                 }
             ),
             synthetic_browser_execution=_load_optional_json(str(DEFAULT_SYNTHETIC_BROWSER_EXEC_JSON)),
@@ -2378,6 +2466,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             "critical-inputs-questionnaire",
             "critical-inputs-impact",
             "autofill-batch",
+            "synthetic-unblocker-proof",
             "goal-audit",
             "automation-handoff",
             "export-questions",
