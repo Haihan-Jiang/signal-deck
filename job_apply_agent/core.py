@@ -12374,6 +12374,7 @@ def build_goal_readiness_audit(
     synthetic_unblocker_proof: dict[str, Any] | None = None,
     post_answer_pipeline: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
+    platform_question_playbook: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     coverage_counts = gaps.get("coverage_counts") or {}
     critical_summary = (critical_input_status or {}).get("summary") or {}
@@ -12387,6 +12388,8 @@ def build_goal_readiness_audit(
     post_answer = post_answer_pipeline or {}
     post_answer_policy = post_answer.get("policy") or {}
     post_answer_synthetic = post_answer.get("synthetic_queue_rehearsal") or {}
+    playbook = platform_question_playbook or {}
+    playbook_summary = playbook.get("summary") or {}
     synthetic = coverage_gate.get("synthetic") or {}
     readiness_counts = readiness.get("readiness_counts") or {}
     closed_count = _closed_registry_count(closed_jobs)
@@ -12487,6 +12490,28 @@ def build_goal_readiness_audit(
         and post_answer_synthetic_final_submit_stops >= 100
         and not post_answer_synthetic_submits_real
     )
+    playbook_target_count = int(playbook_summary.get("target_platform_count") or 0)
+    playbook_target_met_count = int(playbook_summary.get("target_platforms_at_100_count") or 0)
+    playbook_selected_count = int(playbook_summary.get("selected_position_count") or 0)
+    playbook_selected_submit_count = int(playbook_summary.get("selected_local_synthetic_submit_count") or 0)
+    playbook_selector_miss_count = int(playbook_summary.get("selected_selector_miss_count") or 0)
+    playbook_closed_count = int(playbook_summary.get("closed_posting_count") or 0)
+    playbook_question_item_count = int(playbook_summary.get("research_question_item_count") or 0)
+    playbook_final_answer_missing_count = int(
+        playbook_summary.get("final_answer_missing_count") or 0
+        if "final_answer_missing_count" in playbook_summary
+        else final_answer_waiting_count
+    )
+    playbook_real_platform_submission = bool(playbook_summary.get("real_platform_submission"))
+    playbook_ready = bool(
+        playbook_target_count > 0
+        and playbook_target_met_count >= playbook_target_count
+        and playbook_selected_count >= 100
+        and playbook_selected_submit_count >= 100
+        and playbook_selector_miss_count == 0
+        and playbook_question_item_count > 0
+        and not playbook_real_platform_submission
+    )
     user_answers_ready = data_blocker_count == 0 and critical_waiting_count == 0
     supervised_autofill_ready = bool(
         research_ready
@@ -12585,6 +12610,21 @@ def build_goal_readiness_audit(
             },
         },
         {
+            "id": "platform_question_playbook",
+            "requirement": "Summarize per-platform 100-position question handling and rehearsal evidence.",
+            "status": "achieved" if playbook_ready else "missing_or_incomplete_report",
+            "evidence": {
+                "target_platforms_at_100": f"{playbook_target_met_count}/{playbook_target_count}",
+                "research_question_item_count": playbook_question_item_count,
+                "selected_position_count": playbook_selected_count,
+                "selected_local_synthetic_submit_count": playbook_selected_submit_count,
+                "selected_selector_miss_count": playbook_selector_miss_count,
+                "closed_posting_count": playbook_closed_count,
+                "final_answer_missing_count": playbook_final_answer_missing_count,
+                "real_platform_submission": playbook_real_platform_submission,
+            },
+        },
+        {
             "id": "real_user_answer_learning",
             "requirement": "Learn the remaining truthful user answers before real autofill can run unattended through fields.",
             "status": "achieved" if user_answers_ready else "needs_user_answers",
@@ -12669,6 +12709,15 @@ def build_goal_readiness_audit(
             "post_answer_synthetic_selector_miss_count": post_answer_synthetic_selector_misses,
             "post_answer_synthetic_final_submit_stop_count": post_answer_synthetic_final_submit_stops,
             "post_answer_synthetic_submits_real_applications": post_answer_synthetic_submits_real,
+            "platform_playbook_ready": playbook_ready,
+            "platform_playbook_target_platforms_at_100": f"{playbook_target_met_count}/{playbook_target_count}",
+            "platform_playbook_question_item_count": playbook_question_item_count,
+            "platform_playbook_selected_position_count": playbook_selected_count,
+            "platform_playbook_selected_local_synthetic_submit_count": playbook_selected_submit_count,
+            "platform_playbook_selector_miss_count": playbook_selector_miss_count,
+            "platform_playbook_closed_posting_count": playbook_closed_count,
+            "platform_playbook_final_answer_missing_count": playbook_final_answer_missing_count,
+            "platform_playbook_real_platform_submission": playbook_real_platform_submission,
         },
         "data_blockers": _goal_coverage_status_rows(coverage_counts, GOAL_DATA_BLOCKER_STATUSES),
         "optional_gaps": _goal_coverage_status_rows(coverage_counts, GOAL_OPTIONAL_GAP_STATUSES),
@@ -12709,6 +12758,7 @@ def write_goal_readiness_audit(
     synthetic_unblocker_proof: dict[str, Any] | None = None,
     post_answer_pipeline: dict[str, Any] | None = None,
     closed_jobs: dict[str, Any] | None = None,
+    platform_question_playbook: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     audit = build_goal_readiness_audit(
         coverage_gate,
@@ -12722,6 +12772,7 @@ def write_goal_readiness_audit(
         synthetic_unblocker_proof=synthetic_unblocker_proof,
         post_answer_pipeline=post_answer_pipeline,
         closed_jobs=closed_jobs,
+        platform_question_playbook=platform_question_playbook,
     )
     json_path = Path(json_output)
     markdown_path = Path(markdown_output)
@@ -12784,6 +12835,13 @@ def render_goal_readiness_audit_markdown(audit: dict[str, Any]) -> str:
             f"{summary.get('post_answer_synthetic_autofill_selected_count', 0)}, "
             f"selector misses {summary.get('post_answer_synthetic_selector_miss_count', 0)}, "
             f"final-submit stops {summary.get('post_answer_synthetic_final_submit_stop_count', 0)}",
+            f"- platform playbook ready: {str(bool(summary.get('platform_playbook_ready'))).lower()}",
+            f"- platform playbook targets at 100: {summary.get('platform_playbook_target_platforms_at_100', '0/0')}",
+            f"- platform playbook question items: {summary.get('platform_playbook_question_item_count', 0)}",
+            "- platform playbook selected 100: "
+            f"{summary.get('platform_playbook_selected_position_count', 0)}, "
+            f"local submits {summary.get('platform_playbook_selected_local_synthetic_submit_count', 0)}, "
+            f"selector misses {summary.get('platform_playbook_selector_miss_count', 0)}",
             "",
             "## Data Blockers",
             "",

@@ -1572,6 +1572,10 @@ def main() -> int:
     )
     goal_audit_parser.add_argument("--post-answer-pipeline-json", default=str(DEFAULT_POST_ANSWER_PIPELINE_JSON))
     goal_audit_parser.add_argument("--closed-jobs-json", default=str(DEFAULT_CLOSED_JOBS))
+    goal_audit_parser.add_argument(
+        "--platform-question-playbook-json",
+        default=str(DEFAULT_PLATFORM_QUESTION_PLAYBOOK_JSON),
+    )
     goal_audit_parser.add_argument("--json-output", default=str(DEFAULT_GOAL_AUDIT_JSON))
     goal_audit_parser.add_argument("--markdown-output", default=str(DEFAULT_GOAL_AUDIT_MARKDOWN))
 
@@ -1813,6 +1817,7 @@ def main() -> int:
             synthetic_unblocker_proof=_load_optional_json(args.synthetic_unblocker_proof_json),
             post_answer_pipeline=_load_optional_json(args.post_answer_pipeline_json),
             closed_jobs=_load_optional_json(args.closed_jobs_json),
+            platform_question_playbook=_load_optional_json(args.platform_question_playbook_json),
         )
         print(f"Wrote goal audit JSON to {args.json_output}")
         print(f"Wrote goal audit Markdown to {args.markdown_output}")
@@ -3968,6 +3973,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
         synthetic_unblocker_proof=_load_optional_json(str(DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_JSON)),
         post_answer_pipeline=_load_optional_json(str(DEFAULT_POST_ANSWER_PIPELINE_JSON)),
         closed_jobs=_load_optional_json(str(DEFAULT_CLOSED_JOBS)),
+        platform_question_playbook=_load_optional_json(str(DEFAULT_PLATFORM_QUESTION_PLAYBOOK_JSON)),
     )
     apply_queue = write_apply_queue_readiness(
         DEFAULT_AUTOFILL_BATCH_JSON,

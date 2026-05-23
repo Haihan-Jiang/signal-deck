@@ -826,6 +826,9 @@ python3 -m job_apply_agent platform-question-playbook
 This writes `platform_question_playbook_latest.{json,md,html}` with platform
 coverage, top question categories, local synthetic submit evidence, closed
 posting counts, and the remaining final-answer intake blockers.
+`goal-audit` reads this file by default so the final readiness audit has a
+single evidence chain for platform coverage and the selected 100-position
+rehearsal.
 
 After the six answers are filled, run the safe gate first:
 

@@ -7933,6 +7933,19 @@ class JobApplyAgentTests(unittest.TestCase):
             },
         }
         closed_jobs = {"jobs": [{"key": "linkedin:1", "reason": "No longer accepting applications"}]}
+        platform_question_playbook = {
+            "summary": {
+                "target_platform_count": 2,
+                "target_platforms_at_100_count": 2,
+                "research_question_item_count": 500,
+                "selected_position_count": 100,
+                "selected_local_synthetic_submit_count": 100,
+                "selected_selector_miss_count": 0,
+                "closed_posting_count": 1,
+                "final_answer_missing_count": 2,
+                "real_platform_submission": False,
+            }
+        }
 
         audit = build_goal_readiness_audit(
             coverage_gate,
@@ -7946,6 +7959,7 @@ class JobApplyAgentTests(unittest.TestCase):
             synthetic_unblocker_proof=synthetic_unblocker_proof,
             post_answer_pipeline=post_answer_pipeline,
             closed_jobs=closed_jobs,
+            platform_question_playbook=platform_question_playbook,
         )
         markdown = render_goal_readiness_audit_markdown(audit)
 
@@ -7966,9 +7980,15 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(audit["blocker_summary"]["post_answer_synthetic_selector_miss_count"], 0)
         self.assertEqual(audit["blocker_summary"]["post_answer_synthetic_final_submit_stop_count"], 100)
         self.assertFalse(audit["blocker_summary"]["post_answer_synthetic_submits_real_applications"])
+        self.assertTrue(audit["blocker_summary"]["platform_playbook_ready"])
+        self.assertEqual(audit["blocker_summary"]["platform_playbook_target_platforms_at_100"], "2/2")
+        self.assertEqual(audit["blocker_summary"]["platform_playbook_selected_position_count"], 100)
         self.assertEqual(audit["requirements"][0]["status"], "achieved")
         fake_requirement = next(item for item in audit["requirements"] if item["id"] == "fake_candidate_100_position_rehearsal")
         self.assertTrue(fake_requirement["evidence"]["post_answer_synthetic_queue_rehearsal_ready"])
+        playbook_requirement = next(item for item in audit["requirements"] if item["id"] == "platform_question_playbook")
+        self.assertEqual(playbook_requirement["status"], "achieved")
+        self.assertEqual(playbook_requirement["evidence"]["target_platforms_at_100"], "2/2")
         self.assertEqual(audit["requirements"][4]["status"], "achieved")
         self.assertEqual(audit["top_data_blocking_prompts"][0]["coverage_status"], "needs_user_confirmation")
         self.assertIn("Goal Readiness Audit", markdown)
@@ -7978,6 +7998,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("synthetic final unblocker proof complete: true", markdown)
         self.assertIn("post-answer synthetic queue ready: true", markdown)
         self.assertIn("post-answer synthetic selected: 100, selector misses 0, final-submit stops 100", markdown)
+        self.assertIn("platform playbook ready: true", markdown)
+        self.assertIn("platform playbook targets at 100: 2/2", markdown)
         self.assertIn("Top Data-Blocking Prompts", markdown)
         self.assertIn("Have you worked with us before?", markdown)
 
@@ -7998,6 +8020,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 synthetic_unblocker_proof=synthetic_unblocker_proof,
                 post_answer_pipeline=post_answer_pipeline,
                 closed_jobs=closed_jobs,
+                platform_question_playbook=platform_question_playbook,
             )
 
             self.assertEqual(written["missing_requirement_count"], 1)
