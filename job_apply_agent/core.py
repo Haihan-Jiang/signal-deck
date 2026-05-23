@@ -10326,7 +10326,319 @@ def _learning_task_answer_suggestion(
                     "approval_note": "Profile preference suggests an answer; verify before approval.",
                 }
 
+        resume_suggestion = _resume_based_learning_answer_suggestion(task, profile)
+        if resume_suggestion:
+            return {**base, **resume_suggestion}
+
     return base
+
+
+def _resume_based_learning_answer_suggestion(
+    task: dict[str, Any],
+    profile: CandidateProfile | None,
+) -> dict[str, Any] | None:
+    if not profile:
+        return None
+    labels = [str(label) for label in _string_list(task.get("labels")) if str(label).strip()]
+    prompt_text = " ".join([str(task.get("question") or ""), *labels]).strip()
+    normalized = _normalize(prompt_text)
+    if not normalized:
+        return None
+    classification = classify_application_prompt(prompt_text)
+    skill_like = classification.category in {
+        "domain_experience",
+        "skills_experience",
+        "technical_experience",
+        "experience_years",
+    }
+    if not skill_like and not _looks_like_resume_skill_learning_prompt(normalized):
+        return None
+
+    selected_skills = _resume_skill_selection_answer(profile, normalized)
+    if selected_skills:
+        return {
+            "suggested_answer": selected_skills,
+            "suggested_answer_source": "profile.resume_facts_skill_inventory",
+            "suggestion_confidence": "medium",
+            "approval_risk": "medium",
+            "approval_note": (
+                "Drafted from current resume facts; verify the employer's exact choices "
+                "before approving."
+            ),
+        }
+
+    strict_missing_subject = _strict_missing_experience_subject(profile, normalized)
+    if strict_missing_subject:
+        return {
+            "suggested_answer": f"No confirmed {strict_missing_subject} in the current resume facts.",
+            "suggested_answer_source": "profile.resume_facts_absence",
+            "suggestion_confidence": "low",
+            "approval_risk": "medium",
+            "approval_note": (
+                "Strict domain draft based only on missing exact resume evidence; approve only "
+                "if it is truthful, or replace with the correct exception."
+            ),
+        }
+
+    matched_terms = _resume_supported_terms_for_prompt(profile, normalized)
+    if matched_terms:
+        evidence = _resume_evidence_for_terms(profile, matched_terms)
+        if not evidence:
+            evidence = profile.resume_facts.get("strongest_skills") or profile.resume_facts.get(
+                "professional_summary", ""
+            )
+        answer = "Yes. Current resume facts support this through: {evidence}.".format(
+            evidence=_clean_sentence(evidence)
+        )
+        return {
+            "suggested_answer": answer,
+            "suggested_answer_source": "profile.resume_facts",
+            "suggestion_confidence": "medium",
+            "approval_risk": "medium",
+            "approval_note": "Resume-derived draft; verify before approving for real applications.",
+        }
+
+    if _looks_like_yes_no_experience_prompt(normalized):
+        subject = _experience_subject_summary(normalized)
+        return {
+            "suggested_answer": f"No confirmed {subject} in the current resume facts.",
+            "suggested_answer_source": "profile.resume_facts_absence",
+            "suggestion_confidence": "low",
+            "approval_risk": "medium",
+            "approval_note": (
+                "Negative draft based only on missing resume evidence; approve only if it is "
+                "truthful, or replace with the correct exception."
+            ),
+        }
+    return None
+
+
+def _looks_like_resume_skill_learning_prompt(normalized: str) -> bool:
+    return any(
+        term in normalized
+        for term in [
+            "experience",
+            "proficiency",
+            "familiar",
+            "worked with",
+            "hands on",
+            "hands-on",
+            "select the tools",
+            "select all that apply",
+            "which backend",
+            "which frontend",
+            "which infrastructure",
+            "technologies",
+        ]
+    )
+
+
+def _looks_like_yes_no_experience_prompt(normalized: str) -> bool:
+    return (
+        normalized.startswith(("do you ", "have you ", "are you ", "did you "))
+        or "do you have" in normalized
+        or "have you worked" in normalized
+        or "have you used" in normalized
+        or "hands on experience" in normalized
+        or "hands-on experience" in normalized
+    ) and any(term in normalized for term in ["experience", "worked", "used", "familiar", "proficiency"])
+
+
+def _resume_skill_selection_answer(profile: CandidateProfile, normalized: str) -> str:
+    if not any(
+        term in normalized
+        for term in [
+            "select the tools",
+            "select all that apply",
+            "tools and technologies",
+            "which backend",
+            "which frontend",
+            "which infrastructure",
+            "technologies are you familiar",
+            "tools you are familiar",
+        ]
+    ):
+        return ""
+    skill_options = [
+        ("Python", ["python"]),
+        ("Linux", ["linux"]),
+        ("Azure", ["azure"]),
+        ("AWS", ["aws"]),
+        ("Kubernetes-style orchestration", ["kubernetes", "tupperware"]),
+        ("API gateway operations / Apache APISIX", ["api gateway", "apisix"]),
+        ("SQL / Hive", ["sql", "hive"]),
+        ("Redis", ["redis"]),
+        ("MongoDB", ["mongodb"]),
+        ("Prometheus / observability", ["prometheus", "observability"]),
+        ("Automation tooling", ["automation"]),
+        ("Incident response / on-call", ["incident", "on call", "on-call"]),
+        ("LLM-powered automation", ["llm"]),
+    ]
+    resume_blob = _resume_fact_blob(profile)
+    selected = [
+        label
+        for label, terms in skill_options
+        if any(_normalized_contains_term(resume_blob, term) for term in terms)
+    ]
+    return ", ".join(selected)
+
+
+def _resume_supported_terms_for_prompt(profile: CandidateProfile, normalized: str) -> list[str]:
+    resume_blob = _resume_fact_blob(profile)
+    supported: list[str] = []
+    for label, prompt_terms, resume_terms in _resume_skill_term_groups():
+        if not any(_normalized_contains_term(normalized, term) for term in prompt_terms):
+            continue
+        if any(_normalized_contains_term(resume_blob, term) for term in resume_terms):
+            supported.append(label)
+    return supported
+
+
+def _strict_missing_experience_subject(profile: CandidateProfile, normalized: str) -> str:
+    resume_blob = _resume_fact_blob(profile)
+    strict_groups = [
+        (
+            "FedRAMP or DoD IL5 experience",
+            ["fedramp", "dod il5", "il5"],
+            ["fedramp", "dod il5", "il5"],
+        ),
+        ("nation-state adversary experience", ["nation state"], ["nation state"]),
+        (
+            "fintech or financial companies experience",
+            ["fintech", "financial companies", "financial services"],
+            ["fintech", "financial companies", "financial services"],
+        ),
+        (
+            "highly regulated industry experience",
+            ["highly regulated", "fintech", "healthtech", "government"],
+            ["highly regulated", "fintech", "healthtech", "government"],
+        ),
+        ("proprietary trading experience", ["proprietary trading"], ["proprietary trading"]),
+        (
+            "telecommunications or wireless industry experience",
+            ["telecommunications", "wireless"],
+            ["telecommunications", "wireless"],
+        ),
+        (
+            "ad tech or digital media experience",
+            ["ad tech", "adtech", "digital media"],
+            ["ad tech", "adtech", "digital media"],
+        ),
+        ("blockchain or crypto experience", ["blockchain", "crypto"], ["blockchain", "crypto", "web3"]),
+        (
+            "customer-facing technical support experience",
+            ["customer facing technical support", "customer-facing technical support"],
+            ["customer facing technical support", "customer-facing technical support"],
+        ),
+        ("Go or C++ experience", ["go or c", "golang", "c++"], ["go", "golang", "c++"]),
+        (
+            "ClickHouse, OLAP, or DBaaS experience",
+            ["clickhouse", "olap", "dbaas"],
+            ["clickhouse", "olap", "dbaas"],
+        ),
+    ]
+    for subject, prompt_terms, resume_terms in strict_groups:
+        if not any(_normalized_contains_term(normalized, term) for term in prompt_terms):
+            continue
+        if any(_normalized_contains_term(resume_blob, term) for term in resume_terms):
+            return ""
+        if subject == "ClickHouse, OLAP, or DBaaS experience" and (
+            _normalized_contains_term(normalized, "sql database")
+            or _normalized_contains_term(normalized, "another sql")
+        ) and _normalized_contains_term(resume_blob, "sql"):
+            return ""
+        return subject
+    return ""
+
+
+def _resume_skill_term_groups() -> list[tuple[str, list[str], list[str]]]:
+    return [
+        ("Python", ["python"], ["python"]),
+        ("Linux", ["linux", "rocky linux"], ["linux", "rocky linux"]),
+        ("Azure", ["azure"], ["azure"]),
+        ("AWS", ["aws"], ["aws"]),
+        ("Kubernetes-style orchestration", ["kubernetes", "k8s"], ["kubernetes", "tupperware"]),
+        ("API gateway operations", ["api gateway", "apisix"], ["api gateway", "apisix"]),
+        (
+            "SQL/data infrastructure",
+            ["sql", "database", "data warehouse", "data infrastructure"],
+            ["sql", "hive", "data infrastructure"],
+        ),
+        ("Redis", ["redis"], ["redis"]),
+        ("MongoDB", ["mongodb"], ["mongodb"]),
+        (
+            "Prometheus/observability",
+            ["prometheus", "observability", "alerting"],
+            ["prometheus", "observability", "alerts"],
+        ),
+        (
+            "incident response/on-call",
+            ["incident", "on call", "on-call", "sre", "reliability"],
+            ["incident", "on call", "on-call", "sre", "reliability"],
+        ),
+        ("automation tooling", ["automation", "tooling"], ["automation", "tooling"]),
+        ("ML/LLM operations", ["ml", "llm", "model", "ai"], ["ml", "llm", "regression detection"]),
+    ]
+
+
+def _resume_fact_blob(profile: CandidateProfile) -> str:
+    values = [str(value) for value in profile.resume_facts.values() if str(value).strip()]
+    return _normalize(" ".join(values))
+
+
+def _resume_evidence_for_terms(profile: CandidateProfile, terms: list[str]) -> str:
+    normalized_terms = [_normalize(term) for term in terms if str(term).strip()]
+    snippets: list[str] = []
+    for key in [
+        "current_role",
+        "kubernetes_oncall_experience",
+        "cloud_experience",
+        "strongest_skills",
+        "impact_example",
+        "professional_summary",
+    ]:
+        value = str(profile.resume_facts.get(key) or "").strip()
+        if not value:
+            continue
+        normalized_value = _normalize(value)
+        if any(term and _normalized_contains_term(normalized_value, term) for term in normalized_terms):
+            snippets.append(_clean_sentence(value))
+    if not snippets and profile.resume_facts.get("strongest_skills"):
+        snippets.append(_clean_sentence(profile.resume_facts["strongest_skills"]))
+    return " ".join(snippets[:2])
+
+
+def _experience_subject_summary(normalized: str) -> str:
+    subject_terms = [
+        "fintech",
+        "financial companies",
+        "clickhouse",
+        "olap",
+        "dbaas",
+        "blockchain",
+        "crypto",
+        "proprietary trading",
+        "telecommunications",
+        "wireless",
+        "ad tech",
+        "digital media",
+        "customer facing technical support",
+        "go or c",
+        "c++",
+        "fedramp",
+        "dod il5",
+    ]
+    for term in subject_terms:
+        if _normalized_contains_term(normalized, term):
+            return f"{term} experience"
+    return "experience for this specific prompt"
+
+
+def _normalized_contains_term(normalized_text: str, term: str) -> bool:
+    normalized_term = _normalize(term)
+    if not normalized_text or not normalized_term:
+        return False
+    return re.search(rf"(?:^| ){re.escape(normalized_term)}(?: |$)", normalized_text) is not None
 
 
 def _suggest_profile_learning_answer(

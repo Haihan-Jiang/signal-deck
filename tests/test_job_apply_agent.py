@@ -2405,6 +2405,113 @@ class JobApplyAgentTests(unittest.TestCase):
             "high",
         )
 
+    def test_learning_task_template_drafts_resume_based_exact_prompt_answers(self) -> None:
+        readiness = {
+            "minimal_learning_tasks": [
+                {
+                    "group_key": "answer_memory:needs_user_confirmation:linux",
+                    "question": "Describe your experience working with Linux on desktops and embedded devices",
+                    "recommended_storage": "answer_memory",
+                    "labels": [
+                        "Describe your experience working with Linux on desktops and embedded devices"
+                    ],
+                    "platforms": ["Ashby"],
+                    "related_prompt_count": 1,
+                    "observed_count": 4,
+                    "required_count": 4,
+                },
+                {
+                    "group_key": "answer_memory:needs_user_confirmation:crypto",
+                    "question": "Do you have blockchain/crypto experience?",
+                    "recommended_storage": "answer_memory",
+                    "labels": ["Do you have blockchain/crypto experience?"],
+                    "platforms": ["Greenhouse"],
+                    "related_prompt_count": 1,
+                    "observed_count": 10,
+                    "required_count": 10,
+                },
+                {
+                    "group_key": "answer_memory:needs_user_confirmation:tools",
+                    "question": "Please select the tools and technologies you have proficiency with using in your day-to-day work.",
+                    "recommended_storage": "answer_memory",
+                    "labels": [
+                        "Please select the tools and technologies you have proficiency with using in your day-to-day work."
+                    ],
+                    "platforms": ["Lever"],
+                    "related_prompt_count": 1,
+                    "observed_count": 8,
+                    "required_count": 8,
+                },
+                {
+                    "group_key": "answer_memory:needs_user_confirmation:fedramp",
+                    "question": "Do you have hands-on experience supporting FedRAMP High and/or DoD IL5 environments?",
+                    "recommended_storage": "answer_memory",
+                    "labels": [
+                        "Do you have hands-on experience supporting FedRAMP High and/or DoD IL5 environments?"
+                    ],
+                    "platforms": ["Ashby"],
+                    "related_prompt_count": 1,
+                    "observed_count": 2,
+                    "required_count": 2,
+                },
+            ]
+        }
+
+        profile = CandidateProfile(
+            name=self.profile.name,
+            email=self.profile.email,
+            phone=self.profile.phone,
+            location=self.profile.location,
+            target_titles=self.profile.target_titles,
+            target_locations=self.profile.target_locations,
+            remote_ok=self.profile.remote_ok,
+            keywords=self.profile.keywords,
+            blocklist=self.profile.blocklist,
+            min_score=self.profile.min_score,
+            resume_facts={
+                **self.profile.resume_facts,
+                "strongest_skills": "Python, Linux, Azure, SQL, Redis, MongoDB, and automation tooling",
+                "current_role": "Operating Rocky Linux migration and Azure VM reliability work",
+            },
+            question_answers=self.profile.question_answers,
+        )
+
+        template = build_learning_task_template(readiness, profile=profile)
+        tasks = {task["group_key"]: task for task in template["tasks"]}
+
+        self.assertIn(
+            "Current resume facts support",
+            tasks["answer_memory:needs_user_confirmation:linux"]["suggested_answer"],
+        )
+        self.assertEqual(
+            tasks["answer_memory:needs_user_confirmation:linux"]["suggested_answer_source"],
+            "profile.resume_facts",
+        )
+        self.assertIn(
+            "No confirmed blockchain or crypto experience",
+            tasks["answer_memory:needs_user_confirmation:crypto"]["suggested_answer"],
+        )
+        self.assertEqual(
+            tasks["answer_memory:needs_user_confirmation:crypto"]["suggested_answer_source"],
+            "profile.resume_facts_absence",
+        )
+        self.assertIn(
+            "Python",
+            tasks["answer_memory:needs_user_confirmation:tools"]["suggested_answer"],
+        )
+        self.assertIn(
+            "Linux",
+            tasks["answer_memory:needs_user_confirmation:tools"]["suggested_answer"],
+        )
+        self.assertEqual(
+            tasks["answer_memory:needs_user_confirmation:tools"]["suggested_answer_source"],
+            "profile.resume_facts_skill_inventory",
+        )
+        self.assertIn(
+            "No confirmed FedRAMP or DoD IL5 experience",
+            tasks["answer_memory:needs_user_confirmation:fedramp"]["suggested_answer"],
+        )
+
     def test_learning_approval_pack_groups_tasks_by_review_action(self) -> None:
         learning_tasks = {
             "task_count": 4,
