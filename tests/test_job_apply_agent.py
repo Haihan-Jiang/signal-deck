@@ -9885,6 +9885,31 @@ class JobApplyAgentTests(unittest.TestCase):
                 }
             ],
         }
+        submission_safety_audit = {
+            "status": "safe",
+            "safe": True,
+            "issue_count": 0,
+            "warning_count": 1,
+            "summary": {
+                "final_answer_reply_fake_marker_count": 0,
+                "synthetic_final_answer_reply_fake_marker_count": 5,
+                "apply_packet_final_submit_stop_count": 100,
+                "browser_review_queue_safe": True,
+            },
+            "checks": [
+                {
+                    "id": "real_final_answer_fake_markers",
+                    "status": "ok",
+                    "evidence": {"fake_marker_count": 0},
+                },
+                {
+                    "id": "synthetic_final_answer_fake_markers",
+                    "status": "ok",
+                    "evidence": {"fake_marker_count": 5},
+                },
+            ],
+            "warnings": [{"id": "final_answers_waiting", "message": "6 answers remain waiting"}],
+        }
         final_answer_intake_template = {
             "answer_count": 6,
             "high_risk_count": 5,
@@ -9916,6 +9941,7 @@ class JobApplyAgentTests(unittest.TestCase):
             apply_queue_autofill_packet=apply_queue_autofill_packet,
             apply_queue_refresh=apply_queue_refresh,
             position_execution_audit=position_execution_audit,
+            submission_safety_audit=submission_safety_audit,
         )
         markdown = render_automation_handoff_markdown(report)
         html = render_automation_handoff_html(report)
@@ -9937,6 +9963,17 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["summary"]["position_execution_audited_count"], 100)
         self.assertEqual(report["summary"]["position_execution_ready_after_answers_count"], 100)
         self.assertEqual(report["summary"]["position_execution_selector_miss_count"], 0)
+        self.assertTrue(report["summary"]["submission_safety_safe"])
+        self.assertEqual(report["summary"]["submission_safety_issue_count"], 0)
+        self.assertEqual(report["summary"]["submission_safety_warning_count"], 1)
+        self.assertEqual(report["summary"]["submission_safety_real_final_answer_fake_marker_count"], 0)
+        self.assertEqual(
+            report["summary"]["submission_safety_synthetic_final_answer_fake_marker_count"],
+            5,
+        )
+        self.assertEqual(report["summary"]["submission_safety_apply_packet_final_submit_stop_count"], 100)
+        self.assertTrue(report["summary"]["submission_safety_browser_review_queue_safe"])
+        self.assertIn("submission_safety_audit", report["policy"])
         self.assertEqual(report["summary"]["final_answer_intake_count"], 6)
         self.assertEqual(report["summary"]["final_answer_intake_high_risk_count"], 5)
         self.assertFalse(report["summary"]["final_answer_intake_ready_for_finalize"])
@@ -9978,6 +10015,9 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("synthetic final unblocker proof: true", markdown)
         self.assertIn("apply queue refresh: queue_refreshed", markdown)
         self.assertIn("autofill packet: waiting_for_confirmed_answers", markdown)
+        self.assertIn("submission safety: safe", markdown)
+        self.assertIn("final-answer fake/test markers: real 0, synthetic 5", markdown)
+        self.assertIn("Submission Safety Audit", markdown)
         self.assertIn("Confirmed-Answer Runbook", markdown)
         self.assertIn("One-Command Resume", markdown)
         self.assertIn("resume-after-answers", markdown)
@@ -9990,6 +10030,9 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("100-Position Execution Audit", markdown)
         self.assertIn("GitHub URL", html)
         self.assertIn("Queue refresh", html)
+        self.assertIn("Safety audit", html)
+        self.assertIn("Synthetic fake markers", html)
+        self.assertIn("Submission Safety Audit", html)
         self.assertIn("Confirmed-Answer Runbook", html)
         self.assertIn("One-Command Resume", html)
         self.assertIn("Final-Answer Intake", html)
@@ -10015,6 +10058,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 apply_queue_autofill_packet=apply_queue_autofill_packet,
                 apply_queue_refresh=apply_queue_refresh,
                 position_execution_audit=position_execution_audit,
+                submission_safety_audit=submission_safety_audit,
             )
             self.assertEqual(written["status"], "waiting_for_confirmed_answers")
             self.assertTrue(json_output.exists())

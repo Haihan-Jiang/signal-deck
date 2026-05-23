@@ -736,6 +736,14 @@ def main() -> int:
         "--review-queue-audit-markdown",
         default=str(DEFAULT_REVIEW_QUEUE_AUDIT_MARKDOWN),
     )
+    automation_handoff_parser.add_argument(
+        "--submission-safety-audit-json",
+        default=str(DEFAULT_SUBMISSION_SAFETY_AUDIT_JSON),
+    )
+    automation_handoff_parser.add_argument(
+        "--submission-safety-audit-markdown",
+        default=str(DEFAULT_SUBMISSION_SAFETY_AUDIT_MARKDOWN),
+    )
     automation_handoff_parser.add_argument("--answer-memory-json", default=str(DEFAULT_MEMORY))
     automation_handoff_parser.add_argument("--closed-jobs-json", default=str(DEFAULT_CLOSED_JOBS))
     automation_handoff_parser.add_argument("--json-output", default=str(DEFAULT_AUTOMATION_HANDOFF_JSON))
@@ -2662,6 +2670,7 @@ def main() -> int:
             apply_queue_autofill_packet=_load_optional_json(args.apply_queue_autofill_packet_json),
             apply_queue_refresh=_load_optional_json(args.apply_queue_refresh_json),
             position_execution_audit=_load_optional_json(args.position_execution_audit_json),
+            submission_safety_audit=_load_optional_json(args.submission_safety_audit_json),
             source_artifacts=_question_export_source_artifacts(
                 {
                     "Goal readiness audit": args.goal_audit_json,
@@ -2683,8 +2692,8 @@ def main() -> int:
                     "Position execution audit HTML": args.position_execution_audit_html,
                     "Browser review queue audit": args.review_queue_audit_json,
                     "Browser review queue audit Markdown": args.review_queue_audit_markdown,
-                    "Submission safety audit": str(DEFAULT_SUBMISSION_SAFETY_AUDIT_JSON),
-                    "Submission safety audit Markdown": str(DEFAULT_SUBMISSION_SAFETY_AUDIT_MARKDOWN),
+                    "Submission safety audit": args.submission_safety_audit_json,
+                    "Submission safety audit Markdown": args.submission_safety_audit_markdown,
                     "Answer memory": args.answer_memory_json,
                     "Closed postings": args.closed_jobs_json,
                 }
@@ -2705,6 +2714,13 @@ def main() -> int:
         print(f"Autofill selected: {summary.get('autofill_selected_count', 0)}")
         print(f"Position execution audit: {summary.get('position_execution_status') or 'missing'}")
         print(f"Positions audited: {summary.get('position_execution_audited_count', 0)}")
+        print(f"Submission safety: {summary.get('submission_safety_status') or 'missing'}")
+        print(f"Submission safety issues: {summary.get('submission_safety_issue_count', 0)}")
+        print(
+            "Final-answer fake markers: real "
+            f"{summary.get('submission_safety_real_final_answer_fake_marker_count', 0)}, "
+            f"synthetic {summary.get('submission_safety_synthetic_final_answer_fake_marker_count', 0)}"
+        )
         return 0
 
     if args.command == "fill-plan":
@@ -5601,7 +5617,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             platform_question_playbook=_load_optional_json(str(DEFAULT_PLATFORM_QUESTION_PLAYBOOK_JSON)),
             position_execution_audit=position_execution_audit,
         )
-    write_submission_safety_audit(
+    submission_safety_audit = write_submission_safety_audit(
         DEFAULT_SUBMISSION_SAFETY_AUDIT_JSON,
         DEFAULT_SUBMISSION_SAFETY_AUDIT_MARKDOWN,
         fake_position_rehearsal=_load_optional_json(str(DEFAULT_FAKE_POSITION_REHEARSAL_JSON)),
@@ -5629,6 +5645,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
         apply_queue_autofill_packet=apply_queue_autofill_packet,
         apply_queue_refresh=_load_optional_json(str(DEFAULT_APPLY_QUEUE_REFRESH_JSON)),
         position_execution_audit=position_execution_audit,
+        submission_safety_audit=submission_safety_audit,
         source_artifacts=_question_export_source_artifacts(
             {
                 "Goal readiness audit": str(DEFAULT_GOAL_AUDIT_JSON),

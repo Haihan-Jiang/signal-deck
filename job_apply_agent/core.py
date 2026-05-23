@@ -15417,6 +15417,7 @@ def build_automation_handoff_report(
     apply_queue_autofill_packet: dict[str, Any] | None = None,
     apply_queue_refresh: dict[str, Any] | None = None,
     position_execution_audit: dict[str, Any] | None = None,
+    submission_safety_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     goal = goal_readiness_audit or {}
     questionnaire = critical_input_questionnaire or {}
@@ -15431,6 +15432,8 @@ def build_automation_handoff_report(
     queue_refresh_final = queue_refresh.get("final") or {}
     execution_audit = position_execution_audit or {}
     execution_summary = execution_audit.get("summary") or {}
+    safety_audit = submission_safety_audit or {}
+    safety_summary = safety_audit.get("summary") if isinstance(safety_audit.get("summary"), dict) else {}
     final_intake_update = final_answer_intake_update or {}
     final_intake_summary = final_intake_update.get("summary") or {}
     blocker_summary = goal.get("blocker_summary") or {}
@@ -15584,6 +15587,22 @@ def build_automation_handoff_report(
         "position_execution_remaining_user_answer_count": int(
             execution_summary.get("remaining_user_answer_count") or 0
         ),
+        "submission_safety_status": safety_audit.get("status", ""),
+        "submission_safety_safe": bool(safety_audit.get("safe")) if safety_audit else False,
+        "submission_safety_issue_count": _submission_safety_int(safety_audit.get("issue_count")),
+        "submission_safety_warning_count": _submission_safety_int(safety_audit.get("warning_count")),
+        "submission_safety_real_final_answer_fake_marker_count": _submission_safety_int(
+            safety_summary.get("final_answer_reply_fake_marker_count")
+        ),
+        "submission_safety_synthetic_final_answer_fake_marker_count": _submission_safety_int(
+            safety_summary.get("synthetic_final_answer_reply_fake_marker_count")
+        ),
+        "submission_safety_apply_packet_final_submit_stop_count": _submission_safety_int(
+            safety_summary.get("apply_packet_final_submit_stop_count")
+        ),
+        "submission_safety_browser_review_queue_safe": bool(
+            safety_summary.get("browser_review_queue_safe")
+        ),
         "selected_stop_group_count": len(selected_stop_summary),
         "blocked_stop_group_count": len(blocked_stop_summary),
         "missing_profile_input_count": len(missing_profile_inputs),
@@ -15618,12 +15637,14 @@ def build_automation_handoff_report(
         "stop_action_samples": stop_samples[:250],
         "position_execution_audit": _automation_handoff_position_execution_rows(execution_audit),
         "position_execution_platform_summary": execution_audit.get("platform_summary") or [],
+        "submission_safety": _automation_handoff_submission_safety_rows(safety_audit),
         "missing_profile_inputs": missing_profile_inputs,
         "source_artifacts": source_artifacts or [],
         "policy": {
             "fake_data": "Fake candidate data is limited to local/sandbox rehearsal and is never submitted to real employers.",
             "closed_postings": "Any page with No longer accepting applications is persisted and skipped before notify/open/apply.",
             "final_submit": "Real employer final submit stays supervised and requires explicit user confirmation.",
+            "submission_safety_audit": "Any submission-safety-audit issue is a hard stop before browser opening, notifications, or apply actions.",
             "sensitive_answers": "Protected-class/self-ID answers are supervised-only and are not stored for reuse.",
             "security": "CAPTCHA, login, MFA, and other security challenges are not bypassed.",
         },
@@ -15649,6 +15670,7 @@ def write_automation_handoff_report(
     apply_queue_autofill_packet: dict[str, Any] | None = None,
     apply_queue_refresh: dict[str, Any] | None = None,
     position_execution_audit: dict[str, Any] | None = None,
+    submission_safety_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     report = build_automation_handoff_report(
         goal_readiness_audit,
@@ -15665,6 +15687,7 @@ def write_automation_handoff_report(
         apply_queue_autofill_packet=apply_queue_autofill_packet,
         apply_queue_refresh=apply_queue_refresh,
         position_execution_audit=position_execution_audit,
+        submission_safety_audit=submission_safety_audit,
     )
     json_path = Path(json_output)
     markdown_path = Path(markdown_output)
@@ -15708,6 +15731,8 @@ def render_automation_handoff_markdown(report: dict[str, Any]) -> str:
         f"- apply queue refresh: {summary.get('apply_queue_refresh_status') or 'missing'}, rounds {summary.get('apply_queue_refresh_round_count', 0)}, live open after answers {summary.get('apply_queue_refresh_live_open_after_answers_count', 0)}, top-up required {summary.get('apply_queue_refresh_top_up_required_count', 0)}",
         f"- autofill packet: {summary.get('autofill_packet_status') or 'missing'}, selected {summary.get('autofill_packet_selected_count', 0)}, browser actions {summary.get('autofill_packet_browser_action_count', 0)}, final-submit stops {summary.get('autofill_packet_final_submit_stop_count', 0)}, selector misses {summary.get('autofill_packet_selector_miss_count', 0)}",
         f"- position execution audit: {summary.get('position_execution_status') or 'missing'}, audited {summary.get('position_execution_audited_count', 0)} / {summary.get('position_execution_target_count', 0)}, ready after answers {summary.get('position_execution_ready_after_answers_count', 0)}, selector misses {summary.get('position_execution_selector_miss_count', 0)}",
+        f"- submission safety: {summary.get('submission_safety_status') or 'missing'}, safe {str(bool(summary.get('submission_safety_safe'))).lower()}, issues {summary.get('submission_safety_issue_count', 0)}, warnings {summary.get('submission_safety_warning_count', 0)}",
+        f"- final-answer fake/test markers: real {summary.get('submission_safety_real_final_answer_fake_marker_count', 0)}, synthetic {summary.get('submission_safety_synthetic_final_answer_fake_marker_count', 0)}, packet final-submit stops {summary.get('submission_safety_apply_packet_final_submit_stop_count', 0)}",
         "",
         "## One-Command Resume",
         "",
@@ -15832,6 +15857,16 @@ def render_automation_handoff_markdown(report: dict[str, Any]) -> str:
             ],
         )
     )
+    lines.extend(["", "## Submission Safety Audit", ""])
+    lines.extend(
+        _simple_markdown_table(
+            ["ID", "Status", "Evidence"],
+            [
+                [row.get("id"), row.get("status"), row.get("evidence")]
+                for row in report.get("submission_safety", [])
+            ],
+        )
+    )
     lines.extend(["", "## Missing Profile Inputs", ""])
     lines.extend(
         _simple_markdown_table(
@@ -15904,6 +15939,12 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
                     ("Audited positions", summary.get("position_execution_audited_count", 0)),
                     ("Ready after answers", summary.get("position_execution_ready_after_answers_count", 0)),
                     ("Execution misses", summary.get("position_execution_selector_miss_count", 0)),
+                    ("Safety audit", summary.get("submission_safety_status") or "missing"),
+                    ("Safety safe", str(bool(summary.get("submission_safety_safe"))).lower()),
+                    ("Safety issues", summary.get("submission_safety_issue_count", 0)),
+                    ("Real fake markers", summary.get("submission_safety_real_final_answer_fake_marker_count", 0)),
+                    ("Synthetic fake markers", summary.get("submission_safety_synthetic_final_answer_fake_marker_count", 0)),
+                    ("Safety final stops", summary.get("submission_safety_apply_packet_final_submit_stop_count", 0)),
                 ]
             ),
             "<section><h2>One-Command Resume</h2>",
@@ -16077,6 +16118,15 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
                         row.get("remaining_answer_inputs"),
                     ]
                     for row in report.get("position_execution_platform_summary", [])
+                ],
+            ),
+            "</section>",
+            "<section><h2>Submission Safety Audit</h2>",
+            _html_table(
+                ["ID", "Status", "Evidence"],
+                [
+                    [row.get("id"), row.get("status"), row.get("evidence")]
+                    for row in report.get("submission_safety", [])
                 ],
             ),
             "</section>",
@@ -16464,6 +16514,55 @@ def _automation_handoff_missing_profile_rows(batch: dict[str, Any]) -> list[dict
             }
         )
     return rows
+
+
+def _automation_handoff_submission_safety_rows(audit: dict[str, Any]) -> list[dict[str, Any]]:
+    if not audit:
+        return []
+    rows: list[dict[str, Any]] = [
+        {
+            "id": "summary",
+            "status": audit.get("status") or "unknown",
+            "evidence": _submission_safety_markdown_evidence(
+                {
+                    "safe": bool(audit.get("safe")),
+                    "issue_count": _submission_safety_int(audit.get("issue_count")),
+                    "warning_count": _submission_safety_int(audit.get("warning_count")),
+                }
+            ),
+        }
+    ]
+    for check in audit.get("checks") or []:
+        if not isinstance(check, dict):
+            continue
+        rows.append(
+            {
+                "id": check.get("id"),
+                "status": check.get("status"),
+                "evidence": _submission_safety_markdown_evidence(check.get("evidence")),
+            }
+        )
+    for issue in audit.get("issues") or []:
+        if not isinstance(issue, dict):
+            continue
+        rows.append(
+            {
+                "id": f"issue:{issue.get('id') or 'unknown'}",
+                "status": "issue",
+                "evidence": _submission_safety_markdown_evidence({"message": issue.get("message")}),
+            }
+        )
+    for warning in audit.get("warnings") or []:
+        if not isinstance(warning, dict):
+            continue
+        rows.append(
+            {
+                "id": f"warning:{warning.get('id') or 'unknown'}",
+                "status": "warning",
+                "evidence": _submission_safety_markdown_evidence({"message": warning.get("message")}),
+            }
+        )
+    return rows[:100]
 
 
 def _automation_handoff_answer_memory_count(answer_memory: dict[str, Any] | None) -> int:
