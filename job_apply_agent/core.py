@@ -13963,6 +13963,7 @@ def build_automation_handoff_report(
     source_artifacts: list[dict[str, Any]] | None = None,
     apply_queue_handoff: dict[str, Any] | None = None,
     apply_queue_autofill_packet: dict[str, Any] | None = None,
+    position_execution_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     goal = goal_readiness_audit or {}
     questionnaire = critical_input_questionnaire or {}
@@ -13973,6 +13974,8 @@ def build_automation_handoff_report(
     queue_handoff = apply_queue_handoff or {}
     autofill_packet = apply_queue_autofill_packet or {}
     packet_summary = autofill_packet.get("summary") or {}
+    execution_audit = position_execution_audit or {}
+    execution_summary = execution_audit.get("summary") or {}
     final_intake_update = final_answer_intake_update or {}
     final_intake_summary = final_intake_update.get("summary") or {}
     blocker_summary = goal.get("blocker_summary") or {}
@@ -14089,6 +14092,24 @@ def build_automation_handoff_report(
         "autofill_packet_local_synthetic_submit_count": int(
             packet_summary.get("local_synthetic_submit_count") or 0
         ),
+        "position_execution_status": execution_audit.get("status", ""),
+        "position_execution_audited_count": int(execution_summary.get("position_count") or 0),
+        "position_execution_target_count": int(execution_summary.get("target_count") or 0),
+        "position_execution_ready_after_answers_count": int(
+            execution_summary.get("ready_after_answers_count") or 0
+        ),
+        "position_execution_synthetic_ready_now_count": int(
+            execution_summary.get("synthetic_ready_now_count") or 0
+        ),
+        "position_execution_selector_miss_count": int(
+            execution_summary.get("selector_miss_count") or 0
+        ),
+        "position_execution_final_submit_stop_count": int(
+            execution_summary.get("final_submit_stop_count") or 0
+        ),
+        "position_execution_remaining_user_answer_count": int(
+            execution_summary.get("remaining_user_answer_count") or 0
+        ),
         "selected_stop_group_count": len(selected_stop_summary),
         "blocked_stop_group_count": len(blocked_stop_summary),
         "missing_profile_input_count": len(missing_profile_inputs),
@@ -14116,6 +14137,8 @@ def build_automation_handoff_report(
         "selected_stop_action_summary": selected_stop_summary,
         "blocked_candidate_stop_action_summary": blocked_stop_summary,
         "stop_action_samples": stop_samples[:250],
+        "position_execution_audit": _automation_handoff_position_execution_rows(execution_audit),
+        "position_execution_platform_summary": execution_audit.get("platform_summary") or [],
         "missing_profile_inputs": missing_profile_inputs,
         "source_artifacts": source_artifacts or [],
         "policy": {
@@ -14145,6 +14168,7 @@ def write_automation_handoff_report(
     source_artifacts: list[dict[str, Any]] | None = None,
     apply_queue_handoff: dict[str, Any] | None = None,
     apply_queue_autofill_packet: dict[str, Any] | None = None,
+    position_execution_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     report = build_automation_handoff_report(
         goal_readiness_audit,
@@ -14159,6 +14183,7 @@ def write_automation_handoff_report(
         source_artifacts=source_artifacts,
         apply_queue_handoff=apply_queue_handoff,
         apply_queue_autofill_packet=apply_queue_autofill_packet,
+        position_execution_audit=position_execution_audit,
     )
     json_path = Path(json_output)
     markdown_path = Path(markdown_output)
@@ -14199,6 +14224,7 @@ def render_automation_handoff_markdown(report: dict[str, Any]) -> str:
         f"- final-answer intake: {summary.get('final_answer_intake_count', 0)} answers, {summary.get('final_answer_intake_high_risk_count', 0)} high-risk, ready for finalize {str(bool(summary.get('final_answer_intake_ready_for_finalize'))).lower()}",
         f"- apply queue handoff: {summary.get('apply_queue_handoff_status') or 'missing'}, open ready {summary.get('apply_queue_open_ready_count', 0)}, open after answers {summary.get('apply_queue_open_after_answers_count', 0)}, manual live checks {summary.get('apply_queue_manual_live_check_count', 0)}",
         f"- autofill packet: {summary.get('autofill_packet_status') or 'missing'}, selected {summary.get('autofill_packet_selected_count', 0)}, browser actions {summary.get('autofill_packet_browser_action_count', 0)}, final-submit stops {summary.get('autofill_packet_final_submit_stop_count', 0)}, selector misses {summary.get('autofill_packet_selector_miss_count', 0)}",
+        f"- position execution audit: {summary.get('position_execution_status') or 'missing'}, audited {summary.get('position_execution_audited_count', 0)} / {summary.get('position_execution_target_count', 0)}, ready after answers {summary.get('position_execution_ready_after_answers_count', 0)}, selector misses {summary.get('position_execution_selector_miss_count', 0)}",
         "",
         "## Requirement Status",
         "",
@@ -14287,6 +14313,26 @@ def render_automation_handoff_markdown(report: dict[str, Any]) -> str:
             ],
         )
     )
+    lines.extend(["", "## 100-Position Execution Audit", ""])
+    lines.extend(
+        _simple_markdown_table(
+            ["#", "Status", "Platform", "Company", "Title", "Live", "Synthetic submit", "Final stops", "Gates"],
+            [
+                [
+                    row.get("index"),
+                    row.get("status"),
+                    row.get("platform"),
+                    row.get("company"),
+                    row.get("title"),
+                    row.get("live_status"),
+                    row.get("local_synthetic_submit_count"),
+                    row.get("final_submit_stop_count"),
+                    row.get("blockers_or_gates"),
+                ]
+                for row in report.get("position_execution_audit", [])[:120]
+            ],
+        )
+    )
     lines.extend(["", "Blocked candidate pool:"])
     lines.extend(
         _simple_markdown_table(
@@ -14361,6 +14407,10 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
                     ("Packet status", summary.get("autofill_packet_status") or "missing"),
                     ("Packet actions", summary.get("autofill_packet_browser_action_count", 0)),
                     ("Final submit stops", summary.get("autofill_packet_final_submit_stop_count", 0)),
+                    ("Execution audit", summary.get("position_execution_status") or "missing"),
+                    ("Audited positions", summary.get("position_execution_audited_count", 0)),
+                    ("Ready after answers", summary.get("position_execution_ready_after_answers_count", 0)),
+                    ("Execution misses", summary.get("position_execution_selector_miss_count", 0)),
                 ]
             ),
             "<section><h2>Requirement Status</h2>",
@@ -14457,6 +14507,64 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
                         *(report.get("selected_stop_action_summary") or []),
                         *(report.get("blocked_candidate_stop_action_summary") or []),
                     ]
+                ],
+            ),
+            "</section>",
+            "<section><h2>100-Position Execution Audit</h2>",
+            _html_table(
+                [
+                    "#",
+                    "Status",
+                    "Platform",
+                    "Company",
+                    "Title",
+                    "Role family",
+                    "Live status",
+                    "Synthetic submit",
+                    "Final stops",
+                    "Gates",
+                    "URL",
+                ],
+                [
+                    [
+                        row.get("index"),
+                        row.get("status"),
+                        row.get("platform"),
+                        row.get("company"),
+                        row.get("title"),
+                        row.get("role_family"),
+                        row.get("live_status"),
+                        row.get("local_synthetic_submit_count"),
+                        row.get("final_submit_stop_count"),
+                        row.get("blockers_or_gates"),
+                        row.get("apply_url"),
+                    ]
+                    for row in report.get("position_execution_audit", [])
+                ],
+            ),
+            "</section>",
+            "<section><h2>Position Execution Platform Summary</h2>",
+            _html_table(
+                [
+                    "Platform",
+                    "Audited",
+                    "Observed",
+                    "Synthetic submits",
+                    "Selector misses",
+                    "Final stops",
+                    "Remaining answer inputs",
+                ],
+                [
+                    [
+                        row.get("platform"),
+                        row.get("audited_positions"),
+                        row.get("observed_positions"),
+                        row.get("local_synthetic_submit_positions"),
+                        row.get("selector_miss_positions"),
+                        row.get("final_submit_stop_positions"),
+                        row.get("remaining_answer_inputs"),
+                    ]
+                    for row in report.get("position_execution_platform_summary", [])
                 ],
             ),
             "</section>",
@@ -14641,6 +14749,30 @@ def _automation_handoff_requirement_rows(goal: dict[str, Any]) -> list[dict[str,
                 "status": item.get("status"),
                 "requirement": item.get("requirement"),
                 "evidence": "; ".join(f"{key}={value}" for key, value in evidence.items()),
+            }
+        )
+    return rows
+
+
+def _automation_handoff_position_execution_rows(audit: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for row in audit.get("positions") or []:
+        if not isinstance(row, dict):
+            continue
+        rows.append(
+            {
+                "index": row.get("index"),
+                "status": row.get("status"),
+                "platform": row.get("platform"),
+                "company": row.get("company"),
+                "title": row.get("title"),
+                "role_family": row.get("role_family"),
+                "live_status": row.get("live_status"),
+                "local_synthetic_submit_count": int(row.get("local_synthetic_submit_count") or 0),
+                "final_submit_stop_count": int(row.get("final_submit_stop_count") or 0),
+                "selector_miss_count": int(row.get("selector_miss_count") or 0),
+                "blockers_or_gates": ", ".join(_string_list(row.get("blockers_or_gates"))),
+                "apply_url": row.get("apply_url"),
             }
         )
     return rows

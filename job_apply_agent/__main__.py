@@ -618,6 +618,14 @@ def main() -> int:
         "--apply-queue-autofill-packet-json",
         default=str(DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_JSON),
     )
+    automation_handoff_parser.add_argument(
+        "--position-execution-audit-json",
+        default=str(DEFAULT_POSITION_EXECUTION_AUDIT_JSON),
+    )
+    automation_handoff_parser.add_argument(
+        "--position-execution-audit-html",
+        default=str(DEFAULT_POSITION_EXECUTION_AUDIT_HTML),
+    )
     automation_handoff_parser.add_argument("--answer-memory-json", default=str(DEFAULT_MEMORY))
     automation_handoff_parser.add_argument("--closed-jobs-json", default=str(DEFAULT_CLOSED_JOBS))
     automation_handoff_parser.add_argument("--json-output", default=str(DEFAULT_AUTOMATION_HANDOFF_JSON))
@@ -1571,6 +1579,14 @@ def main() -> int:
         default=str(DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_HTML),
     )
     export_questions_parser.add_argument(
+        "--position-execution-audit-json",
+        default=str(DEFAULT_POSITION_EXECUTION_AUDIT_JSON),
+    )
+    export_questions_parser.add_argument(
+        "--position-execution-audit-html",
+        default=str(DEFAULT_POSITION_EXECUTION_AUDIT_HTML),
+    )
+    export_questions_parser.add_argument(
         "--critical-input-suggestions-json",
         default=str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON),
     )
@@ -1871,6 +1887,8 @@ def main() -> int:
                     "Apply queue open-ready jobs": args.apply_queue_open_ready_jobs_json,
                     "Apply queue autofill packet": args.apply_queue_autofill_packet_json,
                     "Apply queue autofill packet HTML": args.apply_queue_autofill_packet_html,
+                    "Position execution audit": args.position_execution_audit_json,
+                    "Position execution audit HTML": args.position_execution_audit_html,
                     "Critical input suggestions": args.critical_input_suggestions_json,
                     "Critical input questionnaire": args.critical_input_questionnaire_json,
                     "Critical input questionnaire HTML": args.critical_input_questionnaire_html,
@@ -2251,6 +2269,7 @@ def main() -> int:
             final_answer_intake_update=_load_optional_json(args.final_answer_intake_report_json),
             apply_queue_handoff=_load_optional_json(args.apply_queue_handoff_json),
             apply_queue_autofill_packet=_load_optional_json(args.apply_queue_autofill_packet_json),
+            position_execution_audit=_load_optional_json(args.position_execution_audit_json),
             source_artifacts=_question_export_source_artifacts(
                 {
                     "Goal readiness audit": args.goal_audit_json,
@@ -2265,6 +2284,8 @@ def main() -> int:
                     "Final answer intake report": args.final_answer_intake_report_json,
                     "Apply queue handoff": args.apply_queue_handoff_json,
                     "Apply queue autofill packet": args.apply_queue_autofill_packet_json,
+                    "Position execution audit": args.position_execution_audit_json,
+                    "Position execution audit HTML": args.position_execution_audit_html,
                     "Answer memory": args.answer_memory_json,
                     "Closed postings": args.closed_jobs_json,
                 }
@@ -2281,6 +2302,8 @@ def main() -> int:
         print(f"Open after answers: {summary.get('apply_queue_open_after_answers_count', 0)}")
         print(f"Autofill packet: {summary.get('autofill_packet_status') or 'missing'}")
         print(f"Autofill selected: {summary.get('autofill_selected_count', 0)}")
+        print(f"Position execution audit: {summary.get('position_execution_status') or 'missing'}")
+        print(f"Positions audited: {summary.get('position_execution_audited_count', 0)}")
         return 0
 
     if args.command == "fill-plan":
@@ -4375,6 +4398,22 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             target_count=100,
             include_values=False,
         )
+    position_execution_audit = None
+    if (
+        apply_queue_autofill_packet
+        and DEFAULT_PLATFORM_QUESTION_PLAYBOOK_JSON.exists()
+        and DEFAULT_POST_ANSWER_SYNTHETIC_AUTOFILL_PACKET_JSON.exists()
+    ):
+        position_execution_audit = write_position_execution_audit(
+            DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_JSON,
+            DEFAULT_POST_ANSWER_SYNTHETIC_AUTOFILL_PACKET_JSON,
+            DEFAULT_PLATFORM_QUESTION_PLAYBOOK_JSON,
+            DEFAULT_GOAL_AUDIT_JSON,
+            DEFAULT_POSITION_EXECUTION_AUDIT_JSON,
+            DEFAULT_POSITION_EXECUTION_AUDIT_MARKDOWN,
+            DEFAULT_POSITION_EXECUTION_AUDIT_HTML,
+            target_count=100,
+        )
     automation_handoff = write_automation_handoff_report(
         goal,
         _load_optional_json(str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_JSON)),
@@ -4390,6 +4429,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
         final_answer_intake_update=_load_optional_json(str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_JSON)),
         apply_queue_handoff=apply_queue_handoff,
         apply_queue_autofill_packet=apply_queue_autofill_packet,
+        position_execution_audit=position_execution_audit,
         source_artifacts=_question_export_source_artifacts(
             {
                 "Goal readiness audit": str(DEFAULT_GOAL_AUDIT_JSON),
@@ -4414,6 +4454,8 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                 "Apply queue open-ready jobs": str(DEFAULT_APPLY_QUEUE_OPEN_READY_JOBS),
                 "Apply queue autofill packet": str(DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_JSON),
                 "Apply queue autofill packet HTML": str(DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_HTML),
+                "Position execution audit": str(DEFAULT_POSITION_EXECUTION_AUDIT_JSON),
+                "Position execution audit HTML": str(DEFAULT_POSITION_EXECUTION_AUDIT_HTML),
                 "Answer memory": str(DEFAULT_MEMORY),
                 "Closed postings": str(DEFAULT_CLOSED_JOBS),
             }
@@ -4456,6 +4498,8 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                     "Apply queue open-ready jobs": str(DEFAULT_APPLY_QUEUE_OPEN_READY_JOBS),
                     "Apply queue autofill packet": str(DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_JSON),
                     "Apply queue autofill packet HTML": str(DEFAULT_APPLY_QUEUE_AUTOFILL_PACKET_HTML),
+                    "Position execution audit": str(DEFAULT_POSITION_EXECUTION_AUDIT_JSON),
+                    "Position execution audit HTML": str(DEFAULT_POSITION_EXECUTION_AUDIT_HTML),
                     "Critical input suggestions": str(DEFAULT_CRITICAL_INPUT_SUGGESTIONS_JSON),
                     "Critical input questionnaire": str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_JSON),
                     "Critical input questionnaire HTML": str(DEFAULT_CRITICAL_INPUT_QUESTIONNAIRE_HTML),

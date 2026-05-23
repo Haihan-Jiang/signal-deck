@@ -8297,6 +8297,48 @@ class JobApplyAgentTests(unittest.TestCase):
                 "local_synthetic_submit_count": 100,
             },
         }
+        position_execution_audit = {
+            "status": "ready_after_confirmed_answers",
+            "summary": {
+                "position_count": 100,
+                "target_count": 100,
+                "ready_after_answers_count": 100,
+                "synthetic_ready_now_count": 100,
+                "selector_miss_count": 0,
+                "final_submit_stop_count": 100,
+                "remaining_user_answer_count": 6,
+            },
+            "positions": [
+                {
+                    "index": 1,
+                    "status": "ready_after_confirmed_answers",
+                    "platform": "Lever",
+                    "company": "Example",
+                    "title": "SRE",
+                    "role_family": "SRE",
+                    "live_status": "open_live_checked",
+                    "local_synthetic_submit_count": 1,
+                    "final_submit_stop_count": 1,
+                    "selector_miss_count": 0,
+                    "blockers_or_gates": [
+                        "waiting_for_confirmed_answers",
+                        "final_submit_supervised_gate",
+                    ],
+                    "apply_url": "https://jobs.lever.co/example/1",
+                }
+            ],
+            "platform_summary": [
+                {
+                    "platform": "Lever",
+                    "audited_positions": 100,
+                    "observed_positions": 100,
+                    "local_synthetic_submit_positions": 100,
+                    "selector_miss_positions": 0,
+                    "final_submit_stop_positions": 100,
+                    "remaining_answer_inputs": 2,
+                }
+            ],
+        }
         final_answer_intake_template = {
             "answer_count": 6,
             "high_risk_count": 5,
@@ -8326,6 +8368,7 @@ class JobApplyAgentTests(unittest.TestCase):
             closed_jobs=closed_jobs,
             apply_queue_handoff=apply_queue_handoff,
             apply_queue_autofill_packet=apply_queue_autofill_packet,
+            position_execution_audit=position_execution_audit,
         )
         markdown = render_automation_handoff_markdown(report)
         html = render_automation_handoff_html(report)
@@ -8341,6 +8384,9 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["summary"]["apply_queue_open_after_answers_count"], 100)
         self.assertEqual(report["summary"]["autofill_packet_browser_action_count"], 101)
         self.assertEqual(report["summary"]["autofill_packet_final_submit_stop_count"], 100)
+        self.assertEqual(report["summary"]["position_execution_audited_count"], 100)
+        self.assertEqual(report["summary"]["position_execution_ready_after_answers_count"], 100)
+        self.assertEqual(report["summary"]["position_execution_selector_miss_count"], 0)
         self.assertEqual(report["summary"]["final_answer_intake_count"], 6)
         self.assertEqual(report["summary"]["final_answer_intake_high_risk_count"], 5)
         self.assertFalse(report["summary"]["final_answer_intake_ready_for_finalize"])
@@ -8370,10 +8416,13 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Confirmed-Answer Runbook", markdown)
         self.assertIn("Final-Answer Intake", markdown)
         self.assertIn("100-Position Stop Actions", markdown)
+        self.assertIn("position execution audit: ready_after_confirmed_answers", markdown)
+        self.assertIn("100-Position Execution Audit", markdown)
         self.assertIn("GitHub URL", html)
         self.assertIn("Confirmed-Answer Runbook", html)
         self.assertIn("Final-Answer Intake", html)
         self.assertIn("Answer Impact Queue", html)
+        self.assertIn("100-Position Execution Audit", html)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             json_output = Path(temp_dir) / "handoff.json"
@@ -8392,6 +8441,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 closed_jobs=closed_jobs,
                 apply_queue_handoff=apply_queue_handoff,
                 apply_queue_autofill_packet=apply_queue_autofill_packet,
+                position_execution_audit=position_execution_audit,
             )
             self.assertEqual(written["status"], "waiting_for_confirmed_answers")
             self.assertTrue(json_output.exists())
