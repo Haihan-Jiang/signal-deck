@@ -221,6 +221,21 @@ DEFAULT_FINAL_ANSWER_REPLY_MARKDOWN = (
 DEFAULT_FINAL_ANSWER_REPLY_PAYLOAD_JSON = (
     Path(__file__).with_name("outbox") / "final_answer_reply_payload_latest.json"
 )
+DEFAULT_FINAL_ANSWER_REPLY_SYNTHETIC_JSON = (
+    Path(__file__).with_name("outbox") / "final_answer_reply_synthetic_intake_latest.json"
+)
+DEFAULT_FINAL_ANSWER_REPLY_SYNTHETIC_MARKDOWN = (
+    Path(__file__).with_name("outbox") / "final_answer_reply_synthetic_intake_latest.md"
+)
+DEFAULT_FINAL_ANSWER_REPLY_SYNTHETIC_PAYLOAD_JSON = (
+    Path(__file__).with_name("outbox") / "final_answer_reply_synthetic_payload_latest.json"
+)
+DEFAULT_FINAL_ANSWER_REPLY_SYNTHETIC_INTAKE_REPORT_JSON = (
+    Path(__file__).with_name("outbox") / "final_answer_reply_synthetic_intake_report_latest.json"
+)
+DEFAULT_FINAL_ANSWER_REPLY_SYNTHETIC_INTAKE_REPORT_MARKDOWN = (
+    Path(__file__).with_name("outbox") / "final_answer_reply_synthetic_intake_report_latest.md"
+)
 DEFAULT_POST_ANSWER_SYNTHETIC_COMPACT_UPDATES_JSON = (
     Path(__file__).with_name("outbox") / "post_answer_pipeline_synthetic_unblockers_updates_latest.json"
 )
@@ -1109,6 +1124,11 @@ def main() -> int:
         "--run-post-answer-pipeline",
         action="store_true",
         help="after parsing and validation, run post-answer-pipeline using the parsed intake payload",
+    )
+    final_answer_reply_parser.add_argument(
+        "--synthetic-rehearse-queue",
+        action="store_true",
+        help="parse the reply and run the 100-job queue rehearsal with fake local profile/memory only",
     )
     final_answer_reply_parser.add_argument("--post-answer-apply", action="store_true")
     final_answer_reply_parser.add_argument("--post-answer-live-check", action="store_true")
@@ -2868,6 +2888,61 @@ def main() -> int:
         if bool(args.reply_text) == bool(args.reply_file):
             raise ValueError("provide exactly one of --reply-text or --reply-file")
         _validate_final_answer_intake_server_post_answer_args(args)
+        synthetic_reply_rehearsal = bool(args.synthetic_rehearse_queue)
+        reply_json_output = _synthetic_default_path(
+            args.json_output,
+            DEFAULT_FINAL_ANSWER_REPLY_JSON,
+            DEFAULT_FINAL_ANSWER_REPLY_SYNTHETIC_JSON,
+            synthetic_reply_rehearsal,
+        )
+        reply_markdown_output = _synthetic_default_path(
+            args.markdown_output,
+            DEFAULT_FINAL_ANSWER_REPLY_MARKDOWN,
+            DEFAULT_FINAL_ANSWER_REPLY_SYNTHETIC_MARKDOWN,
+            synthetic_reply_rehearsal,
+        )
+        intake_output = _synthetic_default_path(
+            args.intake_output,
+            DEFAULT_FINAL_ANSWER_REPLY_PAYLOAD_JSON,
+            DEFAULT_FINAL_ANSWER_REPLY_SYNTHETIC_PAYLOAD_JSON,
+            synthetic_reply_rehearsal,
+        )
+        compact_updates_output = _synthetic_default_path(
+            args.compact_updates_output,
+            DEFAULT_CRITICAL_INPUT_UNBLOCKERS_UPDATES_JSON,
+            DEFAULT_POST_ANSWER_SYNTHETIC_COMPACT_UPDATES_JSON,
+            synthetic_reply_rehearsal,
+        )
+        intake_report_json_output = _synthetic_default_path(
+            args.final_answer_intake_report_json,
+            DEFAULT_FINAL_ANSWER_INTAKE_REPORT_JSON,
+            DEFAULT_FINAL_ANSWER_REPLY_SYNTHETIC_INTAKE_REPORT_JSON,
+            synthetic_reply_rehearsal,
+        )
+        intake_report_markdown_output = _synthetic_default_path(
+            args.final_answer_intake_report_markdown,
+            DEFAULT_FINAL_ANSWER_INTAKE_REPORT_MARKDOWN,
+            DEFAULT_FINAL_ANSWER_REPLY_SYNTHETIC_INTAKE_REPORT_MARKDOWN,
+            synthetic_reply_rehearsal,
+        )
+        confirmed_updates_output = _synthetic_default_path(
+            args.confirmed_updates_output,
+            DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_JSON,
+            DEFAULT_POST_ANSWER_SYNTHETIC_CONFIRMED_UPDATES_JSON,
+            synthetic_reply_rehearsal,
+        )
+        confirmed_report_json_output = _synthetic_default_path(
+            args.confirmed_report_json_output,
+            DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_JSON,
+            DEFAULT_POST_ANSWER_SYNTHETIC_CONFIRMED_UPDATES_REPORT_JSON,
+            synthetic_reply_rehearsal,
+        )
+        confirmed_report_markdown_output = _synthetic_default_path(
+            args.confirmed_report_markdown_output,
+            DEFAULT_CRITICAL_INPUT_CONFIRMED_UPDATES_REPORT_MARKDOWN,
+            DEFAULT_POST_ANSWER_SYNTHETIC_CONFIRMED_UPDATES_REPORT_MARKDOWN,
+            synthetic_reply_rehearsal,
+        )
         template_path = Path(args.template)
         if not template_path.exists():
             raise FileNotFoundError(f"final answer intake template not found: {args.template}")
@@ -2880,12 +2955,12 @@ def main() -> int:
         report = write_final_answer_reply_intake(
             json.loads(template_path.read_text(encoding="utf-8")),
             str(reply_text or ""),
-            args.json_output,
-            args.markdown_output,
+            reply_json_output,
+            reply_markdown_output,
             confirm_high_risk=args.confirm_high_risk,
         )
-        print(f"Wrote final answer reply intake JSON to {args.json_output}")
-        print(f"Wrote final answer reply intake Markdown to {args.markdown_output}")
+        print(f"Wrote final answer reply intake JSON to {reply_json_output}")
+        print(f"Wrote final answer reply intake Markdown to {reply_markdown_output}")
         print(f"Parsed answers: {report.get('answer_count', 0)}")
         print(f"Unknown keys: {report.get('unknown_key_count', 0)}")
         print(f"Duplicate keys: {report.get('duplicate_key_count', 0)}")
@@ -2894,24 +2969,24 @@ def main() -> int:
         if not unblockers_path.exists():
             raise FileNotFoundError(f"critical input unblockers not found: {args.unblockers}")
         intake_payload = report.get("intake_payload") if isinstance(report.get("intake_payload"), dict) else {}
-        intake_output_path = Path(args.intake_output)
+        intake_output_path = Path(intake_output)
         intake_output_path.parent.mkdir(parents=True, exist_ok=True)
         intake_output_path.write_text(
             json.dumps(intake_payload, ensure_ascii=True, indent=2) + "\n",
             encoding="utf-8",
         )
-        print(f"Wrote final answer intake payload JSON to {args.intake_output}")
+        print(f"Wrote final answer intake payload JSON to {intake_output}")
         intake_report = write_final_answer_intake_update(
             json.loads(unblockers_path.read_text(encoding="utf-8")),
             intake_payload,
-            args.compact_updates_output,
-            args.final_answer_intake_report_json,
-            args.final_answer_intake_report_markdown,
+            compact_updates_output,
+            intake_report_json_output,
+            intake_report_markdown_output,
             confirm_high_risk=args.confirm_high_risk,
         )
         intake_summary = intake_report.get("summary") or {}
-        print(f"Wrote compact final-answer updates to {args.compact_updates_output}")
-        print(f"Wrote final answer intake report JSON to {args.final_answer_intake_report_json}")
+        print(f"Wrote compact final-answer updates to {compact_updates_output}")
+        print(f"Wrote final answer intake report JSON to {intake_report_json_output}")
         print(f"Ready for finalize: {str(bool(intake_report.get('ready_for_finalize'))).lower()}")
         print(f"Missing unblockers: {intake_summary.get('missing_unblocker_count', 0)}")
         print(f"High-risk confirmations missing: {intake_summary.get('unconfirmed_high_risk_count', 0)}")
@@ -2919,15 +2994,15 @@ def main() -> int:
         print(f"Unknown answers: {intake_summary.get('unknown_answer_count', 0)}")
         if args.finalize:
             final_report = write_critical_input_unblocker_final_update(
-                args.compact_updates_output,
+                compact_updates_output,
                 args.full_template,
                 args.unblockers,
-                args.confirmed_updates_output,
-                args.confirmed_report_json_output,
-                args.confirmed_report_markdown_output,
+                confirmed_updates_output,
+                confirmed_report_json_output,
+                confirmed_report_markdown_output,
             )
             final_summary = final_report.get("summary") or {}
-            print(f"Wrote confirmed updates JSON to {args.confirmed_updates_output}")
+            print(f"Wrote confirmed updates JSON to {confirmed_updates_output}")
             print(
                 "Confirmed updates ready for workflow: "
                 f"{str(bool(final_report.get('ready_for_workflow'))).lower()}"
@@ -2943,6 +3018,100 @@ def main() -> int:
             int(report.get("unknown_key_count") or 0)
             or int(report.get("duplicate_key_count") or 0)
         )
+        if synthetic_reply_rehearsal:
+            if not intake_report.get("ready_for_finalize") or parser_has_errors:
+                print("Synthetic queue rehearsal skipped: final answer reply is not ready.")
+                if args.fail_on_not_ready:
+                    return 2
+                return 0
+            final_report = write_critical_input_unblocker_final_update(
+                compact_updates_output,
+                args.full_template,
+                args.unblockers,
+                confirmed_updates_output,
+                confirmed_report_json_output,
+                confirmed_report_markdown_output,
+            )
+            synthetic_steps: list[dict[str, object]] = [
+                {
+                    "name": "final_answer_reply_intake",
+                    "status": "ready",
+                    "details": {
+                        "answers": intake_summary.get("answer_input_count", 0),
+                        "compact_updates": intake_summary.get("compact_update_count", 0),
+                    },
+                },
+                {
+                    "name": "finalize_synthetic_confirmed_updates",
+                    "status": "ready" if final_report.get("ready_for_workflow") else "waiting_for_answers",
+                    "details": (final_report.get("summary") or {}),
+                },
+            ]
+            synthetic_queue_rehearsal = (
+                _run_synthetic_post_answer_queue_rehearsal(confirmed_updates_output, synthetic_steps)
+                if final_report.get("ready_for_workflow")
+                else {}
+            )
+            rehearsal_ready = bool(
+                final_report.get("ready_for_workflow")
+                and synthetic_queue_rehearsal.get("ready_for_supervised_browser_autofill")
+            )
+            synthetic_report = {
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "source": "final_answer_reply_synthetic_rehearsal",
+                "status": (
+                    "synthetic_queue_rehearsal_ready"
+                    if rehearsal_ready
+                    else "synthetic_queue_rehearsal_not_ready"
+                ),
+                "ready_for_workflow": bool(final_report.get("ready_for_workflow")),
+                "apply_requested": False,
+                "live_check_requested": False,
+                "open_browser_requested": False,
+                "include_values": False,
+                "synthetic_final_answers": True,
+                "synthetic_queue_rehearsal_requested": True,
+                "final_answer_intake_json": str(intake_output),
+                "final_answer_intake_report_outputs": {
+                    "json": str(intake_report_json_output),
+                    "markdown": str(intake_report_markdown_output),
+                },
+                "final_answer_intake_report": {
+                    key: value for key, value in intake_report.items() if key != "compact_updates"
+                },
+                "confirmed_updates_output": str(confirmed_updates_output),
+                "final_update_report_outputs": {
+                    "json": str(confirmed_report_json_output),
+                    "markdown": str(confirmed_report_markdown_output),
+                },
+                "final_update_report": {
+                    key: value for key, value in final_report.items() if key != "merged_updates"
+                },
+                "synthetic_queue_rehearsal": synthetic_queue_rehearsal,
+                "steps": synthetic_steps,
+                "policy": {
+                    "submits_real_applications": False,
+                    "writes_real_profile_or_memory": False,
+                    "opens_browser": False,
+                    "runs_live_check": False,
+                    "final_submit_remains_supervised": True,
+                    "synthetic_queue_rehearsal_uses_fake_local_profile_and_memory": True,
+                },
+            }
+            _write_post_answer_pipeline_report(
+                synthetic_report,
+                args.post_answer_json_output,
+                args.post_answer_markdown_output,
+            )
+            print(f"Wrote synthetic reply rehearsal JSON to {args.post_answer_json_output}")
+            print(f"Wrote synthetic reply rehearsal Markdown to {args.post_answer_markdown_output}")
+            print(f"Synthetic queue rehearsal: {synthetic_queue_rehearsal.get('status') or 'not_built'}")
+            print(f"Synthetic selected: {synthetic_queue_rehearsal.get('autofill_packet_selected', 0)}")
+            print(f"Synthetic selector misses: {synthetic_queue_rehearsal.get('autofill_packet_selector_misses', 0)}")
+            print(f"Synthetic final-submit stops: {synthetic_queue_rehearsal.get('autofill_packet_final_submit_stops', 0)}")
+            if args.fail_on_not_ready and not rehearsal_ready:
+                return 2
+            return 0
         if args.run_post_answer_pipeline:
             if not intake_report.get("ready_for_finalize") or parser_has_errors:
                 print("Post-answer pipeline skipped: final answer reply is not ready.")
@@ -2950,15 +3119,15 @@ def main() -> int:
                     return 2
                 return 0
             pipeline_args = argparse.Namespace(
-                compact_updates=args.compact_updates_output,
+                compact_updates=compact_updates_output,
                 full_template=args.full_template,
                 unblockers=args.unblockers,
-                confirmed_updates_output=args.confirmed_updates_output,
-                confirmed_report_json_output=args.confirmed_report_json_output,
-                confirmed_report_markdown_output=args.confirmed_report_markdown_output,
-                final_answer_intake_json=args.intake_output,
-                final_answer_intake_report_json=args.final_answer_intake_report_json,
-                final_answer_intake_report_markdown=args.final_answer_intake_report_markdown,
+                confirmed_updates_output=confirmed_updates_output,
+                confirmed_report_json_output=confirmed_report_json_output,
+                confirmed_report_markdown_output=confirmed_report_markdown_output,
+                final_answer_intake_json=intake_output,
+                final_answer_intake_report_json=intake_report_json_output,
+                final_answer_intake_report_markdown=intake_report_markdown_output,
                 confirm_high_risk=args.confirm_high_risk,
                 synthetic_final_answers=False,
                 synthetic_rehearse_queue=False,
@@ -4306,6 +4475,8 @@ def _load_optional_json(path_value: str | None) -> dict | None:
 
 
 def _validate_final_answer_intake_server_post_answer_args(args: argparse.Namespace) -> None:
+    if getattr(args, "synthetic_rehearse_queue", False) and getattr(args, "run_post_answer_pipeline", False):
+        raise ValueError("--synthetic-rehearse-queue cannot be combined with --run-post-answer-pipeline")
     if not args.run_post_answer_pipeline:
         for flag_name in [
             "post_answer_apply",
@@ -4320,6 +4491,17 @@ def _validate_final_answer_intake_server_post_answer_args(args: argparse.Namespa
         raise ValueError("--post-answer-live-check and --post-answer-include-values require --post-answer-apply")
     if args.post_answer_open_browser and not args.post_answer_live_check:
         raise ValueError("--post-answer-open-browser requires --post-answer-live-check")
+
+
+def _synthetic_default_path(
+    path_value: str | Path,
+    default_path: str | Path,
+    synthetic_path: str | Path,
+    use_synthetic: bool,
+) -> str:
+    if use_synthetic and _same_path(path_value, default_path):
+        return str(synthetic_path)
+    return str(path_value)
 
 
 def _post_answer_pipeline_summary(report: dict | None) -> dict[str, object]:

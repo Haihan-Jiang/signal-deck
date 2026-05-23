@@ -7007,9 +7007,10 @@ class JobApplyAgentTests(unittest.TestCase):
             report["reply_template_lines"],
             ["citizenship_status: <fill>", "citizenship_status_confirmed: yes"],
         )
-        self.assertIn("--run-post-answer-pipeline", report["next_commands"][0])
-        self.assertIn("--post-answer-apply", report["next_commands"][1])
-        self.assertIn("--post-answer-live-check", report["next_commands"][1])
+        self.assertIn("--synthetic-rehearse-queue", report["next_commands"][0])
+        self.assertIn("--run-post-answer-pipeline", report["next_commands"][1])
+        self.assertIn("--post-answer-apply", report["next_commands"][2])
+        self.assertIn("--post-answer-live-check", report["next_commands"][2])
         self.assertIn("Final Answer Blockers", markdown)
         self.assertIn("citizenship_status", markdown)
         self.assertIn("## Reply Template", markdown)
@@ -7232,6 +7233,7 @@ class JobApplyAgentTests(unittest.TestCase):
     def test_final_answer_intake_server_post_answer_flags_are_guarded(self) -> None:
         base_args = {
             "run_post_answer_pipeline": False,
+            "synthetic_rehearse_queue": False,
             "post_answer_apply": False,
             "post_answer_live_check": False,
             "post_answer_include_values": False,
@@ -7262,6 +7264,16 @@ class JobApplyAgentTests(unittest.TestCase):
                         "run_post_answer_pipeline": True,
                         "post_answer_apply": True,
                         "post_answer_open_browser": True,
+                    }
+                )
+            )
+        with self.assertRaisesRegex(ValueError, "cannot be combined"):
+            _validate_final_answer_intake_server_post_answer_args(
+                argparse.Namespace(
+                    **{
+                        **base_args,
+                        "run_post_answer_pipeline": True,
+                        "synthetic_rehearse_queue": True,
                     }
                 )
             )
@@ -8944,14 +8956,16 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("--post-answer-open-browser", report["one_command_resume_and_open"])
         self.assertIn("final-answer-intake-server", report["next_commands"][0])
         self.assertIn("final-answer-blockers", report["next_commands"][1])
-        self.assertIn("final-answer-reply --reply-file", report["next_commands"][2])
-        self.assertIn("--run-post-answer-pipeline", report["next_commands"][2])
-        self.assertIn("--post-answer-apply", report["next_commands"][3])
-        self.assertIn("--post-answer-live-check", report["next_commands"][3])
-        self.assertIn("--post-answer-open-browser", report["next_commands"][4])
-        self.assertIn("post-answer-pipeline --synthetic-final-answers --synthetic-rehearse-queue", report["next_commands"][5])
-        self.assertIn("post-answer-pipeline --fail-on-not-ready", report["next_commands"][6])
-        self.assertIn("post-answer-pipeline --apply --live-check", report["next_commands"][7])
+        self.assertIn("final-answer-reply --reply-file /path/to/fake-reply.txt", report["next_commands"][2])
+        self.assertIn("--synthetic-rehearse-queue", report["next_commands"][2])
+        self.assertIn("final-answer-reply --reply-file", report["next_commands"][3])
+        self.assertIn("--run-post-answer-pipeline", report["next_commands"][3])
+        self.assertIn("--post-answer-apply", report["next_commands"][4])
+        self.assertIn("--post-answer-live-check", report["next_commands"][4])
+        self.assertIn("--post-answer-open-browser", report["next_commands"][5])
+        self.assertIn("post-answer-pipeline --synthetic-final-answers --synthetic-rehearse-queue", report["next_commands"][6])
+        self.assertIn("post-answer-pipeline --fail-on-not-ready", report["next_commands"][7])
+        self.assertIn("post-answer-pipeline --apply --live-check", report["next_commands"][8])
         self.assertIn("closed-preflight --jobs", " ".join(report["next_commands"]))
         self.assertEqual(report["answer_impact_queue"][0]["input_id"], "answer_memory_citizenship_status_default_policy")
         self.assertEqual(report["final_answer_intake"][0]["alias"], "citizenship_status")
@@ -8966,6 +8980,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Confirmed-Answer Runbook", markdown)
         self.assertIn("One-Command Resume", markdown)
         self.assertIn("final-answer-intake-server", markdown)
+        self.assertIn("--synthetic-rehearse-queue", markdown)
         self.assertIn("final-answer-reply --reply-file", markdown)
         self.assertIn("Final-Answer Intake", markdown)
         self.assertIn("needs specificity 0", markdown)

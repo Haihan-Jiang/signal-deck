@@ -15372,10 +15372,10 @@ def _automation_handoff_confirmed_answer_runbook(summary: dict[str, Any]) -> lis
         },
         {
             "step": 2,
-            "name": "Run synthetic local rehearsal",
+            "name": "Run fake reply-file rehearsal",
             "status": "ready",
-            "action": "python3 -m job_apply_agent post-answer-pipeline --synthetic-final-answers --synthetic-rehearse-queue --fail-on-not-ready",
-            "expected_result": "Fake local answers prove the final-answer gate and 100-position autofill queue without writing real profile or answer memory.",
+            "action": "python3 -m job_apply_agent final-answer-reply --reply-file /path/to/fake-reply.txt --synthetic-rehearse-queue --fail-on-not-ready",
+            "expected_result": "A fake reply file proves the reply parser, final-answer gate, and 100-position autofill queue without writing real profile or answer memory.",
         },
         {
             "step": 3,
@@ -15440,6 +15440,7 @@ def _automation_handoff_next_commands(summary: dict[str, Any]) -> list[str]:
     commands = [
         _automation_handoff_one_command_resume(summary),
         "python3 -m job_apply_agent final-answer-blockers --notify-telegram --telegram-dry-run",
+        "python3 -m job_apply_agent final-answer-reply --reply-file /path/to/fake-reply.txt --synthetic-rehearse-queue --fail-on-not-ready",
         "python3 -m job_apply_agent final-answer-reply --reply-file /path/to/reply.txt --run-post-answer-pipeline --fail-on-not-ready",
         "python3 -m job_apply_agent final-answer-reply --reply-file /path/to/reply.txt --run-post-answer-pipeline --post-answer-apply --post-answer-live-check --post-answer-include-values --fail-on-not-ready",
         "python3 -m job_apply_agent final-answer-reply --reply-file /path/to/reply.txt --run-post-answer-pipeline --post-answer-apply --post-answer-live-check --post-answer-include-values --post-answer-open-browser --post-answer-open-limit 100 --fail-on-not-ready",
@@ -20253,6 +20254,7 @@ def build_final_answer_blocker_report(
         "reply_template": "\n".join(reply_template_lines),
         "reply_template_lines": reply_template_lines,
         "next_commands": [
+            "python3 -m job_apply_agent final-answer-reply --reply-file /path/to/fake-reply.txt --synthetic-rehearse-queue --fail-on-not-ready",
             "python3 -m job_apply_agent final-answer-reply --reply-file /path/to/reply.txt --run-post-answer-pipeline --fail-on-not-ready",
             "python3 -m job_apply_agent final-answer-reply --reply-file /path/to/reply.txt --run-post-answer-pipeline --post-answer-apply --post-answer-live-check --post-answer-include-values --fail-on-not-ready",
             "python3 -m job_apply_agent final-answer-intake-server --open-browser --once --run-post-answer-pipeline --post-answer-apply --post-answer-live-check --post-answer-include-values",
