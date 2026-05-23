@@ -142,6 +142,7 @@ from job_apply_agent.core import (
     render_final_answer_intake_update_markdown,
     render_final_answer_blocker_report_markdown,
     render_final_answer_reply_intake_markdown,
+    render_final_answer_reply_template_text,
     render_goal_readiness_audit_markdown,
     render_learning_approval_pack_markdown,
     render_learning_task_template_markdown,
@@ -7005,8 +7006,9 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["blockers"][0]["alias"], "citizenship_status")
         self.assertEqual(
             report["reply_template_lines"],
-            ["citizenship_status: <fill>", "citizenship_status_confirmed: yes"],
+            ["citizenship_status\uff1a<fill>", "citizenship_status_confirmed\uff1a\u786e\u8ba4"],
         )
+        reply_template_text = render_final_answer_reply_template_text(report)
         self.assertIn("--synthetic-rehearse-queue", report["next_commands"][0])
         self.assertIn("--run-post-answer-pipeline", report["next_commands"][1])
         self.assertIn("--post-answer-apply", report["next_commands"][2])
@@ -7014,25 +7016,30 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Final Answer Blockers", markdown)
         self.assertIn("citizenship_status", markdown)
         self.assertIn("## Reply Template", markdown)
-        self.assertIn("citizenship_status: <fill>", markdown)
+        self.assertIn("citizenship_status\uff1a<fill>", markdown)
         self.assertIn("\u786e\u8ba4", markdown)
+        self.assertIn("citizenship_status_confirmed\uff1a\u786e\u8ba4", reply_template_text)
+        self.assertIn("Final answer reply template", reply_template_text)
         self.assertIn("Job automation needs final answers", alert)
         self.assertIn("citizenship_status", alert)
         self.assertIn("Reply format:", alert)
-        self.assertIn("citizenship_status: <fill>", alert)
-        self.assertIn("citizenship_status_confirmed: yes", alert)
+        self.assertIn("citizenship_status\uff1a<fill>", alert)
+        self.assertIn("citizenship_status_confirmed\uff1a\u786e\u8ba4", alert)
         self.assertIn("\u786e\u8ba4", alert)
         self.assertNotIn("98004", json.dumps(report))
         self.assertNotIn("98004", markdown)
         self.assertNotIn("98004", alert)
+        self.assertNotIn("98004", reply_template_text)
         self.assertNotIn("Sensitive citizenship answer phrase 12345", json.dumps(report))
         self.assertNotIn("Sensitive citizenship answer phrase 12345", markdown)
         self.assertNotIn("Sensitive citizenship answer phrase 12345", alert)
+        self.assertNotIn("Sensitive citizenship answer phrase 12345", reply_template_text)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             json_output = root / "blockers.json"
             markdown_output = root / "blockers.md"
+            reply_template_output = root / "reply_template.txt"
             env_path = root / "telegram.env"
             env_path.write_text(
                 'export SIGNAL_DECK_TELEGRAM_BOT_TOKEN="token-123"\n'
@@ -7044,6 +7051,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 goal_audit,
                 json_output,
                 markdown_output,
+                reply_template_output,
             )
             notify_result = notify_telegram_for_final_answer_blockers(
                 written,
@@ -7052,6 +7060,11 @@ class JobApplyAgentTests(unittest.TestCase):
             )
             self.assertTrue(json_output.exists())
             self.assertTrue(markdown_output.exists())
+            self.assertTrue(reply_template_output.exists())
+            self.assertIn(
+                "citizenship_status_confirmed\uff1a\u786e\u8ba4",
+                reply_template_output.read_text(encoding="utf-8"),
+            )
             self.assertTrue(notify_result["ok"])
             self.assertTrue(notify_result["skipped"])
             self.assertNotIn("Sensitive citizenship answer phrase 12345", notify_result["message"])

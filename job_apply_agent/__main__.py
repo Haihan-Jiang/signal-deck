@@ -212,6 +212,9 @@ DEFAULT_FINAL_ANSWER_BLOCKERS_JSON = (
 DEFAULT_FINAL_ANSWER_BLOCKERS_MARKDOWN = (
     Path(__file__).with_name("outbox") / "final_answer_blockers_latest.md"
 )
+DEFAULT_FINAL_ANSWER_REPLY_TEMPLATE_TEXT = (
+    Path(__file__).with_name("outbox") / "final_answer_reply_template_latest.txt"
+)
 DEFAULT_FINAL_ANSWER_REPLY_JSON = (
     Path(__file__).with_name("outbox") / "final_answer_reply_intake_latest.json"
 )
@@ -1070,6 +1073,10 @@ def main() -> int:
     final_answer_blockers_parser.add_argument(
         "--markdown-output",
         default=str(DEFAULT_FINAL_ANSWER_BLOCKERS_MARKDOWN),
+    )
+    final_answer_blockers_parser.add_argument(
+        "--reply-template-output",
+        default=str(DEFAULT_FINAL_ANSWER_REPLY_TEMPLATE_TEXT),
     )
     final_answer_blockers_parser.add_argument("--notify-telegram", action="store_true")
     final_answer_blockers_parser.add_argument("--telegram-env", default=None)
@@ -2862,10 +2869,12 @@ def main() -> int:
             _load_optional_json(args.goal_audit),
             args.json_output,
             args.markdown_output,
+            args.reply_template_output,
         )
         summary = report.get("summary") or {}
         print(f"Wrote final answer blockers JSON to {args.json_output}")
         print(f"Wrote final answer blockers Markdown to {args.markdown_output}")
+        print(f"Wrote final answer reply template to {args.reply_template_output}")
         print(f"Blockers: {summary.get('blocker_count', 0)}")
         print(f"Missing answers: {summary.get('missing_answer_count', 0)}")
         print(f"Unconfirmed high-risk: {summary.get('unconfirmed_high_risk_count', 0)}")
@@ -4866,6 +4875,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             goal,
             DEFAULT_FINAL_ANSWER_BLOCKERS_JSON,
             DEFAULT_FINAL_ANSWER_BLOCKERS_MARKDOWN,
+            DEFAULT_FINAL_ANSWER_REPLY_TEMPLATE_TEXT,
         )
     apply_queue = write_apply_queue_readiness(
         DEFAULT_AUTOFILL_BATCH_JSON,
@@ -4975,6 +4985,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                 "Final answer intake report Markdown": str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_MARKDOWN),
                 "Final answer blockers": str(DEFAULT_FINAL_ANSWER_BLOCKERS_JSON),
                 "Final answer blockers Markdown": str(DEFAULT_FINAL_ANSWER_BLOCKERS_MARKDOWN),
+                "Final answer reply template": str(DEFAULT_FINAL_ANSWER_REPLY_TEMPLATE_TEXT),
                 "Apply queue": str(DEFAULT_APPLY_QUEUE_JSON),
                 "Apply queue HTML": str(DEFAULT_APPLY_QUEUE_HTML),
                 "Apply queue live-check jobs": str(DEFAULT_APPLY_QUEUE_LIVE_CHECK_JOBS),
@@ -5050,6 +5061,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
                     "Final answer intake report Markdown": str(DEFAULT_FINAL_ANSWER_INTAKE_REPORT_MARKDOWN),
                     "Final answer blockers": str(DEFAULT_FINAL_ANSWER_BLOCKERS_JSON),
                     "Final answer blockers Markdown": str(DEFAULT_FINAL_ANSWER_BLOCKERS_MARKDOWN),
+                    "Final answer reply template": str(DEFAULT_FINAL_ANSWER_REPLY_TEMPLATE_TEXT),
                 }
             ),
             synthetic_browser_execution=_load_optional_json(str(DEFAULT_SYNTHETIC_BROWSER_EXEC_JSON)),

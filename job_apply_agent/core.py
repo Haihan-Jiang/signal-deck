@@ -20293,15 +20293,40 @@ def write_final_answer_blocker_report(
     goal_audit: dict[str, Any] | None,
     json_output: str | Path,
     markdown_output: str | Path,
+    reply_template_output: str | Path | None = None,
 ) -> dict[str, Any]:
     report = build_final_answer_blocker_report(template, goal_audit=goal_audit)
     json_path = Path(json_output)
     markdown_path = Path(markdown_output)
-    for output_path in [json_path, markdown_path]:
+    reply_template_path = Path(reply_template_output) if reply_template_output else None
+    for output_path in [path for path in [json_path, markdown_path, reply_template_path] if path]:
         output_path.parent.mkdir(parents=True, exist_ok=True)
+    if reply_template_path:
+        report["reply_template_output"] = str(reply_template_path)
     json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
     markdown_path.write_text(render_final_answer_blocker_report_markdown(report), encoding="utf-8")
+    if reply_template_path:
+        reply_template_path.write_text(
+            render_final_answer_reply_template_text(report),
+            encoding="utf-8",
+        )
     return report
+
+
+def render_final_answer_reply_template_text(report: dict[str, Any]) -> str:
+    lines = [
+        "# Final answer reply template",
+        "# Fill the <fill> values with truthful reusable answers.",
+        "# For high-risk confirmations, keep 确认 only when the answer is exact and truthful.",
+        "# English : and Chinese ： separators are both accepted by final-answer-reply.",
+        "",
+    ]
+    reply_lines = report.get("reply_template_lines") or []
+    if reply_lines:
+        lines.extend(str(line) for line in reply_lines)
+    else:
+        lines.append("# No final-answer blockers remain.")
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
@@ -20408,9 +20433,9 @@ def _final_answer_blocker_reply_template_lines(blockers: list[dict[str, Any]]) -
         alias = str(row.get("alias") or "").strip()
         if not alias:
             continue
-        lines.append(f"{alias}: <fill>")
+        lines.append(f"{alias}\uff1a<fill>")
         if row.get("high_risk"):
-            lines.append(f"{alias}_confirmed: yes")
+            lines.append(f"{alias}_confirmed\uff1a\u786e\u8ba4")
     return lines
 
 
