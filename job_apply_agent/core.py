@@ -12632,8 +12632,7 @@ def build_selected_final_answer_dependency_report(
     if not isinstance(position_execution_audit, dict):
         raise ValueError("position execution audit must be a JSON object")
     blockers = final_answer_blockers or {}
-    known_aliases = unresolved_final_answer_aliases_from_blocker_report(blockers)
-    known_alias_set = set(known_aliases)
+    raw_known_aliases = unresolved_final_answer_aliases_from_blocker_report(blockers)
     all_final_answer_aliases = set(FINAL_ANSWER_INTAKE_ALIASES.values())
     items_by_position = _research_items_by_position(research)
     selected_positions = [
@@ -12650,6 +12649,18 @@ def build_selected_final_answer_dependency_report(
     global_dependency_aliases = _string_list(
         position_summary.get("selected_queue_remaining_user_answer_aliases")
     ) or _string_list(position_summary.get("global_remaining_user_answer_aliases"))
+    if selected_queue_remaining_answers > 0 and global_dependency_aliases:
+        known_aliases = [
+            alias for alias in global_dependency_aliases if alias in all_final_answer_aliases
+        ]
+        known_alias_source = "position_execution_latest_answer_gate"
+    else:
+        known_aliases = raw_known_aliases
+        known_alias_source = "final_answer_blockers"
+    known_alias_set = set(known_aliases)
+    superseded_known_aliases = [
+        alias for alias in raw_known_aliases if alias not in known_alias_set
+    ]
     direct_or_global_dependency_aliases = sorted(set(global_dependency_aliases))
     selected_queue_has_global_gate = bool(
         selected_queue_remaining_answers > 0 and global_dependency_aliases
@@ -12764,6 +12775,8 @@ def build_selected_final_answer_dependency_report(
         "selected_position_count": selected_count,
         "known_unresolved_alias_count": len(known_aliases),
         "known_unresolved_aliases": known_aliases,
+        "known_unresolved_alias_source": known_alias_source,
+        "superseded_unresolved_aliases": superseded_known_aliases,
         "selected_dependency_alias_count": len(selected_dependency_aliases),
         "selected_dependency_aliases": selected_dependency_aliases,
         "positions_with_final_answer_dependencies": len(rows_with_dependencies),
@@ -12972,6 +12985,7 @@ def render_selected_final_answer_dependency_markdown(report: dict[str, Any]) -> 
         "",
         f"- selected positions: {summary.get('selected_position_count', 0)} / {summary.get('target_count', 0)}",
         f"- known unresolved aliases: {summary.get('known_unresolved_alias_count', 0)}",
+        f"- known alias source: {summary.get('known_unresolved_alias_source', '')}",
         f"- positions with direct final-answer dependencies: {summary.get('positions_with_final_answer_dependencies', 0)}",
         f"- direct dependency prompts: {summary.get('direct_dependency_prompt_count', 0)}",
         f"- positions waiting on global answer gate: {summary.get('positions_waiting_on_global_answer_gate', 0)}",
@@ -12985,6 +12999,8 @@ def render_selected_final_answer_dependency_markdown(report: dict[str, Any]) -> 
         + (", ".join(summary.get("direct_or_global_dependency_aliases") or []) or "none"),
         "- global blockers not seen in selected rows: "
         + (", ".join(summary.get("global_blockers_not_seen_in_selected_positions") or []) or "none"),
+        "- superseded unresolved aliases: "
+        + (", ".join(summary.get("superseded_unresolved_aliases") or []) or "none"),
         "",
         "## Requirement Status",
         "",
@@ -13080,6 +13096,7 @@ def render_selected_final_answer_dependency_html(report: dict[str, Any]) -> str:
                         f"{summary.get('selected_position_count', 0)} / {summary.get('target_count', 0)}",
                     ),
                     ("Known aliases", summary.get("known_unresolved_alias_count", 0)),
+                    ("Alias source", summary.get("known_unresolved_alias_source", "")),
                     ("Direct rows", summary.get("positions_with_final_answer_dependencies", 0)),
                     ("Global gate rows", summary.get("positions_waiting_on_global_answer_gate", 0)),
                     (
@@ -13171,6 +13188,13 @@ def _position_execution_key(row: dict[str, Any]) -> str:
 def _position_execution_global_answer_aliases(goal_readiness_audit: dict[str, Any]) -> list[str]:
     if not isinstance(goal_readiness_audit, dict):
         return []
+    latest_validation = (
+        goal_readiness_audit.get("latest_final_answer_validation")
+        if isinstance(goal_readiness_audit.get("latest_final_answer_validation"), dict)
+        else {}
+    )
+    if _goal_latest_final_answer_validation_has_attempt(latest_validation):
+        return _goal_latest_final_answer_problem_aliases(latest_validation)
     verdict = goal_readiness_audit.get("completion_verdict")
     aliases = _string_list(
         (verdict or {}).get("blocking_final_answer_aliases")
@@ -13187,6 +13211,26 @@ def _position_execution_global_answer_aliases(goal_readiness_audit: dict[str, An
         and str(row.get("alias") or row.get("input_id") or "").strip()
     ]
     return sorted(dict.fromkeys(row_aliases))
+
+
+def _position_execution_global_answer_count(
+    goal_readiness_audit: dict[str, Any],
+    platform_playbook: dict[str, Any],
+    global_remaining_answer_aliases: list[str],
+) -> int:
+    latest_validation = (
+        goal_readiness_audit.get("latest_final_answer_validation")
+        if isinstance(goal_readiness_audit.get("latest_final_answer_validation"), dict)
+        else {}
+    )
+    if _goal_latest_final_answer_validation_has_attempt(latest_validation):
+        return len(global_remaining_answer_aliases)
+    return int(
+        ((goal_readiness_audit.get("blocker_summary") or {}).get("final_answer_waiting_count_after_drafts"))
+        or ((platform_playbook.get("summary") or {}).get("final_answer_missing_count"))
+        or len(global_remaining_answer_aliases)
+        or 0
+    )
 
 
 def _position_execution_blockers(
@@ -13259,12 +13303,12 @@ def _position_execution_summary(
     selected_target_platform_position_counts = [
         selected_platform_counts.get(platform, 0) for platform in target_platforms
     ]
-    global_remaining_answers = int(
-        ((goal_readiness_audit.get("blocker_summary") or {}).get("final_answer_waiting_count_after_drafts"))
-        or ((platform_playbook.get("summary") or {}).get("final_answer_missing_count"))
-        or 0
-    )
     global_remaining_answer_aliases = _position_execution_global_answer_aliases(goal_readiness_audit)
+    global_remaining_answers = _position_execution_global_answer_count(
+        goal_readiness_audit,
+        platform_playbook,
+        global_remaining_answer_aliases,
+    )
     ready_now = bool(autofill_packet.get("ready_for_supervised_browser_autofill"))
     selected_queue_remaining_answers = 0 if ready_now else global_remaining_answers
     selected_queue_remaining_answer_aliases = [] if ready_now else global_remaining_answer_aliases
@@ -17013,6 +17057,18 @@ def _goal_latest_final_answer_problem_aliases(
     return aliases
 
 
+def _goal_latest_final_answer_validation_has_attempt(
+    latest_final_answer_validation: dict[str, Any] | None,
+) -> bool:
+    if not isinstance(latest_final_answer_validation, dict) or not latest_final_answer_validation:
+        return False
+    return bool(
+        int(latest_final_answer_validation.get("answer_input_count") or 0) > 0
+        or _string_list(latest_final_answer_validation.get("present_aliases"))
+        or _string_list(latest_final_answer_validation.get("ready_aliases"))
+    )
+
+
 def _goal_status_table_lines(rows: list[dict[str, Any]]) -> list[str]:
     if not rows:
         return ["- None"]
@@ -20061,7 +20117,26 @@ def build_platform_question_playbook(
         )
         bucket(platform)["closed_postings"] = int(bucket(platform).get("closed_postings") or 0) + 1
 
+    handoff_summary = (automation_handoff or {}).get("summary") or {}
+    latest_validation_answer_count = int(
+        handoff_summary.get("latest_final_answer_validation_answer_count") or 0
+    )
+    latest_validation_problem_aliases = []
+    for key in [
+        "latest_final_answer_validation_missing_aliases",
+        "latest_final_answer_validation_unconfirmed_high_risk_aliases",
+        "latest_final_answer_validation_needs_more_specific_aliases",
+    ]:
+        for alias in _string_list(handoff_summary.get(key)):
+            if alias and alias not in latest_validation_problem_aliases:
+                latest_validation_problem_aliases.append(alias)
+    latest_validation_problem_alias_set = set(latest_validation_problem_aliases)
     for answer in (automation_handoff or {}).get("final_answer_intake") or []:
+        if not isinstance(answer, dict):
+            continue
+        alias = str(answer.get("alias") or "").strip()
+        if latest_validation_answer_count and alias not in latest_validation_problem_alias_set:
+            continue
         for platform in platform_names(answer.get("platforms")):
             bucket(platform)["remaining_answer_inputs"] = int(
                 bucket(platform).get("remaining_answer_inputs") or 0
@@ -20115,14 +20190,26 @@ def build_platform_question_playbook(
             }
         )
 
-    handoff_summary = (automation_handoff or {}).get("summary") or {}
     selected_positions = int((autofill_batch or {}).get("selected_count") or 0)
     selected_synthetic_submits = int((autofill_batch or {}).get("local_synthetic_submit_count") or 0)
     selected_selector_misses = int((autofill_batch or {}).get("local_synthetic_submit_selector_miss_count") or 0)
-    if "final_answer_intake_missing_count" in handoff_summary:
+    if latest_validation_answer_count:
+        final_answer_missing = int(
+            handoff_summary.get("latest_final_answer_validation_missing_count") or 0
+        ) + int(
+            handoff_summary.get("latest_final_answer_validation_unconfirmed_high_risk_count") or 0
+        ) + int(
+            handoff_summary.get("latest_final_answer_validation_needs_more_specific_count") or 0
+        ) + int(
+            handoff_summary.get("latest_final_answer_validation_unknown_count") or 0
+        )
+        final_answer_missing_source = "latest_final_answer_validation"
+    elif "final_answer_intake_missing_count" in handoff_summary:
         final_answer_missing = int(handoff_summary.get("final_answer_intake_missing_count") or 0)
+        final_answer_missing_source = "final_answer_intake"
     else:
         final_answer_missing = int(handoff_summary.get("updates_waiting_after_update_count") or 0)
+        final_answer_missing_source = "critical_input_updates"
     target_platforms = platform_names((fake_position_rehearsal or {}).get("target_platforms")) or [
         "Ashby",
         "Greenhouse",
@@ -20167,7 +20254,11 @@ def build_platform_question_playbook(
         {
             "id": "remaining_truthful_answers",
             "status": "needs_user_answers" if final_answer_missing else "achieved",
-            "evidence": f"{final_answer_missing} final-answer intake values missing",
+            "evidence": (
+                f"{final_answer_missing} final-answer values still blocking; "
+                f"source={final_answer_missing_source}; aliases="
+                + (", ".join(latest_validation_problem_aliases) or "none")
+            ),
         },
     ]
     selected_position_rows = _table_dict_subset_rows(
@@ -20208,6 +20299,8 @@ def build_platform_question_playbook(
             ),
             "closed_posting_count": len((closed_jobs or {}).get("jobs") or []),
             "final_answer_missing_count": final_answer_missing,
+            "final_answer_missing_source": final_answer_missing_source,
+            "final_answer_missing_aliases": latest_validation_problem_aliases,
             "ready_after_answers_for_selected_100": ready_after_answers and selected_100_rehearsed,
             "real_platform_submission": False,
         },
@@ -20250,6 +20343,9 @@ def render_platform_question_playbook_markdown(report: dict[str, Any]) -> str:
         f"- selected selector misses: {summary.get('selected_selector_miss_count', 0)}",
         f"- closed postings persisted: {summary.get('closed_posting_count', 0)}",
         f"- final answers still missing: {summary.get('final_answer_missing_count', 0)}",
+        f"- final answer source: {summary.get('final_answer_missing_source', '')}",
+        "- final answer aliases: "
+        + (", ".join(summary.get("final_answer_missing_aliases") or []) or "none"),
         f"- ready after answers for selected 100: {str(bool(summary.get('ready_after_answers_for_selected_100'))).lower()}",
         "",
         "## Requirements",
@@ -20329,6 +20425,11 @@ def render_platform_question_playbook_html(report: dict[str, Any]) -> str:
                     ("Selector misses", summary.get("selected_selector_miss_count", 0)),
                     ("Closed postings", summary.get("closed_posting_count", 0)),
                     ("Missing answers", summary.get("final_answer_missing_count", 0)),
+                    ("Answer source", summary.get("final_answer_missing_source", "")),
+                    (
+                        "Answer aliases",
+                        ", ".join(summary.get("final_answer_missing_aliases") or []) or "none",
+                    ),
                 ]
             ),
             "<section><h2>Goal Requirements</h2>",

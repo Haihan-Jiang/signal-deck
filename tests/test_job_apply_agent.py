@@ -5120,6 +5120,41 @@ class JobApplyAgentTests(unittest.TestCase):
             "positions waiting on global answer gate: 3",
             render_selected_final_answer_dependency_markdown(global_report),
         )
+        stale_blockers = json.loads(json.dumps(blockers))
+        stale_blockers["blockers"].append(
+            {
+                "alias": "health_requirement",
+                "input_id": "answer_memory_health_requirement_default_policy",
+                "high_risk": True,
+                "required_count": 2,
+                "platforms": ["Greenhouse"],
+                "question": "What health requirement answer should automation use?",
+            }
+        )
+        latest_gate_execution = json.loads(json.dumps(global_gate_execution))
+        latest_gate_execution["summary"]["selected_queue_remaining_user_answer_count"] = 1
+        latest_gate_execution["summary"]["global_remaining_user_answer_count"] = 1
+        latest_gate_execution["summary"]["selected_queue_remaining_user_answer_aliases"] = [
+            "citizenship_status",
+        ]
+        latest_gate_execution["summary"]["global_remaining_user_answer_aliases"] = [
+            "citizenship_status",
+        ]
+        latest_gate_report = build_selected_final_answer_dependency_report(
+            global_gate_research,
+            latest_gate_execution,
+            stale_blockers,
+            target_count=3,
+        )
+        self.assertEqual(latest_gate_report["summary"]["known_unresolved_alias_count"], 1)
+        self.assertEqual(
+            latest_gate_report["summary"]["known_unresolved_alias_source"],
+            "position_execution_latest_answer_gate",
+        )
+        self.assertEqual(
+            latest_gate_report["summary"]["superseded_unresolved_aliases"],
+            ["health_requirement", "zip_or_postal_code"],
+        )
 
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -13522,6 +13557,45 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Target platforms", html)
         self.assertIn("Missing platforms", html)
 
+        latest_goal_audit = json.loads(json.dumps(goal_audit))
+        latest_goal_audit["latest_final_answer_validation"] = {
+            "answer_input_count": 6,
+            "present_aliases": [
+                "zip_or_postal_code",
+                "citizenship_status",
+                "background_or_export_control",
+                "country_work_permit",
+                "interview_recording_consent",
+                "health_requirement",
+            ],
+            "ready_aliases": [
+                "zip_or_postal_code",
+                "background_or_export_control",
+                "country_work_permit",
+                "health_requirement",
+            ],
+            "missing_aliases": [],
+            "unconfirmed_high_risk_aliases": [],
+            "needs_more_specific_aliases": [
+                "citizenship_status",
+                "interview_recording_consent",
+            ],
+            "unknown_answer_keys": [],
+        }
+        latest_audit = build_position_execution_audit(
+            packet,
+            synthetic_autofill_packet=synthetic_packet,
+            platform_playbook=platform_playbook,
+            goal_readiness_audit=latest_goal_audit,
+            target_count=2,
+        )
+        self.assertEqual(latest_audit["summary"]["remaining_user_answer_count"], 2)
+        self.assertEqual(latest_audit["summary"]["global_remaining_user_answer_count"], 2)
+        self.assertEqual(
+            latest_audit["summary"]["global_remaining_user_answer_aliases"],
+            ["citizenship_status", "interview_recording_consent"],
+        )
+
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             packet_path = root / "packet.json"
@@ -15961,6 +16035,14 @@ class JobApplyAgentTests(unittest.TestCase):
         automation_handoff = {
             "summary": {
                 "final_answer_intake_missing_count": 1,
+                "latest_final_answer_validation_answer_count": 6,
+                "latest_final_answer_validation_missing_count": 0,
+                "latest_final_answer_validation_unconfirmed_high_risk_count": 0,
+                "latest_final_answer_validation_needs_more_specific_count": 1,
+                "latest_final_answer_validation_unknown_count": 0,
+                "latest_final_answer_validation_needs_more_specific_aliases": [
+                    "citizenship_status",
+                ],
                 "autofill_packet_ready_after_answers": True,
             },
             "final_answer_intake": [
@@ -15999,6 +16081,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["summary"]["selected_position_count"], 100)
         self.assertEqual(report["summary"]["selected_local_synthetic_submit_count"], 100)
         self.assertEqual(report["summary"]["final_answer_missing_count"], 1)
+        self.assertEqual(report["summary"]["final_answer_missing_source"], "latest_final_answer_validation")
+        self.assertEqual(report["summary"]["final_answer_missing_aliases"], ["citizenship_status"])
         self.assertTrue(report["summary"]["ready_after_answers_for_selected_100"])
         requirement_statuses = {row["id"]: row["status"] for row in report["requirements"]}
         self.assertEqual(requirement_statuses["platform_question_research"], "achieved")

@@ -3083,7 +3083,28 @@ def main() -> int:
         print(f"Status: {report.get('status')}")
         print(f"Data blockers: {summary.get('data_blocking_prompt_count', 0)}")
         print(f"Critical waiting: {summary.get('critical_waiting_count', 0)}")
-        print(f"Final answer blanks: {summary.get('updates_waiting_after_update_count', 0)}")
+        print(f"Draft final answer blanks: {summary.get('updates_waiting_after_update_count', 0)}")
+        latest_final_answer_blocker_count = (
+            int(summary.get("latest_final_answer_validation_missing_count") or 0)
+            + int(summary.get("latest_final_answer_validation_unconfirmed_high_risk_count") or 0)
+            + int(summary.get("latest_final_answer_validation_needs_more_specific_count") or 0)
+            + int(summary.get("latest_final_answer_validation_unknown_count") or 0)
+        )
+        print(
+            "Latest final-answer blockers: "
+            f"{latest_final_answer_blocker_count}"
+        )
+        latest_aliases: list[object] = []
+        for key in [
+            "latest_final_answer_validation_missing_aliases",
+            "latest_final_answer_validation_unconfirmed_high_risk_aliases",
+            "latest_final_answer_validation_needs_more_specific_aliases",
+        ]:
+            values = summary.get(key)
+            if isinstance(values, list):
+                latest_aliases.extend(value for value in values if value not in latest_aliases)
+        if latest_aliases:
+            print("Latest final-answer aliases: " + ", ".join(str(alias) for alias in latest_aliases))
         print(f"Open after answers: {summary.get('apply_queue_open_after_answers_count', 0)}")
         print(f"Queue refresh: {summary.get('apply_queue_refresh_status') or 'missing'}")
         print(f"Refresh top-up required: {summary.get('apply_queue_refresh_top_up_required_count', 0)}")
