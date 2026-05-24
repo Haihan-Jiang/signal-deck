@@ -1436,6 +1436,11 @@ def main() -> int:
         default=str(DEFAULT_FINAL_ANSWER_USER_INPUT_XLSX),
     )
     resume_after_answers_parser.add_argument(
+        "--base-reply-file",
+        default=None,
+        help="merge this existing filled reply before --reply-file; aliases in --reply-file override the base",
+    )
+    resume_after_answers_parser.add_argument(
         "--reply-text",
         default=None,
         help="filled final-answer lines; when provided, it is used instead of --reply-file",
@@ -1444,6 +1449,14 @@ def main() -> int:
         "--reply-stdin",
         action="store_true",
         help="read filled final-answer lines from stdin instead of --reply-file",
+    )
+    resume_after_answers_parser.add_argument(
+        "--template",
+        default=str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON),
+    )
+    resume_after_answers_parser.add_argument(
+        "--unblockers",
+        default=str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_JSON),
     )
     resume_after_answers_parser.add_argument("--live-check-limit", type=int, default=100)
     resume_after_answers_parser.add_argument("--live-check-timeout", type=float, default=25.0)
@@ -3577,21 +3590,84 @@ def main() -> int:
             if resume_reply_from_stdin
             else str(resume_reply_file)
         )
-        if resume_reply_text is not None:
-            placeholder_reply_text = str(resume_reply_text)
-        else:
-            placeholder_path = Path(str(resume_reply_file))
-            if not placeholder_path.exists():
-                print("Resume after answers: waiting_for_reply_file")
-                print(f"Reply file: {placeholder_path}")
+        resume_base_reply_file = str(getattr(args, "base_reply_file", "") or "").strip()
+        temp_revision_dir: tempfile.TemporaryDirectory[str] | None = None
+        try:
+            if resume_reply_text is not None:
+                placeholder_reply_text = str(resume_reply_text)
+            else:
+                placeholder_path = Path(str(resume_reply_file))
+                if not placeholder_path.exists():
+                    print("Resume after answers: waiting_for_reply_file")
+                    print(f"Reply file: {placeholder_path}")
+                    return 2
+                try:
+                    placeholder_reply_text = final_answer_reply_text_from_file(placeholder_path)
+                except Exception as exc:
+                    print("Resume after answers: invalid_reply_file")
+                    print(f"Reply file: {placeholder_path}")
+                    print(f"Reason: {exc}")
+                    return 2
+            revision_placeholder_count = _final_answer_reply_placeholder_count(
+                placeholder_reply_text
+            )
+            if revision_placeholder_count:
+                placeholder_aliases = _final_answer_reply_placeholder_aliases(
+                    placeholder_reply_text
+                )
+                print("Resume after answers: waiting_for_filled_reply")
+                print(f"Reply source: {placeholder_source}")
+                print(f"Placeholder lines remaining: {revision_placeholder_count}")
+                if placeholder_aliases:
+                    print("Placeholder aliases: " + ", ".join(placeholder_aliases))
                 return 2
-            try:
-                placeholder_reply_text = final_answer_reply_text_from_file(placeholder_path)
-            except Exception as exc:
-                print("Resume after answers: invalid_reply_file")
-                print(f"Reply file: {placeholder_path}")
-                print(f"Reason: {exc}")
-                return 2
+            if resume_base_reply_file:
+                if not Path(resume_base_reply_file).exists():
+                    print("Resume after answers: waiting_for_base_reply_file")
+                    print(f"Base reply file: {resume_base_reply_file}")
+                    return 2
+                if resume_reply_text is not None:
+                    temp_revision_dir = tempfile.TemporaryDirectory(
+                        prefix="job_apply_resume_revision_"
+                    )
+                    revision_path = Path(temp_revision_dir.name) / "revision.txt"
+                    revision_path.write_text(str(resume_reply_text), encoding="utf-8")
+                else:
+                    revision_path = Path(str(resume_reply_file))
+                try:
+                    template_payload = json.loads(
+                        Path(args.template).read_text(encoding="utf-8")
+                    )
+                    reply_context = _final_answer_autopilot_reply_context(
+                        args,
+                        revision_path,
+                        template_payload,
+                    )
+                except Exception as exc:
+                    print("Resume after answers: invalid_merged_reply")
+                    print(f"Base reply file: {resume_base_reply_file}")
+                    print(f"Revision reply source: {placeholder_source}")
+                    print(f"Reason: {exc}")
+                    return 2
+                if int(reply_context.get("parser_error_count") or 0):
+                    print("Resume after answers: invalid_merged_reply")
+                    print(f"Base reply file: {resume_base_reply_file}")
+                    print(f"Revision reply source: {placeholder_source}")
+                    print(
+                        "Parser errors: "
+                        f"{int(reply_context.get('parser_error_count') or 0)}"
+                    )
+                    return 2
+                placeholder_reply_text = str(reply_context.get("reply_text") or "")
+                resume_reply_text = placeholder_reply_text
+                resume_reply_file = None
+                resume_reply_from_stdin = False
+                placeholder_source = (
+                    f"merged reply from {resume_base_reply_file} + {placeholder_source}"
+                )
+        finally:
+            if temp_revision_dir is not None:
+                temp_revision_dir.cleanup()
         placeholder_count = _final_answer_reply_placeholder_count(placeholder_reply_text)
         if placeholder_count:
             placeholder_aliases = _final_answer_reply_placeholder_aliases(placeholder_reply_text)
@@ -3602,8 +3678,8 @@ def main() -> int:
                 print("Placeholder aliases: " + ", ".join(placeholder_aliases))
             return 2
         args.command = "final-answer-reply"
-        args.template = str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON)
-        args.unblockers = str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_JSON)
+        args.template = str(args.template)
+        args.unblockers = str(args.unblockers)
         args.reply_text = resume_reply_text
         args.reply_file = resume_reply_file
         args.reply_stdin = False

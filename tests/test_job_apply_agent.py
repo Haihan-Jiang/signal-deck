@@ -8618,6 +8618,7 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(resume_help.returncode, 0, resume_help.stderr)
             self.assertIn("--reply-text", resume_help.stdout)
             self.assertIn("--reply-file", resume_help.stdout)
+            self.assertIn("--base-reply-file", resume_help.stdout)
             self.assertIn("--reply-stdin", resume_help.stdout)
             self.assertIn("--validate-only", resume_help.stdout)
 
@@ -8881,6 +8882,34 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertNotIn("zip_or_postal_code\uff1a<fill>", revision_text)
             self.assertIn("health_requirement\uff1a<fill>", final_answer_reply_text_from_file(revision_xlsx_path))
 
+            unfilled_resume_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "job_apply_agent",
+                    "resume-after-answers",
+                    "--template",
+                    str(template_path),
+                    "--unblockers",
+                    str(unblockers_path),
+                    "--base-reply-file",
+                    str(base_reply_path),
+                    "--reply-file",
+                    str(revision_xlsx_path),
+                    "--validate-only",
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(unfilled_resume_result.returncode, 2)
+            self.assertIn(
+                "Resume after answers: waiting_for_filled_reply",
+                unfilled_resume_result.stdout,
+            )
+            self.assertIn("Placeholder aliases: health_requirement", unfilled_resume_result.stdout)
+
             specific_answer = (
                 "I can comply with standard health, vaccination, and client-site "
                 "requirements; exceptions: none."
@@ -8935,6 +8964,37 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertNotIn("98004", merged_report_text)
             self.assertNotIn(specific_answer, merged_report_text)
             self.assertNotIn(specific_answer, merged_markdown_path.read_text(encoding="utf-8"))
+
+            resume_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "job_apply_agent",
+                    "resume-after-answers",
+                    "--template",
+                    str(template_path),
+                    "--unblockers",
+                    str(unblockers_path),
+                    "--base-reply-file",
+                    str(base_reply_path),
+                    "--reply-file",
+                    str(revision_filled_xlsx_path),
+                    "--validate-only",
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(
+                resume_result.returncode,
+                0,
+                resume_result.stderr + resume_result.stdout,
+            )
+            self.assertIn("Parsed answers: 2", resume_result.stdout)
+            self.assertIn("Ready for finalize: true", resume_result.stdout)
+            self.assertNotIn("98004", resume_result.stdout)
+            self.assertNotIn(specific_answer, resume_result.stdout)
 
     def test_final_answer_autopilot_validates_filled_reply_without_storing_answer_text(self) -> None:
         unblockers = {

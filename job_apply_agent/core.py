@@ -18885,15 +18885,29 @@ def _automation_handoff_one_command_resume(
     *,
     open_browser: bool = False,
 ) -> str:
+    latest_reply_file = str(summary.get("latest_final_answer_validation_reply_file") or "").strip()
+    latest_base_reply_file = str(
+        summary.get("latest_final_answer_validation_base_reply_file") or ""
+    ).strip()
+    reply_file = latest_reply_file or FINAL_ANSWER_USER_INPUT_XLSX_PATH
     command = [
-        "python3 -m job_apply_agent resume-after-answers",
+        "python3",
+        "-m",
+        "job_apply_agent",
+        "resume-after-answers",
+    ]
+    if latest_base_reply_file:
+        command.extend(["--base-reply-file", latest_base_reply_file])
+    command.extend(
+        [
         "--reply-file",
-        FINAL_ANSWER_USER_INPUT_XLSX_PATH,
+        reply_file,
         "--live-check-limit",
         str(max(100, int(summary.get("apply_queue_open_after_answers_count") or 0))),
         "--live-check-timeout",
         "25",
-    ]
+        ]
+    )
     if open_browser:
         command.extend(
             [
@@ -18902,7 +18916,7 @@ def _automation_handoff_one_command_resume(
                 str(max(100, int(summary.get("apply_queue_open_after_answers_count") or 0))),
             ]
         )
-    return " ".join(command)
+    return shlex.join(command)
 
 
 def _automation_handoff_requirement_rows(goal: dict[str, Any]) -> list[dict[str, Any]]:
