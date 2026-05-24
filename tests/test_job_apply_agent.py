@@ -11706,10 +11706,15 @@ class JobApplyAgentTests(unittest.TestCase):
             "needs_user_answers",
         )
         self.assertEqual(report["confirmed_answer_runbook"][0]["status"], "waiting_for_user")
-        self.assertIn("--validate-only", report["confirmed_answer_runbook"][2]["action"])
+        self.assertIn("final-answer-autopilot --reply-file", report["confirmed_answer_runbook"][2]["action"])
+        self.assertIn("final_answer_user_input_needed.txt", report["confirmed_answer_runbook"][2]["action"])
+        self.assertIn("--dry-run", report["confirmed_answer_runbook"][2]["action"])
+        self.assertIn("final_answer_user_input_needed.txt", report["confirmed_answer_runbook"][3]["action"])
+        self.assertIn("--apply --live-check --include-values", report["confirmed_answer_runbook"][3]["action"])
         self.assertIn("refresh-apply-queue", report["confirmed_answer_runbook"][5]["action"])
         self.assertIn("--include-values", report["confirmed_answer_runbook"][5]["action"])
         self.assertIn("resume-after-answers", report["one_command_resume"])
+        self.assertIn("final_answer_user_input_needed.txt", report["one_command_resume"])
         self.assertIn("--live-check-limit", report["one_command_resume"])
         self.assertIn("--open-browser", report["one_command_resume_and_open"])
         self.assertEqual(

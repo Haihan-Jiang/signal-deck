@@ -1312,7 +1312,7 @@ def main() -> int:
     )
     final_answer_autopilot_parser.add_argument(
         "--reply-file",
-        default=str(DEFAULT_FINAL_ANSWER_REPLY_TEMPLATE_TEXT),
+        default=str(DEFAULT_FINAL_ANSWER_USER_INPUT_TEXT),
     )
     final_answer_autopilot_parser.add_argument(
         "--reply-text",
@@ -1372,11 +1372,11 @@ def main() -> int:
 
     resume_after_answers_parser = subparsers.add_parser(
         "resume-after-answers",
-        help="after filling the default final-answer template, apply confirmed answers, live-check, and rebuild the 100-job supervised autofill packet",
+        help="after filling the default final-answer user input file, apply confirmed answers, live-check, and rebuild the 100-job supervised autofill packet",
     )
     resume_after_answers_parser.add_argument(
         "--reply-file",
-        default=str(DEFAULT_FINAL_ANSWER_REPLY_TEMPLATE_TEXT),
+        default=str(DEFAULT_FINAL_ANSWER_USER_INPUT_TEXT),
     )
     resume_after_answers_parser.add_argument(
         "--reply-text",

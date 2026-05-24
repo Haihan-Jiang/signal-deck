@@ -16986,7 +16986,7 @@ def _goal_next_actions(
         if unblocker_proof_complete:
             blank_count = final_answer_waiting_count or critical_waiting_count
             actions.append(
-                f"Fill the {blank_count} final-answer lines in {FINAL_ANSWER_REPLY_TEMPLATE_PATH}, then run `python3 -m job_apply_agent resume-after-answers`."
+                f"Fill the {blank_count} final-answer lines in {FINAL_ANSWER_USER_INPUT_PATH}, then run `python3 -m job_apply_agent resume-after-answers`."
             )
             actions.append(
                 "Or paste those lines into Codex and run the direct path: "
@@ -18379,7 +18379,7 @@ def _automation_handoff_confirmed_answer_runbook(summary: dict[str, Any]) -> lis
             "step": 1,
             "name": "Confirm final answer blanks",
             "status": "waiting_for_user" if final_blanks else "ready",
-            "action": "python3 -m job_apply_agent final-answer-blockers --print-minimal-reply, review the generated HTML/XLSX worksheet, then paste truthful values through --reply-stdin.",
+            "action": "python3 -m job_apply_agent final-answer-blockers --print-minimal-reply, fill job_apply_agent/outbox/final_answer_user_input_needed.txt, then validate it.",
             "expected_result": f"{final_blanks} final blanks are captured in stdin/reply-file format without sending answer text; blocker HTML/XLSX are refreshed.",
         },
         {
@@ -18393,15 +18393,15 @@ def _automation_handoff_confirmed_answer_runbook(summary: dict[str, Any]) -> lis
             "step": 3,
             "name": "Run safe post-answer preflight",
             "status": "ready_after_confirmation" if final_blanks else "ready",
-            "action": "python3 -m job_apply_agent resume-after-answers --reply-stdin --validate-only",
-            "alternate_action": f"python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --validate-only --fail-on-not-ready",
+            "action": f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_USER_INPUT_PATH} --dry-run --fail-on-not-ready",
+            "alternate_action": "python3 -m job_apply_agent resume-after-answers --reply-stdin --validate-only",
             "expected_result": "The reply is parsed and verified without writing outbox updates, profile, or answer memory.",
         },
         {
             "step": 4,
             "name": "Apply approved answers and live-check",
             "status": "ready_after_confirmation" if final_blanks else "ready",
-            "action": "python3 -m job_apply_agent resume-after-answers --reply-stdin",
+            "action": f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_USER_INPUT_PATH} --apply --live-check --include-values --fail-on-not-ready",
             "expected_result": "Approved answers are written to profile/memory, live closed-posting preflight runs, and the supervised autofill packet is rebuilt.",
         },
         {
@@ -18489,6 +18489,8 @@ def _automation_handoff_one_command_resume(
 ) -> str:
     command = [
         "python3 -m job_apply_agent resume-after-answers",
+        "--reply-file",
+        FINAL_ANSWER_USER_INPUT_PATH,
         "--live-check-limit",
         str(max(100, int(summary.get("apply_queue_open_after_answers_count") or 0))),
         "--live-check-timeout",
