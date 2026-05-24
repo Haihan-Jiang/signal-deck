@@ -7853,6 +7853,153 @@ class JobApplyAgentTests(unittest.TestCase):
                 ]
             )
 
+    def test_final_answer_blocker_report_uses_latest_validation_problem_aliases(self) -> None:
+        unblockers = {
+            "unblockers": [
+                {
+                    "input_id": "profile_zip_or_postal_code",
+                    "question": "ZIP code",
+                    "high_risk": False,
+                    "required_count": 4,
+                    "labels": ["Zip Code"],
+                },
+                {
+                    "input_id": "answer_memory_citizenship_status_default_policy",
+                    "question": "Citizenship",
+                    "high_risk": True,
+                    "required_count": 7,
+                    "labels": ["Are you a U.S. Citizen?"],
+                },
+                {
+                    "input_id": "answer_memory_background_or_export_control_default_policy",
+                    "question": "Export control",
+                    "high_risk": True,
+                    "required_count": 3,
+                    "labels": ["Export control"],
+                },
+                {
+                    "input_id": "answer_memory_country_work_permit_default_policy",
+                    "question": "Other country work permit",
+                    "high_risk": True,
+                    "required_count": 2,
+                    "labels": ["Work permit"],
+                },
+                {
+                    "input_id": "answer_memory_interview_recording_consent_default_policy",
+                    "question": "Interview recording",
+                    "high_risk": True,
+                    "required_count": 5,
+                    "labels": ["Can we record the interview?"],
+                },
+                {
+                    "input_id": "answer_memory_health_requirement_default_policy",
+                    "question": "Health requirement",
+                    "high_risk": True,
+                    "required_count": 1,
+                    "labels": ["Vaccine"],
+                },
+            ]
+        }
+        template = build_final_answer_intake_template(unblockers)
+        latest_validation = {
+            "source_status": "validation_failed",
+            "ready_for_finalize": False,
+            "safe_to_resume_after_answers": False,
+            "answer_input_count": 6,
+            "ready_alias_count": 4,
+            "missing_alias_count": 0,
+            "unconfirmed_high_risk_alias_count": 0,
+            "needs_more_specific_alias_count": 2,
+            "unknown_answer_count": 0,
+            "ready_aliases": [
+                "zip_or_postal_code",
+                "background_or_export_control",
+                "country_work_permit",
+                "health_requirement",
+            ],
+            "missing_aliases": [],
+            "unconfirmed_high_risk_aliases": [],
+            "needs_more_specific_aliases": [
+                "citizenship_status",
+                "interview_recording_consent",
+            ],
+            "unknown_answer_keys": [],
+            "problem_aliases": [
+                "citizenship_status",
+                "interview_recording_consent",
+            ],
+            "problem_fields": [
+                {
+                    "alias": "citizenship_status",
+                    "status": "needs_more_specific_answer",
+                    "high_risk": True,
+                    "specificity_reason": "citizenship answer must mention status explicitly",
+                    "hint": "Mention citizenship, U.S. person, permanent resident, and restricted-country status.",
+                    "expected_shape": "I am [citizenship]; I [am/am not] a U.S. person.",
+                },
+                {
+                    "alias": "interview_recording_consent",
+                    "status": "needs_more_specific_answer",
+                    "high_risk": True,
+                    "specificity_reason": "too brief for reusable high-risk answer",
+                    "hint": "Use an explicit consent sentence.",
+                    "expected_shape": "Yes/no for recording, transcription, AI notetakers, and analysis.",
+                },
+            ],
+            "reply_file": "job_apply_agent/outbox/final_answer_revision_user_input_needed.xlsx",
+            "base_reply_file": "/tmp/final_answer_user_input_needed 2.numbers",
+            "answer_text_stored_in_receipt": False,
+        }
+        report = build_final_answer_blocker_report(
+            template,
+            goal_audit={
+                "status": "needs_user_answers",
+                "latest_final_answer_validation": latest_validation,
+                "blocker_summary": {
+                    "post_answer_text_reply_rehearsal_ready": True,
+                    "post_answer_synthetic_queue_rehearsal_ready": True,
+                    "post_answer_synthetic_autofill_selected_count": 100,
+                    "post_answer_synthetic_selector_miss_count": 0,
+                    "post_answer_synthetic_final_submit_stop_count": 100,
+                    "latest_preflight_live_checked_count": 100,
+                    "latest_preflight_open_eligible_count": 100,
+                    "latest_preflight_closed_count": 0,
+                    "latest_preflight_uncertain_count": 0,
+                    "latest_preflight_identity_unverified_count": 0,
+                    "latest_preflight_error_count": 0,
+                    "latest_preflight_stale": False,
+                },
+            },
+        )
+
+        self.assertEqual(
+            [row["alias"] for row in report["blockers"]],
+            ["citizenship_status", "interview_recording_consent"],
+        )
+        self.assertEqual(report["summary"]["blocker_count"], 2)
+        self.assertEqual(report["summary"]["ready_count"], 4)
+        self.assertEqual(report["summary"]["missing_answer_count"], 0)
+        self.assertEqual(report["summary"]["unconfirmed_high_risk_count"], 0)
+        self.assertEqual(report["summary"]["needs_more_specific_answer_count"], 2)
+        self.assertEqual(report["summary"]["post_answer_intake_needs_more_specific_answer_count"], 2)
+        self.assertEqual(report["summary"]["final_answer_missing_source"], "latest_final_answer_validation")
+        self.assertEqual(
+            report["summary"]["latest_final_answer_validation_problem_aliases"],
+            ["citizenship_status", "interview_recording_consent"],
+        )
+        self.assertEqual(
+            report["minimal_reply_prompt_lines"],
+            [
+                "\u6211\u7684\u516c\u6c11\u8eab\u4efd\u662f<fill>",
+                "\u9762\u8bd5\u5f55\u97f3\u662f<fill>",
+                "\u4ee5\u4e0a\u786e\u8ba4",
+            ],
+        )
+        self.assertNotIn("zip_or_postal_code", report["reply_template"])
+        self.assertNotIn("health_requirement", report["reply_template"])
+        self.assertTrue(report["ready_after_truthful_answer_reply"])
+        self.assertFalse(report["summary"]["latest_final_answer_validation_answer_text_stored"])
+
     def test_final_answer_blocker_report_and_telegram_alert_exclude_answer_text(self) -> None:
         unblockers = {
             "unblockers": [

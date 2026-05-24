@@ -1197,6 +1197,10 @@ def main() -> int:
         "--goal-audit",
         default=str(DEFAULT_GOAL_AUDIT_JSON),
     )
+    final_answer_blockers_parser.add_argument(
+        "--final-answer-autopilot-json",
+        default=str(DEFAULT_FINAL_ANSWER_AUTOPILOT_JSON),
+    )
     final_answer_blockers_parser.add_argument("--json-output", default=str(DEFAULT_FINAL_ANSWER_BLOCKERS_JSON))
     final_answer_blockers_parser.add_argument(
         "--markdown-output",
@@ -3580,6 +3584,7 @@ def main() -> int:
             args.xlsx_output,
             args.user_input_output,
             args.user_input_xlsx_output,
+            final_answer_autopilot=_load_optional_json(args.final_answer_autopilot_json),
         )
         summary = report.get("summary") or {}
         print(f"Wrote final answer blockers JSON to {args.json_output}")
@@ -3592,6 +3597,7 @@ def main() -> int:
         print(f"Blockers: {summary.get('blocker_count', 0)}")
         print(f"Missing answers: {summary.get('missing_answer_count', 0)}")
         print(f"Unconfirmed high-risk: {summary.get('unconfirmed_high_risk_count', 0)}")
+        print(f"Needs specificity: {summary.get('needs_more_specific_answer_count', 0)}")
         if args.print_minimal_reply:
             minimal_reply = str(report.get("minimal_reply_prompt") or "").strip()
             print("Minimal final-answer reply:")

@@ -17443,12 +17443,26 @@ def _goal_final_answer_validation_summary(
         validation.get("problem_fields") if isinstance(validation.get("problem_fields"), list) else []
     )
     problem_aliases = []
+    sanitized_problem_fields: list[dict[str, Any]] = []
     for field in problem_fields:
         if not isinstance(field, dict):
             continue
         alias = str(field.get("alias") or "").strip()
         if alias and alias not in problem_aliases:
             problem_aliases.append(alias)
+        if alias:
+            sanitized_problem_fields.append(
+                {
+                    "alias": alias,
+                    "status": str(field.get("status") or "").strip(),
+                    "high_risk": bool(field.get("high_risk")),
+                    "specificity_reason": str(field.get("specificity_reason") or "").strip(),
+                    "question": str(field.get("question") or "").strip(),
+                    "hint": str(field.get("hint") or "").strip(),
+                    "expected_shape": str(field.get("expected_shape") or "").strip(),
+                    "observed_prompt": str(field.get("observed_prompt") or "").strip(),
+                }
+            )
     required_aliases = _string_list(answer_receipt.get("required_aliases"))
     present_aliases = _string_list(answer_receipt.get("present_aliases"))
     ready_aliases = _string_list(answer_receipt.get("ready_aliases"))
@@ -17495,6 +17509,7 @@ def _goal_final_answer_validation_summary(
         "unknown_answer_keys": unknown_aliases,
         "problem_aliases": problem_aliases,
         "problem_field_count": len(problem_fields),
+        "problem_fields": sanitized_problem_fields,
         "revision_markdown_output": str(
             final_answer_autopilot.get("revision_markdown_output")
             or FINAL_ANSWER_REVISION_MARKDOWN_PATH
@@ -24685,17 +24700,153 @@ def notify_telegram_for_submissions(
     }
 
 
+def _final_answer_blocker_latest_validation(
+    goal_audit: dict[str, Any] | None,
+    final_answer_autopilot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    latest_from_autopilot = _goal_final_answer_validation_summary(final_answer_autopilot)
+    if latest_from_autopilot:
+        return latest_from_autopilot
+    if isinstance(goal_audit, dict):
+        latest = goal_audit.get("latest_final_answer_validation")
+        if isinstance(latest, dict) and latest:
+            return latest
+        summary = goal_audit.get("blocker_summary")
+        if isinstance(summary, dict):
+            attempted = bool(
+                int(summary.get("latest_final_answer_validation_answer_count") or 0) > 0
+                or _string_list(summary.get("latest_final_answer_validation_ready_aliases"))
+                or _string_list(summary.get("latest_final_answer_validation_missing_aliases"))
+                or _string_list(
+                    summary.get("latest_final_answer_validation_unconfirmed_high_risk_aliases")
+                )
+                or _string_list(
+                    summary.get("latest_final_answer_validation_needs_more_specific_aliases")
+                )
+            )
+            if attempted:
+                return {
+                    "source": "goal_blocker_summary_latest_final_answer_validation",
+                    "source_status": str(
+                        summary.get("latest_final_answer_validation_status") or ""
+                    ),
+                    "ready_for_finalize": bool(
+                        summary.get("latest_final_answer_validation_ready_for_finalize")
+                    ),
+                    "safe_to_resume_after_answers": bool(
+                        summary.get("latest_final_answer_validation_safe_to_resume")
+                    ),
+                    "answer_input_count": int(
+                        summary.get("latest_final_answer_validation_answer_count") or 0
+                    ),
+                    "ready_alias_count": int(
+                        summary.get("latest_final_answer_validation_ready_count") or 0
+                    ),
+                    "missing_alias_count": int(
+                        summary.get("latest_final_answer_validation_missing_count") or 0
+                    ),
+                    "unconfirmed_high_risk_alias_count": int(
+                        summary.get(
+                            "latest_final_answer_validation_unconfirmed_high_risk_count"
+                        )
+                        or 0
+                    ),
+                    "needs_more_specific_alias_count": int(
+                        summary.get(
+                            "latest_final_answer_validation_needs_more_specific_count"
+                        )
+                        or 0
+                    ),
+                    "unknown_answer_count": int(
+                        summary.get("latest_final_answer_validation_unknown_count") or 0
+                    ),
+                    "ready_aliases": _string_list(
+                        summary.get("latest_final_answer_validation_ready_aliases")
+                    ),
+                    "missing_aliases": _string_list(
+                        summary.get("latest_final_answer_validation_missing_aliases")
+                    ),
+                    "unconfirmed_high_risk_aliases": _string_list(
+                        summary.get(
+                            "latest_final_answer_validation_unconfirmed_high_risk_aliases"
+                        )
+                    ),
+                    "needs_more_specific_aliases": _string_list(
+                        summary.get(
+                            "latest_final_answer_validation_needs_more_specific_aliases"
+                        )
+                    ),
+                    "unknown_answer_keys": _string_list(
+                        summary.get("latest_final_answer_validation_unknown_aliases")
+                    ),
+                    "revision_markdown_output": str(
+                        summary.get("latest_final_answer_validation_revision_file") or ""
+                    ),
+                    "reply_file": str(
+                        summary.get("latest_final_answer_validation_reply_file") or ""
+                    ),
+                    "base_reply_file": str(
+                        summary.get("latest_final_answer_validation_base_reply_file") or ""
+                    ),
+                    "answer_text_stored_in_receipt": bool(
+                        summary.get("latest_final_answer_validation_answer_text_stored")
+                    ),
+                }
+    return {}
+
+
+def _final_answer_validation_problem_fields_by_alias(
+    latest_final_answer_validation: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    by_alias: dict[str, dict[str, Any]] = {}
+    problem_fields = latest_final_answer_validation.get("problem_fields")
+    if not isinstance(problem_fields, list):
+        return by_alias
+    for field in problem_fields:
+        if not isinstance(field, dict):
+            continue
+        alias = str(field.get("alias") or "").strip()
+        if alias and alias not in by_alias:
+            by_alias[alias] = field
+    return by_alias
+
+
 def build_final_answer_blocker_report(
     template: dict[str, Any],
     goal_audit: dict[str, Any] | None = None,
+    final_answer_autopilot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not isinstance(template, dict):
         raise ValueError("final answer intake template must be a JSON object")
     answers = template.get("answers") if isinstance(template.get("answers"), dict) else {}
+    latest_final_answer_validation = _final_answer_blocker_latest_validation(
+        goal_audit,
+        final_answer_autopilot,
+    )
+    latest_final_answer_validation_attempted = _goal_latest_final_answer_validation_has_attempt(
+        latest_final_answer_validation
+    )
+    latest_problem_aliases = _goal_latest_final_answer_problem_aliases(
+        latest_final_answer_validation
+    )
+    latest_problem_alias_set = set(latest_problem_aliases)
+    latest_ready_aliases = set(_string_list(latest_final_answer_validation.get("ready_aliases")))
+    latest_missing_aliases = set(_string_list(latest_final_answer_validation.get("missing_aliases")))
+    latest_unconfirmed_aliases = set(
+        _string_list(latest_final_answer_validation.get("unconfirmed_high_risk_aliases"))
+    )
+    latest_specificity_aliases = set(
+        _string_list(latest_final_answer_validation.get("needs_more_specific_aliases"))
+    )
+    latest_unknown_aliases = set(
+        _string_list(latest_final_answer_validation.get("unknown_answer_keys"))
+    )
+    latest_problem_fields_by_alias = _final_answer_validation_problem_fields_by_alias(
+        latest_final_answer_validation
+    )
     blocker_rows: list[dict[str, Any]] = []
-    ready_count = 0
-    missing_answer_count = 0
-    unconfirmed_high_risk_count = 0
+    raw_ready_count = 0
+    seen_blocker_aliases: set[str] = set()
     for field in template.get("fields") or []:
         if not isinstance(field, dict):
             continue
@@ -24706,19 +24857,36 @@ def build_final_answer_blocker_report(
         high_risk = bool(field.get("high_risk"))
         if not answer_text:
             status = "missing_answer"
-            missing_answer_count += 1
         elif high_risk and not high_risk_confirmed:
             status = "high_risk_unconfirmed"
-            unconfirmed_high_risk_count += 1
         else:
             status = "ready"
-            ready_count += 1
+            raw_ready_count += 1
+        if latest_final_answer_validation_attempted:
+            if alias in latest_specificity_aliases:
+                status = "needs_more_specific_answer"
+            elif alias in latest_unconfirmed_aliases:
+                status = "high_risk_unconfirmed"
+            elif alias in latest_missing_aliases:
+                status = "missing_answer"
+            elif alias in latest_unknown_aliases:
+                status = "unknown_answer"
+            elif alias in latest_ready_aliases or (
+                latest_problem_alias_set and alias not in latest_problem_alias_set
+            ):
+                status = "ready"
         if status != "ready":
+            if latest_problem_alias_set and alias not in latest_problem_alias_set:
+                continue
+            problem_field = latest_problem_fields_by_alias.get(alias, {})
             labels = [
                 str(label).strip()
                 for label in field.get("labels") or []
                 if str(label).strip()
             ]
+            observed_prompt = str(problem_field.get("observed_prompt") or "").strip()
+            if observed_prompt and observed_prompt not in labels:
+                labels.append(observed_prompt)
             blocker_rows.append(
                 {
                     "alias": alias,
@@ -24727,10 +24895,14 @@ def build_final_answer_blocker_report(
                     "high_risk": high_risk,
                     "required_count": int(field.get("required_count") or 0),
                     "platforms": field.get("platforms") or [],
-                    "question": field.get("question"),
+                    "question": problem_field.get("question") or field.get("question"),
                     "answer_format_hint": field.get("answer_format_hint"),
-                    "answer_specificity_hint": field.get("answer_specificity_hint"),
-                    "answer_example_shape": field.get("answer_example_shape")
+                    "answer_specificity_hint": (
+                        problem_field.get("hint") or field.get("answer_specificity_hint")
+                    ),
+                    "specificity_reason": problem_field.get("specificity_reason") or "",
+                    "answer_example_shape": problem_field.get("expected_shape")
+                    or field.get("answer_example_shape")
                     or _final_answer_intake_example_shape(alias),
                     "required_user_response": field.get("required_user_response") or "",
                     "why_not_inferred": field.get("why_not_inferred") or "",
@@ -24738,6 +24910,59 @@ def build_final_answer_blocker_report(
                     "observed_prompt_examples": labels[:8],
                 }
             )
+            seen_blocker_aliases.add(alias)
+    for alias in latest_problem_aliases:
+        if alias in seen_blocker_aliases:
+            continue
+        problem_field = latest_problem_fields_by_alias.get(alias, {})
+        status = str(problem_field.get("status") or "").strip()
+        if not status:
+            if alias in latest_specificity_aliases:
+                status = "needs_more_specific_answer"
+            elif alias in latest_unconfirmed_aliases:
+                status = "high_risk_unconfirmed"
+            elif alias in latest_missing_aliases:
+                status = "missing_answer"
+            elif alias in latest_unknown_aliases:
+                status = "unknown_answer"
+            else:
+                status = "needs_more_specific_answer"
+        observed_prompt = str(problem_field.get("observed_prompt") or "").strip()
+        blocker_rows.append(
+            {
+                "alias": alias,
+                "input_id": alias,
+                "status": status,
+                "high_risk": bool(problem_field.get("high_risk")),
+                "required_count": 0,
+                "platforms": [],
+                "question": problem_field.get("question") or alias,
+                "answer_format_hint": "",
+                "answer_specificity_hint": problem_field.get("hint") or "",
+                "specificity_reason": problem_field.get("specificity_reason") or "",
+                "answer_example_shape": problem_field.get("expected_shape")
+                or _final_answer_intake_example_shape(alias),
+                "required_user_response": "",
+                "why_not_inferred": "",
+                "observed_prompt_count": 1 if observed_prompt else 0,
+                "observed_prompt_examples": [observed_prompt] if observed_prompt else [],
+            }
+        )
+        seen_blocker_aliases.add(alias)
+    missing_answer_count = sum(1 for row in blocker_rows if row.get("status") == "missing_answer")
+    unconfirmed_high_risk_count = sum(
+        1 for row in blocker_rows if row.get("status") == "high_risk_unconfirmed"
+    )
+    needs_more_specific_answer_count = sum(
+        1 for row in blocker_rows if row.get("status") == "needs_more_specific_answer"
+    )
+    unknown_answer_count = sum(1 for row in blocker_rows if row.get("status") == "unknown_answer")
+    ready_count = raw_ready_count
+    if latest_final_answer_validation_attempted:
+        ready_count = int(
+            latest_final_answer_validation.get("ready_alias_count")
+            or max(len(template.get("fields") or []) - len(blocker_rows), 0)
+        )
     goal_summary = (goal_audit or {}).get("blocker_summary") or {}
     post_answer_text_reply_ready = bool(goal_summary.get("post_answer_text_reply_rehearsal_ready"))
     post_answer_queue_ready = bool(goal_summary.get("post_answer_synthetic_queue_rehearsal_ready"))
@@ -24753,6 +24978,22 @@ def build_final_answer_blocker_report(
         goal_summary.get("post_answer_intake_needs_more_specific_answer_count") or 0
     )
     post_answer_intake_unknown_count = int(goal_summary.get("post_answer_intake_unknown_answer_count") or 0)
+    if latest_final_answer_validation_attempted:
+        post_answer_intake_answer_count = int(
+            latest_final_answer_validation.get("answer_input_count") or post_answer_intake_answer_count
+        )
+        post_answer_intake_missing_count = int(
+            latest_final_answer_validation.get("missing_alias_count") or 0
+        )
+        post_answer_intake_unconfirmed_count = int(
+            latest_final_answer_validation.get("unconfirmed_high_risk_alias_count") or 0
+        )
+        post_answer_intake_specificity_count = int(
+            latest_final_answer_validation.get("needs_more_specific_alias_count") or 0
+        )
+        post_answer_intake_unknown_count = int(
+            latest_final_answer_validation.get("unknown_answer_count") or 0
+        )
     post_answer_intake_problem_count = (
         post_answer_intake_missing_count
         + post_answer_intake_unconfirmed_count
@@ -24802,7 +25043,8 @@ def build_final_answer_blocker_report(
         )
     )
     truthful_answer_only_blockers = all(
-        str(row.get("status") or "") in {"missing_answer", "high_risk_unconfirmed"}
+        str(row.get("status") or "")
+        in {"missing_answer", "high_risk_unconfirmed", "needs_more_specific_answer"}
         for row in blocker_rows
     )
     post_answer_synthetic_100_ready = bool(
@@ -24816,7 +25058,7 @@ def build_final_answer_blocker_report(
         and post_answer_queue_ready
         and truthful_answer_only_blockers
         and post_answer_intake_answer_count >= len(blocker_rows)
-        and post_answer_intake_problem_count == 0
+        and (post_answer_intake_problem_count == 0 or latest_final_answer_validation_attempted)
         and post_answer_synthetic_100_ready
         and live_preflight_ready
     )
@@ -24827,7 +25069,70 @@ def build_final_answer_blocker_report(
         "current_answers_blocking_count": len(blocker_rows),
         "missing_answer_count": missing_answer_count,
         "unconfirmed_high_risk_count": unconfirmed_high_risk_count,
+        "needs_more_specific_answer_count": needs_more_specific_answer_count,
+        "unknown_answer_count": unknown_answer_count,
         "high_risk_count": int(template.get("high_risk_count") or 0),
+        "latest_final_answer_validation_attempted": latest_final_answer_validation_attempted,
+        "latest_final_answer_validation_status": latest_final_answer_validation.get(
+            "source_status", ""
+        ),
+        "latest_final_answer_validation_ready_for_finalize": bool(
+            latest_final_answer_validation.get("ready_for_finalize")
+        ),
+        "latest_final_answer_validation_safe_to_resume": bool(
+            latest_final_answer_validation.get("safe_to_resume_after_answers")
+        ),
+        "latest_final_answer_validation_answer_count": int(
+            latest_final_answer_validation.get("answer_input_count") or 0
+        ),
+        "latest_final_answer_validation_ready_count": int(
+            latest_final_answer_validation.get("ready_alias_count") or 0
+        ),
+        "latest_final_answer_validation_missing_count": int(
+            latest_final_answer_validation.get("missing_alias_count") or 0
+        ),
+        "latest_final_answer_validation_unconfirmed_high_risk_count": int(
+            latest_final_answer_validation.get("unconfirmed_high_risk_alias_count") or 0
+        ),
+        "latest_final_answer_validation_needs_more_specific_count": int(
+            latest_final_answer_validation.get("needs_more_specific_alias_count") or 0
+        ),
+        "latest_final_answer_validation_unknown_count": int(
+            latest_final_answer_validation.get("unknown_answer_count") or 0
+        ),
+        "latest_final_answer_validation_ready_aliases": _string_list(
+            latest_final_answer_validation.get("ready_aliases")
+        ),
+        "latest_final_answer_validation_missing_aliases": _string_list(
+            latest_final_answer_validation.get("missing_aliases")
+        ),
+        "latest_final_answer_validation_unconfirmed_high_risk_aliases": _string_list(
+            latest_final_answer_validation.get("unconfirmed_high_risk_aliases")
+        ),
+        "latest_final_answer_validation_needs_more_specific_aliases": _string_list(
+            latest_final_answer_validation.get("needs_more_specific_aliases")
+        ),
+        "latest_final_answer_validation_unknown_aliases": _string_list(
+            latest_final_answer_validation.get("unknown_answer_keys")
+        ),
+        "latest_final_answer_validation_problem_aliases": latest_problem_aliases,
+        "latest_final_answer_validation_revision_file": latest_final_answer_validation.get(
+            "revision_markdown_output", ""
+        ),
+        "latest_final_answer_validation_reply_file": latest_final_answer_validation.get(
+            "reply_file", ""
+        ),
+        "latest_final_answer_validation_base_reply_file": latest_final_answer_validation.get(
+            "base_reply_file", ""
+        ),
+        "latest_final_answer_validation_answer_text_stored": bool(
+            latest_final_answer_validation.get("answer_text_stored_in_receipt")
+        ),
+        "final_answer_missing_source": (
+            "latest_final_answer_validation"
+            if latest_final_answer_validation_attempted
+            else "draft_template"
+        ),
         "goal_status": (goal_audit or {}).get("status", ""),
         "goal_complete": bool((goal_audit or {}).get("goal_complete")),
         "final_answer_waiting_count_after_drafts": int(
@@ -25122,8 +25427,14 @@ def write_final_answer_blocker_report(
     xlsx_output: str | Path | None = None,
     user_input_output: str | Path | None = None,
     user_input_xlsx_output: str | Path | None = None,
+    *,
+    final_answer_autopilot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    report = build_final_answer_blocker_report(template, goal_audit=goal_audit)
+    report = build_final_answer_blocker_report(
+        template,
+        goal_audit=goal_audit,
+        final_answer_autopilot=final_answer_autopilot,
+    )
     json_path = Path(json_output)
     markdown_path = Path(markdown_output)
     reply_template_path = Path(reply_template_output) if reply_template_output else None
@@ -25812,7 +26123,7 @@ def _final_answer_blocker_runbook_rows(
             "step": 1,
             "name": "Validate filled reply",
             "command": automation_after_answers.get("next_validate_command", ""),
-            "expected_result": "parse the six final-answer lines and list any missing, ambiguous, or unconfirmed high-risk answers",
+            "expected_result": "parse the remaining final-answer lines and list any missing, ambiguous, or unconfirmed high-risk answers",
             "side_effects": "none; reads stdin and prints validation only",
             "safety_gate": "does not write profile, answer memory, browser tabs, or real applications",
         },
@@ -25923,6 +26234,7 @@ def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
         f"Blockers: {summary.get('blocker_count', 0)}",
         f"Missing answers: {summary.get('missing_answer_count', 0)}",
         f"Unconfirmed high-risk answers: {summary.get('unconfirmed_high_risk_count', 0)}",
+        f"Needs more specific answers: {summary.get('needs_more_specific_answer_count', 0)}",
         f"Position answers remaining: {summary.get('position_execution_remaining_user_answers', 0)}",
         f"Observed prompt examples: {summary.get('observed_prompt_example_count', 0)}",
         "",
@@ -26164,6 +26476,7 @@ def render_final_answer_blocker_report_html(report: dict[str, Any]) -> str:
                     ("Missing answers", summary.get("missing_answer_count", 0)),
                     ("High-risk answers", summary.get("high_risk_count", 0)),
                     ("Unconfirmed high-risk", summary.get("unconfirmed_high_risk_count", 0)),
+                    ("Needs specificity", summary.get("needs_more_specific_answer_count", 0)),
                     ("Current selected queue ready", _yes_no(summary.get("selected_queue_currently_ready"))),
                     ("Ready after truthful reply", _yes_no(summary.get("selected_queue_ready_after_truthful_reply"))),
                     ("Position answers left", summary.get("position_execution_remaining_user_answers", 0)),
@@ -26313,6 +26626,7 @@ def build_telegram_final_answer_blocker_alert(
         f"📌 Goal status: {summary.get('goal_status', '') or 'unknown'}",
         "🤖 100-position queue waits for these truthful answers before real autofill.",
         f"❓ Blockers: {summary.get('blocker_count', 0)}; high-risk fields: {summary.get('high_risk_count', 0)}",
+        f"🧩 Needs specificity: {summary.get('needs_more_specific_answer_count', 0)}",
         "✅ After-answer path ready: "
         f"{'yes' if report.get('ready_after_truthful_answer_reply') else 'no'}; "
         f"text reply rehearsal: {'yes' if summary.get('post_answer_text_reply_rehearsal_ready') else 'no'}",
