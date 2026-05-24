@@ -8547,8 +8547,11 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(report["final_audits"], [])
             self.assertIn("goal-audit", json.dumps(report["final_audit_commands"]))
             self.assertFalse(report["stores_answer_text_in_report"])
+            self.assertTrue(report["validation_receipt"]["available"])
+            self.assertFalse(report["validation_receipt"]["ready_for_finalize"])
             markdown_text = markdown_path.read_text(encoding="utf-8")
             self.assertIn("Final Answer Autopilot", markdown_text)
+            self.assertIn("Validation Receipt", markdown_text)
             self.assertIn("Placeholder aliases remaining: 1", markdown_text)
             self.assertIn("zip_or_postal_code", markdown_text)
 
@@ -8613,8 +8616,16 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertFalse(report["stores_answer_text_in_report"])
             self.assertFalse(report["sends_answer_text_to_telegram"])
             self.assertFalse(report["submits_real_applications"])
+            receipt = report["validation_receipt"]
+            self.assertTrue(receipt["available"])
+            self.assertTrue(receipt["ready_for_finalize"])
+            self.assertFalse(receipt["parser_has_errors"])
+            self.assertEqual(receipt["reply_summary"]["parsed_aliases"], ["zip_or_postal_code"])
+            self.assertEqual(receipt["answer_receipt"]["ready_aliases"], ["zip_or_postal_code"])
             self.assertNotIn("98004", report_text)
-            self.assertNotIn("98004", markdown_path.read_text(encoding="utf-8"))
+            markdown_text = markdown_path.read_text(encoding="utf-8")
+            self.assertIn("Validation Receipt", markdown_text)
+            self.assertNotIn("98004", markdown_text)
 
     def test_final_answer_autopilot_accepts_reply_text_without_storing_answer_text(self) -> None:
         unblockers = {
@@ -8669,6 +8680,7 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(report["status"], "validated_ready")
             self.assertEqual(report["reply_source"], "reply_text")
             self.assertEqual(report["reply_file"], "<inline reply text redacted>")
+            self.assertTrue(report["validation_receipt"]["ready_for_finalize"])
             self.assertNotIn("98004", report_text)
             self.assertNotIn("98004", markdown_text)
 
@@ -8706,6 +8718,7 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(stdin_report["status"], "validated_ready")
             self.assertEqual(stdin_report["reply_source"], "reply_stdin")
             self.assertEqual(stdin_report["reply_file"], "<stdin reply text redacted>")
+            self.assertTrue(stdin_report["validation_receipt"]["ready_for_finalize"])
             self.assertNotIn("98004", stdin_report_text)
             self.assertNotIn("98004", stdin_markdown_text)
 
@@ -8907,6 +8920,46 @@ class JobApplyAgentTests(unittest.TestCase):
             )
             self.assertEqual(synthetic_allowed.returncode, 0, synthetic_allowed.stderr)
             self.assertIn("Fake/test markers: 1", synthetic_allowed.stdout)
+
+            autopilot_report_path = root / "autopilot_fake.json"
+            autopilot_markdown_path = root / "autopilot_fake.md"
+            autopilot_blocked = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "job_apply_agent",
+                    "final-answer-autopilot",
+                    "--template",
+                    str(template_path),
+                    "--unblockers",
+                    str(unblockers_path),
+                    "--reply-file",
+                    str(reply_path),
+                    "--json-output",
+                    str(autopilot_report_path),
+                    "--markdown-output",
+                    str(autopilot_markdown_path),
+                    "--dry-run",
+                    "--fail-on-not-ready",
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(autopilot_blocked.returncode, 2)
+            autopilot_text = autopilot_report_path.read_text(encoding="utf-8")
+            autopilot_report = json.loads(autopilot_text)
+            self.assertEqual(autopilot_report["status"], "validation_failed")
+            self.assertTrue(autopilot_report["validation_receipt"]["parser_has_errors"])
+            self.assertEqual(
+                autopilot_report["validation_receipt"]["reply_summary"]["fake_marker_aliases"],
+                ["health_requirement"],
+            )
+            self.assertNotIn("FAKE LOCAL TEST ONLY", autopilot_text)
+            autopilot_markdown = autopilot_markdown_path.read_text(encoding="utf-8")
+            self.assertIn("fake/test marker aliases: health_requirement", autopilot_markdown)
+            self.assertNotIn("FAKE LOCAL TEST ONLY", autopilot_markdown)
 
     def test_post_answer_pipeline_blocks_fake_markers_in_direct_compact_updates(self) -> None:
         unblockers = {

@@ -4573,6 +4573,106 @@ def _write_final_answer_autopilot_report(
     markdown_path.write_text(_render_final_answer_autopilot_markdown(report), encoding="utf-8")
 
 
+def _final_answer_autopilot_validation_receipt(
+    args: argparse.Namespace,
+    reply_path: Path,
+) -> dict[str, object]:
+    try:
+        if not reply_path.exists():
+            return {
+                "available": False,
+                "reason": "reply file does not exist",
+                "stores_answer_text": False,
+                "submits_real_applications": False,
+            }
+        template_path = Path(args.template)
+        unblockers_path = Path(args.unblockers)
+        if not template_path.exists():
+            return {
+                "available": False,
+                "reason": f"template file does not exist: {template_path}",
+                "stores_answer_text": False,
+                "submits_real_applications": False,
+            }
+        if not unblockers_path.exists():
+            return {
+                "available": False,
+                "reason": f"unblockers file does not exist: {unblockers_path}",
+                "stores_answer_text": False,
+                "submits_real_applications": False,
+            }
+        template_payload = json.loads(template_path.read_text(encoding="utf-8"))
+        unblockers_payload = json.loads(unblockers_path.read_text(encoding="utf-8"))
+        reply_report = build_final_answer_reply_intake(
+            template_payload,
+            reply_path.read_text(encoding="utf-8"),
+            confirm_high_risk=False,
+            allow_synthetic_values=False,
+        )
+        intake_payload = (
+            reply_report.get("intake_payload")
+            if isinstance(reply_report.get("intake_payload"), dict)
+            else {}
+        )
+        intake_report = build_final_answer_intake_update(
+            unblockers_payload,
+            intake_payload,
+            confirm_high_risk=False,
+        )
+        parser_has_errors = bool(
+            int(reply_report.get("unknown_key_count") or 0)
+            or int(reply_report.get("duplicate_key_count") or 0)
+            or int(reply_report.get("fake_marker_count") or 0)
+        )
+        return {
+            "available": True,
+            "ready_for_finalize": bool(intake_report.get("ready_for_finalize"))
+            and not parser_has_errors,
+            "parser_has_errors": parser_has_errors,
+            "answer_receipt": intake_report.get("answer_receipt") or {},
+            "reply_summary": {
+                "parsed_line_count": int(reply_report.get("parsed_line_count") or 0),
+                "answer_count": int(reply_report.get("answer_count") or 0),
+                "unknown_key_count": int(reply_report.get("unknown_key_count") or 0),
+                "duplicate_key_count": int(reply_report.get("duplicate_key_count") or 0),
+                "fake_marker_count": int(reply_report.get("fake_marker_count") or 0),
+                "parsed_aliases": reply_report.get("parsed_aliases") or [],
+                "confirmed_high_risk_aliases": reply_report.get("confirmed_high_risk_aliases") or [],
+                "fake_marker_aliases": reply_report.get("fake_marker_aliases") or [],
+            },
+            "intake_summary": intake_report.get("summary") or {},
+            "policy": {
+                "stores_answer_text": False,
+                "markdown_redacts_answer_text": True,
+                "submits_real_applications": False,
+                "blocks_fake_or_synthetic_values_for_real_apply": True,
+            },
+        }
+    except Exception as exc:  # pragma: no cover - defensive report path
+        return {
+            "available": False,
+            "reason": str(exc),
+            "stores_answer_text": False,
+            "submits_real_applications": False,
+        }
+
+
+def _append_final_answer_aliases(
+    lines: list[str],
+    label: str,
+    aliases: object,
+) -> None:
+    safe_aliases = (
+        [str(alias) for alias in aliases or [] if str(alias).strip()]
+        if isinstance(aliases, list)
+        else []
+    )
+    if safe_aliases:
+        lines.append(f"- {label}: {', '.join(safe_aliases)}")
+    else:
+        lines.append(f"- {label}: none")
+
+
 def _render_final_answer_autopilot_markdown(report: dict[str, object]) -> str:
     lines = [
         "# Final Answer Autopilot",
@@ -4597,6 +4697,64 @@ def _render_final_answer_autopilot_markdown(report: dict[str, object]) -> str:
         lines.extend(["## Placeholder Aliases", ""])
         for alias in placeholder_aliases:
             lines.append(f"- {alias}")
+        lines.append("")
+    validation_receipt = (
+        report.get("validation_receipt")
+        if isinstance(report.get("validation_receipt"), dict)
+        else {}
+    )
+    if validation_receipt:
+        answer_receipt = (
+            validation_receipt.get("answer_receipt")
+            if isinstance(validation_receipt.get("answer_receipt"), dict)
+            else {}
+        )
+        reply_summary = (
+            validation_receipt.get("reply_summary")
+            if isinstance(validation_receipt.get("reply_summary"), dict)
+            else {}
+        )
+        intake_summary = (
+            validation_receipt.get("intake_summary")
+            if isinstance(validation_receipt.get("intake_summary"), dict)
+            else {}
+        )
+        lines.extend(
+            [
+                "## Validation Receipt",
+                "",
+                f"- available: {str(bool(validation_receipt.get('available'))).lower()}",
+                f"- ready for finalize: {str(bool(validation_receipt.get('ready_for_finalize'))).lower()}",
+                f"- parser has errors: {str(bool(validation_receipt.get('parser_has_errors'))).lower()}",
+                f"- parsed answers: {reply_summary.get('answer_count', 0)}",
+                f"- unknown keys: {reply_summary.get('unknown_key_count', 0)}",
+                f"- duplicate keys: {reply_summary.get('duplicate_key_count', 0)}",
+                f"- fake/test markers: {reply_summary.get('fake_marker_count', 0)}",
+                f"- missing unblockers: {intake_summary.get('missing_unblocker_count', 0)}",
+                f"- high-risk confirmations missing: {intake_summary.get('unconfirmed_high_risk_count', 0)}",
+                f"- needs more specificity: {intake_summary.get('needs_more_specific_answer_count', 0)}",
+                f"- unknown answers: {intake_summary.get('unknown_answer_count', 0)}",
+            ]
+        )
+        if validation_receipt.get("reason"):
+            lines.append(f"- reason: {validation_receipt.get('reason')}")
+        _append_final_answer_aliases(lines, "ready aliases", answer_receipt.get("ready_aliases"))
+        _append_final_answer_aliases(lines, "missing aliases", answer_receipt.get("missing_aliases"))
+        _append_final_answer_aliases(
+            lines,
+            "unconfirmed high-risk aliases",
+            answer_receipt.get("unconfirmed_high_risk_aliases"),
+        )
+        _append_final_answer_aliases(
+            lines,
+            "needs more specific aliases",
+            answer_receipt.get("needs_more_specific_aliases"),
+        )
+        _append_final_answer_aliases(
+            lines,
+            "fake/test marker aliases",
+            reply_summary.get("fake_marker_aliases"),
+        )
         lines.append("")
     lines.extend(
         [
@@ -4658,6 +4816,7 @@ def _final_answer_autopilot_base_report(
     reason: str = "",
     reply_source: str = "reply_file",
     reply_file_for_report: str | Path | None = None,
+    validation_receipt: dict[str, object] | None = None,
 ) -> dict[str, object]:
     safe_placeholder_aliases = [str(alias) for alias in placeholder_aliases or [] if str(alias).strip()]
     return {
@@ -4678,6 +4837,7 @@ def _final_answer_autopilot_base_report(
         "placeholder_line_count": placeholder_line_count,
         "placeholder_alias_count": len(safe_placeholder_aliases),
         "placeholder_aliases": safe_placeholder_aliases,
+        "validation_receipt": validation_receipt or {},
         "validate_command": shlex.join(validate_command),
         "pipeline_command": shlex.join(pipeline_command),
         "final_audits_requested": not bool(args.skip_final_audits),
@@ -4768,6 +4928,7 @@ def _run_final_answer_autopilot_for_reply_path(
     while True:
         attempt_count += 1
         if not reply_path.exists():
+            validation_receipt = _final_answer_autopilot_validation_receipt(args, reply_path)
             report = _final_answer_autopilot_base_report(
                 args,
                 status="waiting_for_reply_file",
@@ -4778,6 +4939,7 @@ def _run_final_answer_autopilot_for_reply_path(
                 reason="reply file does not exist",
                 reply_source=reply_source,
                 reply_file_for_report=reply_file_for_report,
+                validation_receipt=validation_receipt,
             )
             _write_final_answer_autopilot_report(report, args.json_output, args.markdown_output)
             if not args.watch:
@@ -4788,6 +4950,7 @@ def _run_final_answer_autopilot_for_reply_path(
             placeholder_count = _final_answer_reply_placeholder_count(reply_text)
             placeholder_aliases = _final_answer_reply_placeholder_aliases(reply_text)
             if placeholder_count:
+                validation_receipt = _final_answer_autopilot_validation_receipt(args, reply_path)
                 report = _final_answer_autopilot_base_report(
                     args,
                     status="waiting_for_filled_reply",
@@ -4799,6 +4962,7 @@ def _run_final_answer_autopilot_for_reply_path(
                     reason="reply file still contains <fill> placeholders",
                     reply_source=reply_source,
                     reply_file_for_report=reply_file_for_report,
+                    validation_receipt=validation_receipt,
                 )
                 _write_final_answer_autopilot_report(report, args.json_output, args.markdown_output)
                 if not args.watch:
@@ -4808,6 +4972,7 @@ def _run_final_answer_autopilot_for_reply_path(
                         print("Placeholder aliases: " + ", ".join(placeholder_aliases))
                     return 2 if args.fail_on_not_ready else 0
             else:
+                validation_receipt = _final_answer_autopilot_validation_receipt(args, reply_path)
                 validate_result = subprocess.run(
                     validate_command,
                     cwd=Path.cwd(),
@@ -4831,6 +4996,7 @@ def _run_final_answer_autopilot_for_reply_path(
                         reason="filled reply did not pass final-answer validation",
                         reply_source=reply_source,
                         reply_file_for_report=reply_file_for_report,
+                        validation_receipt=validation_receipt,
                     )
                     _write_final_answer_autopilot_report(report, args.json_output, args.markdown_output)
                     print(f"Final answer autopilot: {report['status']}")
@@ -4847,6 +5013,7 @@ def _run_final_answer_autopilot_for_reply_path(
                         reason="dry run or pipeline disabled",
                         reply_source=reply_source,
                         reply_file_for_report=reply_file_for_report,
+                        validation_receipt=validation_receipt,
                     )
                     _write_final_answer_autopilot_report(report, args.json_output, args.markdown_output)
                     print(f"Final answer autopilot: {report['status']}")
@@ -4885,6 +5052,7 @@ def _run_final_answer_autopilot_for_reply_path(
                     reason="pipeline command finished",
                     reply_source=reply_source,
                     reply_file_for_report=reply_file_for_report,
+                    validation_receipt=validation_receipt,
                 )
                 _write_final_answer_autopilot_report(report, args.json_output, args.markdown_output)
                 print(f"Final answer autopilot: {report['status']}")
