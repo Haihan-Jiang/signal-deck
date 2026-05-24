@@ -5585,12 +5585,54 @@ def build_final_answer_intake_update(
         for key, value in answers.items()
         if str(key) not in valid_answer_keys and not _critical_update_value_is_blank(value)
     )
+    required_aliases = [
+        str(row.get("alias") or "").strip()
+        for row in fields
+        if str(row.get("alias") or "").strip()
+    ]
+    present_aliases = [
+        str(row.get("alias") or "").strip()
+        for row in fields
+        if row.get("status") != "missing" and str(row.get("alias") or "").strip()
+    ]
+    ready_aliases = [
+        str(row.get("alias") or "").strip()
+        for row in fields
+        if row.get("status") == "ready" and str(row.get("alias") or "").strip()
+    ]
+    missing_aliases = [
+        str(row.get("alias") or "").strip()
+        for row in fields
+        if row.get("status") == "missing" and str(row.get("alias") or "").strip()
+    ]
+    unconfirmed_high_risk_aliases = [
+        str(row.get("alias") or "").strip()
+        for row in fields
+        if row.get("status") == "high_risk_unconfirmed" and str(row.get("alias") or "").strip()
+    ]
+    needs_more_specific_aliases = [
+        str(row.get("alias") or "").strip()
+        for row in fields
+        if row.get("status") == "needs_more_specific_answer" and str(row.get("alias") or "").strip()
+    ]
     ready_for_finalize = bool(
         not missing_ids
         and not unconfirmed_high_risk_ids
         and not needs_more_specific_ids
         and not unknown_answer_ids
     )
+    answer_receipt = {
+        "required_aliases": required_aliases,
+        "present_aliases": present_aliases,
+        "ready_aliases": ready_aliases,
+        "missing_aliases": missing_aliases,
+        "unconfirmed_high_risk_aliases": unconfirmed_high_risk_aliases,
+        "needs_more_specific_aliases": needs_more_specific_aliases,
+        "unknown_answer_keys": unknown_answer_ids,
+        "safe_to_resume_after_answers": ready_for_finalize,
+        "answer_text_stored_in_receipt": False,
+        "submits_real_applications": False,
+    }
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source": "final_answer_intake_update",
@@ -5611,6 +5653,7 @@ def build_final_answer_intake_update(
         "unconfirmed_high_risk_ids": unconfirmed_high_risk_ids,
         "needs_more_specific_answer_ids": needs_more_specific_ids,
         "unknown_answer_ids": unknown_answer_ids,
+        "answer_receipt": answer_receipt,
         "compact_updates": compact_updates,
         "fields": fields,
         "next_commands": [
@@ -6614,9 +6657,34 @@ def render_final_answer_intake_update_markdown(report: dict[str, Any]) -> str:
         f"- answers needing more specificity: {summary.get('needs_more_specific_answer_count', 0)}",
         f"- unknown answers: {summary.get('unknown_answer_count', 0)}",
         "",
-        "## Field Status",
+        "## Answer Receipt",
         "",
     ]
+    receipt = report.get("answer_receipt") if isinstance(report.get("answer_receipt"), dict) else {}
+    receipt_rows = [
+        ("required aliases", receipt.get("required_aliases") or []),
+        ("present aliases", receipt.get("present_aliases") or []),
+        ("ready aliases", receipt.get("ready_aliases") or []),
+        ("missing aliases", receipt.get("missing_aliases") or []),
+        ("unconfirmed high-risk aliases", receipt.get("unconfirmed_high_risk_aliases") or []),
+        ("needs more specificity aliases", receipt.get("needs_more_specific_aliases") or []),
+        ("unknown answer keys", receipt.get("unknown_answer_keys") or []),
+    ]
+    for label, values in receipt_rows:
+        lines.append(f"- {label}: {', '.join(_string_list(values)) or 'none'}")
+    lines.extend(
+        [
+            f"- safe to resume after answers: {str(bool(receipt.get('safe_to_resume_after_answers'))).lower()}",
+            "- answer text stored in receipt: false",
+            "",
+        ]
+    )
+    lines.extend(
+        [
+            "## Field Status",
+            "",
+        ]
+    )
     rows = [
         [
             row.get("alias"),

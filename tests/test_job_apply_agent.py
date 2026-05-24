@@ -7660,6 +7660,13 @@ class JobApplyAgentTests(unittest.TestCase):
             unconfirmed["unconfirmed_high_risk_ids"],
             ["answer_memory_citizenship_status_default_policy"],
         )
+        self.assertEqual(
+            unconfirmed["answer_receipt"]["present_aliases"],
+            ["zip_or_postal_code", "citizenship_status"],
+        )
+        self.assertEqual(unconfirmed["answer_receipt"]["ready_aliases"], ["zip_or_postal_code"])
+        self.assertEqual(unconfirmed["answer_receipt"]["unconfirmed_high_risk_aliases"], ["citizenship_status"])
+        self.assertFalse(unconfirmed["answer_receipt"]["safe_to_resume_after_answers"])
         vague = build_final_answer_intake_update(
             unblockers,
             {
@@ -7680,6 +7687,8 @@ class JobApplyAgentTests(unittest.TestCase):
         )
         self.assertNotIn("answer_memory_citizenship_status_default_policy", vague["compact_updates"])
         self.assertEqual(vague["fields"][1]["status"], "needs_more_specific_answer")
+        self.assertEqual(vague["answer_receipt"]["needs_more_specific_aliases"], ["citizenship_status"])
+        self.assertFalse(vague["answer_receipt"]["answer_text_stored_in_receipt"])
 
         ready = build_final_answer_intake_update(
             unblockers,
@@ -7698,6 +7707,16 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertTrue(ready["ready_for_finalize"])
         self.assertEqual(ready["summary"]["compact_update_count"], 2)
         self.assertEqual(ready["summary"]["needs_more_specific_answer_count"], 0)
+        self.assertEqual(
+            ready["answer_receipt"]["required_aliases"],
+            ["zip_or_postal_code", "citizenship_status"],
+        )
+        self.assertEqual(
+            ready["answer_receipt"]["ready_aliases"],
+            ["zip_or_postal_code", "citizenship_status"],
+        )
+        self.assertEqual(ready["answer_receipt"]["missing_aliases"], [])
+        self.assertTrue(ready["answer_receipt"]["safe_to_resume_after_answers"])
         self.assertEqual(ready["compact_updates"]["profile_zip_or_postal_code"], "98004")
         self.assertTrue(
             ready["compact_updates"]["answer_memory_citizenship_status_default_policy"][
@@ -7705,6 +7724,8 @@ class JobApplyAgentTests(unittest.TestCase):
             ]
         )
         self.assertIn("Ready for finalize: true", update_markdown)
+        self.assertIn("safe to resume after answers: true", update_markdown)
+        self.assertIn("ready aliases: zip_or_postal_code, citizenship_status", update_markdown)
         self.assertIn("answers needing more specificity: 0", update_markdown)
         self.assertIn("critical-input-unblockers-finalize", update_markdown)
 
@@ -8309,6 +8330,20 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(len(reply_report["confirmed_high_risk_aliases"]), 5)
         self.assertTrue(intake_report["ready_for_finalize"])
         self.assertEqual(intake_report["summary"]["compact_update_count"], 6)
+        self.assertEqual(
+            intake_report["answer_receipt"]["ready_aliases"],
+            [
+                "zip_or_postal_code",
+                "citizenship_status",
+                "background_or_export_control",
+                "country_work_permit",
+                "interview_recording_consent",
+                "health_requirement",
+            ],
+        )
+        self.assertEqual(intake_report["answer_receipt"]["missing_aliases"], [])
+        self.assertEqual(intake_report["answer_receipt"]["unconfirmed_high_risk_aliases"], [])
+        self.assertTrue(intake_report["answer_receipt"]["safe_to_resume_after_answers"])
         self.assertIn("Final Answer Reply Intake", reply_markdown)
         self.assertIn("zip_or_postal_code", reply_markdown)
         self.assertNotIn("98004", reply_markdown)
@@ -9176,6 +9211,12 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(reply_report["confirmed_high_risk_aliases"], ["health_requirement"])
         self.assertFalse(intake_report["ready_for_finalize"])
         self.assertEqual(intake_report["summary"]["needs_more_specific_answer_count"], 2)
+        self.assertEqual(
+            intake_report["answer_receipt"]["needs_more_specific_aliases"],
+            ["zip_or_postal_code", "health_requirement"],
+        )
+        self.assertEqual(intake_report["answer_receipt"]["ready_aliases"], [])
+        self.assertFalse(intake_report["answer_receipt"]["safe_to_resume_after_answers"])
         self.assertEqual(intake_report["compact_updates"], {})
         self.assertEqual(
             [field["status"] for field in intake_report["fields"]],
