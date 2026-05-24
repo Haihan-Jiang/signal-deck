@@ -7733,6 +7733,45 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(vague["answer_receipt"]["needs_more_specific_aliases"], ["citizenship_status"])
         self.assertFalse(vague["answer_receipt"]["answer_text_stored_in_receipt"])
 
+        h1b_conflict = build_final_answer_intake_update(
+            unblockers,
+            {
+                "answers": {
+                    "zip_or_postal_code": "98004",
+                    "citizenship_status": {
+                        "answer": "I am a Chinese citizen on H-1B and do not require visa sponsorship.",
+                        "high_risk_user_confirmed": True,
+                    },
+                }
+            },
+        )
+        self.assertFalse(h1b_conflict["ready_for_finalize"])
+        self.assertEqual(h1b_conflict["fields"][1]["status"], "needs_more_specific_answer")
+        self.assertIn("H-1B answer conflicts", h1b_conflict["fields"][1]["specificity_reason"])
+        self.assertNotIn(
+            "answer_memory_citizenship_status_default_policy",
+            h1b_conflict["compact_updates"],
+        )
+
+        h1b_ready = build_final_answer_intake_update(
+            unblockers,
+            {
+                "answers": {
+                    "zip_or_postal_code": "98004",
+                    "citizenship_status": {
+                        "answer": (
+                            "I am a Chinese citizen on H-1B; I am not a U.S. person or permanent "
+                            "resident; I do not have citizenship or permanent residency in restricted "
+                            "countries; I require employer H-1B transfer or visa sponsorship."
+                        ),
+                        "high_risk_user_confirmed": True,
+                    },
+                }
+            },
+        )
+        self.assertTrue(h1b_ready["ready_for_finalize"])
+        self.assertEqual(h1b_ready["answer_receipt"]["ready_aliases"], ["zip_or_postal_code", "citizenship_status"])
+
         ready = build_final_answer_intake_update(
             unblockers,
             {

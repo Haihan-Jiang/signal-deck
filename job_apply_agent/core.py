@@ -5330,7 +5330,8 @@ FINAL_ANSWER_INTAKE_FORMAT_HINTS = {
     "zip_or_postal_code": "Enter the exact ZIP or postal code automation should reuse for profile and remote-work fields.",
     "citizenship_status": (
         "Use explicit yes/no clauses for U.S. citizen, U.S. person or permanent resident, and restricted-country "
-        "citizenship or permanent residency."
+        "citizenship or permanent residency. If you are on H-1B or another visa, explicitly state whether a new "
+        "employer must provide visa sponsorship or transfer."
     ),
     "background_or_export_control": (
         "State the truthful default for legal eligibility, background check, export-control, debarment, indictment, "
@@ -5351,7 +5352,7 @@ FINAL_ANSWER_INTAKE_FORMAT_HINTS = {
 
 FINAL_ANSWER_INTAKE_SPECIFICITY_HINTS = {
     "zip_or_postal_code": "Use an exact ZIP/postal code, not a city name or placeholder.",
-    "citizenship_status": "Do not use a bare yes/no; mention citizenship, U.S. person/permanent resident, and restricted-country status explicitly.",
+    "citizenship_status": "Do not use a bare yes/no; mention citizenship, U.S. person/permanent resident, restricted-country status, and visa sponsorship/transfer needs explicitly.",
     "background_or_export_control": "Do not use a bare yes/no; state the default for the listed legal/background/export-control prompts and any exceptions.",
     "country_work_permit": "Do not use a bare yes/no; name the countries or regions where the answer applies and list exceptions.",
     "interview_recording_consent": "Use an explicit consent sentence, such as yes/no for recording, transcription, AI notetakers, and analysis.",
@@ -5363,7 +5364,8 @@ FINAL_ANSWER_INTAKE_EXAMPLE_SHAPES = {
     "zip_or_postal_code": "Example shape: exact ZIP/postal code, such as [ZIP_CODE].",
     "citizenship_status": (
         "Example shape: I am [citizenship]; I [am/am not] a U.S. person or permanent "
-        "resident; I [do/do not] have citizenship or permanent residency in restricted countries."
+        "resident; I [do/do not] have citizenship or permanent residency in restricted countries; "
+        "I [do/do not] require employer visa sponsorship or transfer."
     ),
     "background_or_export_control": (
         "Example shape: [No/describe] disqualifying background, export-control, indictment, "
@@ -6399,6 +6401,14 @@ function clientSpecificityReason(alias, text, highRisk) {
     return /[A-Za-z0-9]/.test(answer) && answer.length >= 3 ? "" : "postal code is too short";
   }
   if (alias === "citizenship_status") {
+    const h1b = /h\s*[- ]?\s*1\s*b/.test(normalized);
+    const noSponsor = /\b(no|not|without)\b.{0,40}\b(sponsor|sponsorship|visa sponsorship|visa transfer)\b|\b(do not|don't|does not|doesn't)\b.{0,40}\b(require|need)\b.{0,40}\b(sponsor|sponsorship)\b|\bno sponsorship\b|\bno visa sponsorship\b|不需要.{0,30}(sponsorship|sponsor|签证|转签|transfer|担保)|无需.{0,30}(sponsorship|sponsor|签证|转签|transfer|担保)|不用.{0,30}(sponsorship|sponsor|签证|转签|transfer|担保)/.test(normalized);
+    if (h1b && noSponsor) {
+      return "H-1B answer conflicts with no-sponsorship wording; clarify whether a new employer must provide H-1B transfer or visa sponsorship";
+    }
+    if (h1b && !/\b(sponsor|sponsorship|visa sponsorship|visa transfer|transfer)\b|签证|转签|担保/.test(normalized)) {
+      return "H-1B answer must state whether employer sponsorship or transfer is required";
+    }
     return answer.length >= 12 && /\\b(citizen|citizenship|permanent|resident|green card|u\\.s\\.|us person|restricted|country|countries)\\b/.test(normalized)
       ? ""
       : "citizenship answer must mention citizenship/residency/restricted-country status";
@@ -6795,6 +6805,9 @@ def _final_answer_intake_answer_specificity(
             return False, "postal code is too short"
         return True, ""
     if alias == "citizenship_status":
+        h1b_reason = _citizenship_h1b_sponsorship_specificity_reason(normalized)
+        if h1b_reason:
+            return False, h1b_reason
         if len(answer) < 12 or not re.search(
             r"\b(citizen|citizenship|permanent|resident|green card|u\.s\.|us person|restricted|country|countries)\b"
             r"|公民|国籍|永久居民|绿卡|美国人|受限国家|限制国家",
@@ -6816,6 +6829,30 @@ def _final_answer_intake_answer_specificity(
     elif high_risk and len(answer) < 8:
         return False, "high-risk answer is too brief"
     return True, ""
+
+
+def _citizenship_h1b_sponsorship_specificity_reason(normalized_answer: str) -> str:
+    normalized = str(normalized_answer or "").strip().lower()
+    if not re.search(r"h\s*[- ]?\s*1\s*b", normalized):
+        return ""
+    no_sponsorship = re.search(
+        r"\b(no|not|without)\b.{0,40}\b(sponsor|sponsorship|visa sponsorship|visa transfer)\b"
+        r"|\b(do not|don't|does not|doesn't)\b.{0,40}\b(require|need)\b.{0,40}\b(sponsor|sponsorship)\b"
+        r"|\bno sponsorship\b|\bno visa sponsorship\b"
+        r"|不需要.{0,30}(sponsorship|sponsor|签证|转签|transfer|担保)"
+        r"|无需.{0,30}(sponsorship|sponsor|签证|转签|transfer|担保)"
+        r"|不用.{0,30}(sponsorship|sponsor|签证|转签|transfer|担保)",
+        normalized,
+    )
+    if no_sponsorship:
+        return "H-1B answer conflicts with no-sponsorship wording; clarify whether a new employer must provide H-1B transfer or visa sponsorship"
+    if not re.search(
+        r"\b(sponsor|sponsorship|visa sponsorship|visa transfer|transfer)\b"
+        r"|签证|转签|担保",
+        normalized,
+    ):
+        return "H-1B answer must state whether employer sponsorship or transfer is required"
+    return ""
 
 
 def _final_answer_intake_raw_answer(
