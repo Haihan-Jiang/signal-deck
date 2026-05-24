@@ -2258,6 +2258,10 @@ def main() -> int:
         default=str(DEFAULT_SYNTHETIC_UNBLOCKER_PROOF_JSON),
     )
     goal_audit_parser.add_argument("--post-answer-pipeline-json", default=str(DEFAULT_POST_ANSWER_PIPELINE_JSON))
+    goal_audit_parser.add_argument(
+        "--final-answer-autopilot-json",
+        default=str(DEFAULT_FINAL_ANSWER_AUTOPILOT_JSON),
+    )
     goal_audit_parser.add_argument("--closed-preflight-json", default=str(DEFAULT_CLOSED_PREFLIGHT_JSON))
     goal_audit_parser.add_argument("--closed-jobs-json", default=str(DEFAULT_CLOSED_JOBS))
     goal_audit_parser.add_argument(
@@ -2634,6 +2638,7 @@ def main() -> int:
             position_execution_audit=_load_optional_json(args.position_execution_audit_json),
             selected_answer_dependencies=_load_optional_json(args.selected_answer_dependencies_json),
             submission_safety_audit=_load_optional_json(args.submission_safety_audit_json),
+            final_answer_autopilot=_load_optional_json(args.final_answer_autopilot_json),
         )
         print(f"Wrote goal audit JSON to {args.json_output}")
         print(f"Wrote goal audit Markdown to {args.markdown_output}")
@@ -2650,13 +2655,47 @@ def main() -> int:
             "Final answer high-risk blanks: "
             f"{summary.get('final_answer_waiting_high_risk_count_after_drafts', 0)}"
         )
+        latest_validation = (
+            audit.get("latest_final_answer_validation")
+            if isinstance(audit.get("latest_final_answer_validation"), dict)
+            else {}
+        )
         missing_aliases = [
             str(row.get("alias") or row.get("input_id") or "").strip()
             for row in audit.get("final_answer_waiting_rows") or []
             if str(row.get("alias") or row.get("input_id") or "").strip()
         ]
         if missing_aliases:
-            print(f"Missing final answer aliases: {', '.join(missing_aliases[:12])}")
+            label = (
+                "Draft final-answer aliases still waiting before latest validation"
+                if latest_validation
+                else "Missing final answer aliases"
+            )
+            print(f"{label}: {', '.join(missing_aliases[:12])}")
+        if latest_validation:
+            print(
+                "Latest final-answer validation: "
+                f"answers={latest_validation.get('answer_input_count', 0)} "
+                f"ready={latest_validation.get('ready_alias_count', 0)} "
+                f"missing={latest_validation.get('missing_alias_count', 0)} "
+                f"specificity={latest_validation.get('needs_more_specific_alias_count', 0)} "
+                f"safe_to_resume={str(bool(latest_validation.get('safe_to_resume_after_answers'))).lower()}"
+            )
+            problem_aliases = []
+            for key in [
+                "missing_aliases",
+                "unconfirmed_high_risk_aliases",
+                "needs_more_specific_aliases",
+                "unknown_answer_keys",
+            ]:
+                for alias in latest_validation.get(key) or []:
+                    alias_text = str(alias).strip()
+                    if alias_text and alias_text not in problem_aliases:
+                        problem_aliases.append(alias_text)
+            if problem_aliases:
+                print(f"Latest final-answer problem aliases: {', '.join(problem_aliases[:12])}")
+            if latest_validation.get("revision_markdown_output"):
+                print(f"Latest final-answer revision file: {latest_validation.get('revision_markdown_output')}")
         print(
             "Draft data blockers after updates: "
             f"{summary.get('draft_data_blocking_prompt_count_after_updates', 0)}"

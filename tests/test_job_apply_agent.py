@@ -11182,6 +11182,120 @@ class JobApplyAgentTests(unittest.TestCase):
             audit["completion_verdict"]["file_autopilot_run_command"],
         )
         self.assertIn("--reply-stdin", audit["completion_verdict"]["direct_autopilot_command"])
+        latest_final_answer_autopilot = {
+            "status": "validation_failed",
+            "reply_source": "reply_file",
+            "reply_file": "/tmp/final_answer_user_input_needed 2.numbers",
+            "revision_markdown_output": "job_apply_agent/outbox/final_answer_revision_needed.md",
+            "validation_receipt": {
+                "available": True,
+                "ready_for_finalize": False,
+                "parser_has_errors": False,
+                "answer_receipt": {
+                    "required_aliases": [
+                        "zip_or_postal_code",
+                        "citizenship_status",
+                        "background_or_export_control",
+                        "country_work_permit",
+                        "interview_recording_consent",
+                        "health_requirement",
+                    ],
+                    "present_aliases": [
+                        "zip_or_postal_code",
+                        "citizenship_status",
+                        "background_or_export_control",
+                        "country_work_permit",
+                        "interview_recording_consent",
+                        "health_requirement",
+                    ],
+                    "ready_aliases": [
+                        "zip_or_postal_code",
+                        "background_or_export_control",
+                        "country_work_permit",
+                        "health_requirement",
+                    ],
+                    "missing_aliases": [],
+                    "unconfirmed_high_risk_aliases": [],
+                    "needs_more_specific_aliases": [
+                        "citizenship_status",
+                        "interview_recording_consent",
+                    ],
+                    "unknown_answer_keys": [],
+                    "safe_to_resume_after_answers": False,
+                    "answer_text_stored_in_receipt": False,
+                    "submits_real_applications": False,
+                },
+                "reply_summary": {"answer_count": 6, "unknown_key_count": 0},
+                "intake_summary": {
+                    "answer_input_count": 6,
+                    "missing_unblocker_count": 0,
+                    "unconfirmed_high_risk_count": 0,
+                    "needs_more_specific_answer_count": 2,
+                    "unknown_answer_count": 0,
+                },
+                "problem_fields": [
+                    {"alias": "citizenship_status", "status": "needs_more_specific_answer"},
+                    {
+                        "alias": "interview_recording_consent",
+                        "status": "needs_more_specific_answer",
+                    },
+                ],
+            },
+        }
+        latest_audit = build_goal_readiness_audit(
+            coverage_gate,
+            gaps,
+            readiness,
+            critical_input_status=critical_status,
+            critical_input_updates_readiness=critical_updates_readiness,
+            fake_learning_probe=fake_learning_probe,
+            fake_critical_input_probe=fake_critical,
+            fake_position_rehearsal=fake_rehearsal,
+            autofill_batch_plan=autofill_batch,
+            synthetic_unblocker_proof=synthetic_unblocker_proof,
+            post_answer_pipeline=post_answer_pipeline,
+            closed_preflight=closed_preflight,
+            closed_jobs=closed_jobs,
+            platform_question_playbook=platform_question_playbook,
+            position_execution_audit=position_execution_audit,
+            selected_answer_dependencies=selected_answer_dependencies,
+            submission_safety_audit=submission_safety_audit,
+            final_answer_autopilot=latest_final_answer_autopilot,
+        )
+        latest_markdown = render_goal_readiness_audit_markdown(latest_audit)
+        self.assertEqual(latest_audit["latest_final_answer_validation"]["answer_input_count"], 6)
+        self.assertEqual(latest_audit["latest_final_answer_validation"]["ready_alias_count"], 4)
+        self.assertEqual(
+            latest_audit["latest_final_answer_validation"]["needs_more_specific_aliases"],
+            ["citizenship_status", "interview_recording_consent"],
+        )
+        self.assertFalse(
+            latest_audit["latest_final_answer_validation"]["answer_text_stored_in_receipt"]
+        )
+        self.assertEqual(
+            latest_audit["completion_verdict"]["blocking_final_answer_aliases"],
+            ["citizenship_status", "interview_recording_consent"],
+        )
+        self.assertEqual(
+            latest_audit["blocker_summary"]["latest_final_answer_validation_ready_count"],
+            4,
+        )
+        self.assertEqual(
+            latest_audit["blocker_summary"][
+                "latest_final_answer_validation_needs_more_specific_aliases"
+            ],
+            ["citizenship_status", "interview_recording_consent"],
+        )
+        self.assertIn("latest final-answer validation: status validation_failed", latest_markdown)
+        self.assertIn(
+            "latest final-answer needs specificity: citizenship_status, interview_recording_consent",
+            latest_markdown,
+        )
+        self.assertIn("final_answer_revision_needed.md", latest_markdown)
+        latest_actions = "\n".join(latest_audit["next_actions"])
+        self.assertIn("Revise the 2 latest final-answer aliases", latest_actions)
+        self.assertIn("citizenship_status, interview_recording_consent", latest_actions)
+        self.assertIn("final_answer_user_input_needed 2.numbers", latest_actions)
         self.assertEqual(len(audit["completion_checklist"]), 14)
         self.assertTrue(audit["completion_checklist"][0]["counts_as_complete"])
         blocking_checklist = [row for row in audit["completion_checklist"] if row["blocking"]]
