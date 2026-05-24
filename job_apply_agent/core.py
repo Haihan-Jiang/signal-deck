@@ -26214,7 +26214,10 @@ def _final_answer_blocker_action_pack(
         "high_risk_confirmation_count": high_risk_count,
         "reply_file": str(FINAL_ANSWER_REPLY_TEMPLATE_PATH),
         **_final_answer_user_input_action_commands(),
-        "edit_instruction": "replace each <fill> with a truthful reusable answer; keep confirmation lines only when exact and truthful",
+        "edit_instruction": (
+            "replace each placeholder with a truthful reusable answer; keep confirmation "
+            "lines only when exact and truthful"
+        ),
         "safe_validate_command": (
             f"python3 -m job_apply_agent final-answer-reply --reply-file "
             f"{FINAL_ANSWER_REPLY_TEMPLATE_PATH} --validate-only --fail-on-not-ready"
@@ -26558,7 +26561,7 @@ def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
     if minimal_reply_prompt:
         lines.extend(
             [
-                "Paste this shape back to Codex after replacing every `<fill>` with truthful reusable text.",
+                "Paste this shape back to Codex after replacing every placeholder with truthful reusable text.",
                 "",
                 "```text",
                 minimal_reply_prompt,
@@ -26863,6 +26866,22 @@ FINAL_ANSWER_MINIMAL_REPLY_PREFIXES = {
 }
 
 
+FINAL_ANSWER_MINIMAL_REPLY_PLACEHOLDERS = {
+    "zip_or_postal_code": "<exact ZIP/postal code>",
+    "citizenship_status": (
+        "<citizenship; U.S. citizen/permanent resident/U.S. person status; "
+        "restricted-country citizenship/permanent-residency status; H-1B/visa status; "
+        "H-1B transfer vs sponsorship-only rule>"
+    ),
+    "background_or_export_control": "<default legal/background/export-control answer; exceptions>",
+    "country_work_permit": "<countries/regions where work is authorized; exceptions>",
+    "interview_recording_consent": (
+        "<yes/no for interview recording, transcription, AI notetaker, and AI analysis; exceptions>"
+    ),
+    "health_requirement": "<health/vaccination/client-site requirement answer; exceptions>",
+}
+
+
 def _final_answer_blocker_minimal_reply_prompt_lines(blockers: list[dict[str, Any]]) -> list[str]:
     lines: list[str] = []
     has_high_risk = False
@@ -26871,10 +26890,11 @@ def _final_answer_blocker_minimal_reply_prompt_lines(blockers: list[dict[str, An
         if not alias:
             continue
         prefix = FINAL_ANSWER_MINIMAL_REPLY_PREFIXES.get(alias)
+        placeholder = FINAL_ANSWER_MINIMAL_REPLY_PLACEHOLDERS.get(alias, "<fill>")
         if prefix:
-            lines.append(f"{prefix}<fill>")
+            lines.append(f"{prefix}{placeholder}")
         else:
-            lines.append(f"{alias}\uff1a<fill>")
+            lines.append(f"{alias}\uff1a{placeholder}")
         has_high_risk = has_high_risk or bool(row.get("high_risk"))
     if has_high_risk:
         lines.append("\u4ee5\u4e0a\u786e\u8ba4")

@@ -8164,8 +8164,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(
             report["minimal_reply_prompt_lines"],
             [
-                "\u6211\u7684\u516c\u6c11\u8eab\u4efd\u662f<fill>",
-                "\u9762\u8bd5\u5f55\u97f3\u662f<fill>",
+                "\u6211\u7684\u516c\u6c11\u8eab\u4efd\u662f<citizenship; U.S. citizen/permanent resident/U.S. person status; restricted-country citizenship/permanent-residency status; H-1B/visa status; H-1B transfer vs sponsorship-only rule>",
+                "\u9762\u8bd5\u5f55\u97f3\u662f<yes/no for interview recording, transcription, AI notetaker, and AI analysis; exceptions>",
                 "\u4ee5\u4e0a\u786e\u8ba4",
             ],
         )
@@ -8273,9 +8273,12 @@ class JobApplyAgentTests(unittest.TestCase):
         )
         self.assertEqual(
             report["minimal_reply_prompt_lines"],
-            ["\u6211\u7684\u516c\u6c11\u8eab\u4efd\u662f<fill>", "\u4ee5\u4e0a\u786e\u8ba4"],
+            [
+                "\u6211\u7684\u516c\u6c11\u8eab\u4efd\u662f<citizenship; U.S. citizen/permanent resident/U.S. person status; restricted-country citizenship/permanent-residency status; H-1B/visa status; H-1B transfer vs sponsorship-only rule>",
+                "\u4ee5\u4e0a\u786e\u8ba4",
+            ],
         )
-        self.assertIn("\u6211\u7684\u516c\u6c11\u8eab\u4efd\u662f<fill>", report["minimal_reply_prompt"])
+        self.assertIn("restricted-country citizenship", report["minimal_reply_prompt"])
         self.assertEqual(report["action_pack"]["blocking_step"], "truthful_answer_learning")
         self.assertEqual(report["action_pack"]["manual_answer_count"], 1)
         self.assertEqual(report["action_pack"]["high_risk_confirmation_count"], 1)
@@ -8349,7 +8352,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("watch, apply, live-check, and rebuild packet", markdown)
         self.assertIn("watch, apply, live-check, rebuild, and open verified pages", markdown)
         self.assertIn("## Minimal Reply Prompt", markdown)
-        self.assertIn("\u6211\u7684\u516c\u6c11\u8eab\u4efd\u662f<fill>", markdown)
+        self.assertIn("H-1B transfer vs sponsorship-only rule", markdown)
         self.assertIn("## Reply Template", markdown)
         self.assertIn("citizenship_status\uff1a<fill>", markdown)
         self.assertIn("Final Answer Blockers", html)
@@ -8384,7 +8387,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("final_answer_user_input_needed.xlsx", alert)
         self.assertIn("Validate filled Excel:", alert)
         self.assertIn("User input file:", alert)
-        self.assertIn("\u6211\u7684\u516c\u6c11\u8eab\u4efd\u662f<fill>", alert)
+        self.assertIn("H-1B transfer vs sponsorship-only rule", alert)
         self.assertIn("Reply format:", alert)
         self.assertIn("citizenship_status\uff1a<fill>", alert)
         self.assertIn("citizenship_status_confirmed\uff1a\u786e\u8ba4", alert)
@@ -8552,7 +8555,7 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertIn("Wrote final answer blockers XLSX", cli_result.stdout)
             self.assertIn("Wrote final answer user input Excel", cli_result.stdout)
             self.assertIn("Minimal final-answer reply:", cli_result.stdout)
-            self.assertIn("\u6211\u7684\u516c\u6c11\u8eab\u4efd\u662f<fill>", cli_result.stdout)
+            self.assertIn("H-1B transfer vs sponsorship-only rule", cli_result.stdout)
             self.assertIn("\u4ee5\u4e0a\u786e\u8ba4", cli_result.stdout)
             self.assertNotIn("Sensitive citizenship answer phrase 12345", cli_result.stdout)
             self.assertTrue(cli_json_output.exists())
@@ -13005,13 +13008,13 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(
             report["minimal_final_answer_reply_lines"],
             [
-                "\u6211\u7684\u516c\u6c11\u8eab\u4efd\u662f<fill>",
-                "\u9762\u8bd5\u5f55\u97f3\u662f<fill>",
+                "\u6211\u7684\u516c\u6c11\u8eab\u4efd\u662f<citizenship; U.S. citizen/permanent resident/U.S. person status; restricted-country citizenship/permanent-residency status; H-1B/visa status; H-1B transfer vs sponsorship-only rule>",
+                "\u9762\u8bd5\u5f55\u97f3\u662f<yes/no for interview recording, transcription, AI notetaker, and AI analysis; exceptions>",
                 "\u4ee5\u4e0a\u786e\u8ba4",
             ],
         )
-        self.assertIn("\u6211\u7684\u516c\u6c11\u8eab\u4efd\u662f<fill>", report["minimal_final_answer_reply"])
-        self.assertIn("\u9762\u8bd5\u5f55\u97f3\u662f<fill>", report["minimal_final_answer_reply"])
+        self.assertIn("H-1B transfer vs sponsorship-only rule", report["minimal_final_answer_reply"])
+        self.assertIn("AI notetaker", report["minimal_final_answer_reply"])
         next_commands = "\n".join(report["next_commands"])
         self.assertIn("resume-after-answers", next_commands)
         self.assertIn("final-answer-blockers", next_commands)
@@ -13058,7 +13061,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Confirmed-Answer Runbook", markdown)
         self.assertIn("One-Command Resume", markdown)
         self.assertIn("Minimal Final-Answer Reply", markdown)
-        self.assertIn("\u6211\u7684\u516c\u6c11\u8eab\u4efd\u662f<fill>", markdown)
+        self.assertIn("H-1B transfer vs sponsorship-only rule", markdown)
         self.assertIn("resume-after-answers", markdown)
         self.assertIn("rehearse-after-answers", markdown)
         self.assertIn("final-answer-reply --reply-file", markdown)
@@ -13088,8 +13091,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Confirmed-Answer Runbook", html)
         self.assertIn("One-Command Resume", html)
         self.assertIn("Minimal Final-Answer Reply", html)
-        self.assertIn("\u6211\u7684\u516c\u6c11\u8eab\u4efd\u662f&lt;fill&gt;", html)
-        self.assertIn("\u9762\u8bd5\u5f55\u97f3\u662f&lt;fill&gt;", html)
+        self.assertIn("H-1B transfer vs sponsorship-only rule", html)
+        self.assertIn("AI notetaker", html)
         self.assertIn("Final-Answer Intake", html)
         self.assertIn("Answer Impact Queue", html)
         self.assertIn("100-Position Execution Audit", html)
