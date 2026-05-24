@@ -5388,6 +5388,8 @@ FINAL_ANSWER_REPLY_TEMPLATE_PATH = "job_apply_agent/outbox/final_answer_reply_te
 FINAL_ANSWER_USER_INPUT_PATH = "job_apply_agent/outbox/final_answer_user_input_needed.txt"
 FINAL_ANSWER_USER_INPUT_XLSX_PATH = "job_apply_agent/outbox/final_answer_user_input_needed.xlsx"
 FINAL_ANSWER_REVISION_MARKDOWN_PATH = "job_apply_agent/outbox/final_answer_revision_needed.md"
+FINAL_ANSWER_REVISION_USER_INPUT_PATH = "job_apply_agent/outbox/final_answer_revision_user_input_needed.txt"
+FINAL_ANSWER_REVISION_USER_INPUT_XLSX_PATH = "job_apply_agent/outbox/final_answer_revision_user_input_needed.xlsx"
 
 
 FINAL_ANSWER_INTAKE_PLACEHOLDER_ANSWERS = {
@@ -16468,6 +16470,12 @@ def build_goal_readiness_audit(
             "latest_final_answer_validation_revision_file": latest_final_answer_validation.get(
                 "revision_markdown_output", ""
             ),
+            "latest_final_answer_validation_reply_file": latest_final_answer_validation.get(
+                "reply_file", ""
+            ),
+            "latest_final_answer_validation_base_reply_file": latest_final_answer_validation.get(
+                "base_reply_file", ""
+            ),
             "latest_final_answer_validation_answer_text_stored": bool(
                 latest_final_answer_validation.get("answer_text_stored_in_receipt")
             ),
@@ -16948,6 +16956,11 @@ def _goal_final_answer_validation_summary(
         "source_status": str(final_answer_autopilot.get("status") or ""),
         "reply_source": str(final_answer_autopilot.get("reply_source") or ""),
         "reply_file": str(final_answer_autopilot.get("reply_file") or ""),
+        "base_reply_file": str(
+            final_answer_autopilot.get("base_reply_file")
+            or validation.get("base_reply_file")
+            or ""
+        ),
         "ready_for_finalize": bool(validation.get("ready_for_finalize")),
         "parser_has_errors": bool(validation.get("parser_has_errors")),
         "safe_to_resume_after_answers": bool(answer_receipt.get("safe_to_resume_after_answers")),
@@ -17214,19 +17227,36 @@ def _goal_next_actions(
             )
             if latest_attempted:
                 reply_file = latest.get("reply_file") or FINAL_ANSWER_USER_INPUT_XLSX_PATH
+                base_reply_file = str(latest.get("base_reply_file") or "").strip()
+                validate_parts = ["python3", "-m", "job_apply_agent", "final-answer-autopilot"]
+                run_parts = ["python3", "-m", "job_apply_agent", "final-answer-autopilot"]
+                if base_reply_file:
+                    validate_parts.extend(["--base-reply-file", base_reply_file])
+                    run_parts.extend(["--base-reply-file", base_reply_file])
+                validate_parts.extend(["--reply-file", str(reply_file), "--dry-run", "--fail-on-not-ready"])
+                run_parts.extend(
+                    [
+                        "--reply-file",
+                        str(reply_file),
+                        "--apply",
+                        "--live-check",
+                        "--include-values",
+                        "--fail-on-not-ready",
+                    ]
+                )
                 revision_file = latest.get("revision_markdown_output") or FINAL_ANSWER_REVISION_MARKDOWN_PATH
                 problem_aliases = _goal_latest_final_answer_problem_aliases(latest)
                 if bool(latest.get("safe_to_resume_after_answers")):
                     actions.append(
-                        f"Latest final-answer validation is ready; run `python3 -m job_apply_agent resume-after-answers --reply-file {reply_file}` to apply approved answers and rebuild the queue."
+                        f"Latest final-answer validation is ready; run `{shlex.join(run_parts)}` to apply approved answers and rebuild the queue."
                     )
                 elif problem_aliases:
                     actions.append(
-                        f"Revise the {len(problem_aliases)} latest final-answer aliases in {revision_file}: {', '.join(problem_aliases)}; then rerun `python3 -m job_apply_agent final-answer-autopilot --reply-file {reply_file} --dry-run --fail-on-not-ready`."
+                        f"Revise the {len(problem_aliases)} latest final-answer aliases in {revision_file}: {', '.join(problem_aliases)}; then rerun `{shlex.join(validate_parts)}`."
                     )
                 else:
                     actions.append(
-                        f"Revalidate the latest final-answer file with `python3 -m job_apply_agent final-answer-autopilot --reply-file {reply_file} --dry-run --fail-on-not-ready`; the previous validation did not reach resume-ready."
+                        f"Revalidate the latest final-answer file with `{shlex.join(validate_parts)}`; the previous validation did not reach resume-ready."
                     )
             else:
                 blank_count = final_answer_waiting_count or critical_waiting_count
@@ -17479,6 +17509,12 @@ def build_automation_handoff_report(
         ),
         "latest_final_answer_validation_revision_file": blocker_summary.get(
             "latest_final_answer_validation_revision_file", ""
+        ),
+        "latest_final_answer_validation_reply_file": blocker_summary.get(
+            "latest_final_answer_validation_reply_file", ""
+        ),
+        "latest_final_answer_validation_base_reply_file": blocker_summary.get(
+            "latest_final_answer_validation_base_reply_file", ""
         ),
         "latest_final_answer_validation_answer_text_stored": bool(
             blocker_summary.get("latest_final_answer_validation_answer_text_stored")
@@ -18775,8 +18811,44 @@ def _automation_handoff_confirmed_answer_runbook(summary: dict[str, Any]) -> lis
 
 
 def _automation_handoff_next_commands(summary: dict[str, Any]) -> list[str]:
+    revision_base_reply_file = (
+        summary.get("latest_final_answer_validation_base_reply_file")
+        or summary.get("latest_final_answer_validation_reply_file")
+        or "<base_reply_file>"
+    )
     commands = [
         _automation_handoff_one_command_resume(summary),
+        "python3 -m job_apply_agent final-answer-revision-user-input",
+        shlex.join(
+            [
+                "python3",
+                "-m",
+                "job_apply_agent",
+                "final-answer-autopilot",
+                "--base-reply-file",
+                str(revision_base_reply_file),
+                "--reply-file",
+                FINAL_ANSWER_REVISION_USER_INPUT_XLSX_PATH,
+                "--dry-run",
+                "--fail-on-not-ready",
+            ]
+        ),
+        shlex.join(
+            [
+                "python3",
+                "-m",
+                "job_apply_agent",
+                "final-answer-autopilot",
+                "--base-reply-file",
+                str(revision_base_reply_file),
+                "--reply-file",
+                FINAL_ANSWER_REVISION_USER_INPUT_XLSX_PATH,
+                "--apply",
+                "--live-check",
+                "--include-values",
+                "--fail-on-not-ready",
+            ]
+        ),
         "python3 -m job_apply_agent final-answer-blockers --print-minimal-reply",
         "python3 -m job_apply_agent final-answer-user-input",
         "python3 -m job_apply_agent rehearse-after-answers",
@@ -18804,7 +18876,7 @@ def _automation_handoff_next_commands(summary: dict[str, Any]) -> list[str]:
         "python3 -m job_apply_agent export-questions",
     ]
     if summary.get("updates_ready_for_apply"):
-        return commands[5:]
+        return commands[8:]
     return commands
 
 
@@ -24257,19 +24329,25 @@ def render_final_answer_user_input_text(
     report: dict[str, Any],
     *,
     reply_file_path: str | Path = FINAL_ANSWER_USER_INPUT_PATH,
+    base_reply_file_path: str | Path | None = None,
 ) -> str:
-    validate_command = shlex.join(
+    validate_command_parts = [
+        "python3",
+        "-m",
+        "job_apply_agent",
+        "final-answer-autopilot",
+    ]
+    if base_reply_file_path:
+        validate_command_parts.extend(["--base-reply-file", str(base_reply_file_path)])
+    validate_command_parts.extend(
         [
-            "python3",
-            "-m",
-            "job_apply_agent",
-            "final-answer-autopilot",
             "--reply-file",
             str(reply_file_path),
             "--dry-run",
             "--fail-on-not-ready",
         ]
     )
+    validate_command = shlex.join(validate_command_parts)
     lines = [
         "# Final answers needed",
         "# Replace every <fill> with your truthful reusable answer.",
@@ -24619,6 +24697,183 @@ def write_final_answer_user_input_file(
             "high_risk_requires_user_confirmation": True,
         },
     }
+
+
+def build_final_answer_revision_user_input_report(
+    final_answer_autopilot: dict[str, Any],
+    template: dict[str, Any] | None = None,
+    *,
+    base_reply_file: str | Path | None = None,
+) -> dict[str, Any]:
+    if not isinstance(final_answer_autopilot, dict):
+        raise ValueError("final answer autopilot report must be a JSON object")
+    validation = (
+        final_answer_autopilot.get("validation_receipt")
+        if isinstance(final_answer_autopilot.get("validation_receipt"), dict)
+        else {}
+    )
+    problem_fields = (
+        validation.get("problem_fields")
+        if isinstance(validation.get("problem_fields"), list)
+        else []
+    )
+    answer_receipt = (
+        validation.get("answer_receipt")
+        if isinstance(validation.get("answer_receipt"), dict)
+        else {}
+    )
+    problem_aliases: list[str] = []
+    for field in problem_fields:
+        if not isinstance(field, dict):
+            continue
+        alias = str(field.get("alias") or "").strip()
+        if alias and alias not in problem_aliases:
+            problem_aliases.append(alias)
+    if not problem_aliases:
+        for key in [
+            "missing_aliases",
+            "unconfirmed_high_risk_aliases",
+            "needs_more_specific_aliases",
+            "unknown_answer_keys",
+        ]:
+            for alias in _string_list(answer_receipt.get(key)):
+                alias = alias.strip()
+                if alias and alias not in problem_aliases:
+                    problem_aliases.append(alias)
+
+    template_fields = {
+        str(field.get("alias") or "").strip(): field
+        for field in (template or {}).get("fields") or []
+        if isinstance(field, dict) and str(field.get("alias") or "").strip()
+    }
+    problem_by_alias = {
+        str(field.get("alias") or "").strip(): field
+        for field in problem_fields
+        if isinstance(field, dict) and str(field.get("alias") or "").strip()
+    }
+    blockers: list[dict[str, Any]] = []
+    for alias in problem_aliases:
+        template_field = template_fields.get(alias, {})
+        problem_field = problem_by_alias.get(alias, {})
+        input_id = str(template_field.get("input_id") or problem_field.get("input_id") or alias)
+        observed_prompt = str(problem_field.get("observed_prompt") or "").strip()
+        blockers.append(
+            {
+                "alias": alias,
+                "input_id": input_id,
+                "status": str(problem_field.get("status") or "needs_revision"),
+                "high_risk": bool(problem_field.get("high_risk") or template_field.get("high_risk")),
+                "required_count": int(template_field.get("required_count") or 0),
+                "platforms": template_field.get("platforms") or [],
+                "question": str(problem_field.get("question") or template_field.get("question") or ""),
+                "answer_format_hint": template_field.get("answer_format_hint") or "",
+                "answer_specificity_hint": str(
+                    problem_field.get("hint")
+                    or template_field.get("answer_specificity_hint")
+                    or template_field.get("answer_format_hint")
+                    or ""
+                ),
+                "answer_example_shape": str(
+                    problem_field.get("expected_shape")
+                    or template_field.get("answer_example_shape")
+                    or _final_answer_intake_example_shape(alias)
+                ),
+                "required_user_response": template_field.get("required_user_response") or "",
+                "why_not_inferred": template_field.get("why_not_inferred") or "",
+                "observed_prompt_count": 1 if observed_prompt else 0,
+                "observed_prompt_examples": [observed_prompt] if observed_prompt else [],
+            }
+        )
+
+    resolved_base = str(base_reply_file or final_answer_autopilot.get("reply_file") or "").strip()
+    generated_at = datetime.now(timezone.utc).isoformat()
+    report = {
+        "generated_at": generated_at,
+        "source": "final_answer_revision_user_input",
+        "status": "needs_revision" if blockers else "no_revision_needed",
+        "base_reply_file": resolved_base,
+        "blocker_count": len(blockers),
+        "placeholder_count": len(blockers),
+        "placeholder_aliases": [row["alias"] for row in blockers],
+        "high_risk_aliases": [row["alias"] for row in blockers if row.get("high_risk")],
+        "blockers": blockers,
+        "summary": {
+            "revision_alias_count": len(blockers),
+            "high_risk_revision_alias_count": sum(1 for row in blockers if row.get("high_risk")),
+            "source_status": final_answer_autopilot.get("status", ""),
+            "source_reply_file": final_answer_autopilot.get("reply_file", ""),
+            "base_reply_file": resolved_base,
+            "answer_text_stored_in_report": False,
+        },
+        "policy": {
+            "stores_existing_answer_text": False,
+            "writes_profile_or_memory": False,
+            "submits_real_applications": False,
+            "high_risk_requires_user_confirmation": True,
+            "revision_overrides_base_reply_aliases": True,
+        },
+    }
+    return report
+
+
+def write_final_answer_revision_user_input_file(
+    final_answer_autopilot: dict[str, Any],
+    template: dict[str, Any] | None,
+    output: str | Path,
+    xlsx_output: str | Path | None = None,
+    *,
+    base_reply_file: str | Path | None = None,
+) -> dict[str, Any]:
+    report = build_final_answer_revision_user_input_report(
+        final_answer_autopilot,
+        template,
+        base_reply_file=base_reply_file,
+    )
+    output_path = Path(output)
+    xlsx_path = Path(xlsx_output) if xlsx_output else None
+    base_reply = str(report.get("base_reply_file") or "")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        render_final_answer_user_input_text(
+            report,
+            reply_file_path=output_path,
+            base_reply_file_path=base_reply or None,
+        ),
+        encoding="utf-8",
+    )
+    if xlsx_path:
+        xlsx_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_final_answer_user_input_xlsx(
+            report,
+            xlsx_path,
+            base_reply_file_path=base_reply or None,
+        )
+    validate_parts = ["python3", "-m", "job_apply_agent", "final-answer-autopilot"]
+    if base_reply:
+        validate_parts.extend(["--base-reply-file", base_reply])
+    validate_parts.extend(["--reply-file", str(xlsx_path or output_path), "--dry-run", "--fail-on-not-ready"])
+    run_parts = ["python3", "-m", "job_apply_agent", "final-answer-autopilot"]
+    if base_reply:
+        run_parts.extend(["--base-reply-file", base_reply])
+    run_parts.extend(
+        [
+            "--reply-file",
+            str(xlsx_path or output_path),
+            "--apply",
+            "--live-check",
+            "--include-values",
+            "--fail-on-not-ready",
+        ]
+    )
+    report.update(
+        {
+            "output": str(output_path),
+            "xlsx_output": str(xlsx_path) if xlsx_path else "",
+            "validate_command": shlex.join(validate_parts),
+            "run_command_after_filling": shlex.join(run_parts),
+        }
+    )
+    return report
 
 
 def _final_answer_blocker_action_pack(
@@ -32433,7 +32688,12 @@ def _write_final_answer_blocker_xlsx(report: dict[str, Any], path: Path) -> None
             )
 
 
-def _write_final_answer_user_input_xlsx(report: dict[str, Any], path: Path) -> None:
+def _write_final_answer_user_input_xlsx(
+    report: dict[str, Any],
+    path: Path,
+    *,
+    base_reply_file_path: str | Path | None = None,
+) -> None:
     blockers = [row for row in report.get("blockers") or [] if isinstance(row, dict)]
     answer_rows: list[list[Any]] = [
         [
@@ -32468,12 +32728,29 @@ def _write_final_answer_user_input_xlsx(report: dict[str, Any], path: Path) -> N
                 observed_examples[0] if observed_examples else "",
             ]
         )
+    validate_parts = ["python3", "-m", "job_apply_agent", "final-answer-autopilot"]
+    run_parts = ["python3", "-m", "job_apply_agent", "final-answer-autopilot"]
+    if base_reply_file_path:
+        validate_parts.extend(["--base-reply-file", str(base_reply_file_path)])
+        run_parts.extend(["--base-reply-file", str(base_reply_file_path)])
+    validate_parts.extend(["--reply-file", str(path), "--dry-run", "--fail-on-not-ready"])
+    run_parts.extend(
+        [
+            "--reply-file",
+            str(path),
+            "--apply",
+            "--live-check",
+            "--include-values",
+            "--fail-on-not-ready",
+        ]
+    )
     instruction_rows = [
         ["Field", "Value"],
         ["Purpose", "Fill the answer column with truthful reusable answers."],
         ["How to confirm", "Keep confirmed as \u786e\u8ba4 only when the high-risk answer is exact and truthful."],
-        ["Validate", f"python3 -m job_apply_agent final-answer-autopilot --reply-file {path} --dry-run --fail-on-not-ready"],
-        ["Run after filling", f"python3 -m job_apply_agent final-answer-autopilot --reply-file {path} --apply --live-check --include-values --fail-on-not-ready"],
+        ["Base reply file", str(base_reply_file_path or "")],
+        ["Validate", shlex.join(validate_parts)],
+        ["Run after filling", shlex.join(run_parts)],
         ["Safety", "This file does not submit real applications; final submit remains supervised."],
     ]
     sheets = [

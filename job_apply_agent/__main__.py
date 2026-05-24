@@ -80,6 +80,7 @@ from .core import (
     write_final_answer_intake_template,
     write_final_answer_intake_update,
     write_final_answer_blocker_report,
+    write_final_answer_revision_user_input_file,
     write_final_answer_user_input_file,
     write_final_answer_reply_intake,
     build_synthetic_final_answer_reply_text,
@@ -254,6 +255,12 @@ DEFAULT_FINAL_ANSWER_AUTOPILOT_MARKDOWN = (
 )
 DEFAULT_FINAL_ANSWER_REVISION_MARKDOWN = (
     Path(__file__).with_name("outbox") / "final_answer_revision_needed.md"
+)
+DEFAULT_FINAL_ANSWER_REVISION_USER_INPUT_TEXT = (
+    Path(__file__).with_name("outbox") / "final_answer_revision_user_input_needed.txt"
+)
+DEFAULT_FINAL_ANSWER_REVISION_USER_INPUT_XLSX = (
+    Path(__file__).with_name("outbox") / "final_answer_revision_user_input_needed.xlsx"
 )
 DEFAULT_FINAL_ANSWER_REPLY_JSON = (
     Path(__file__).with_name("outbox") / "final_answer_reply_intake_latest.json"
@@ -1242,6 +1249,32 @@ def main() -> int:
         default=str(DEFAULT_FINAL_ANSWER_USER_INPUT_XLSX),
     )
 
+    final_answer_revision_user_input_parser = subparsers.add_parser(
+        "final-answer-revision-user-input",
+        help="write a compact fill-in file for only the final-answer aliases that failed latest validation",
+    )
+    final_answer_revision_user_input_parser.add_argument(
+        "--autopilot-json",
+        default=str(DEFAULT_FINAL_ANSWER_AUTOPILOT_JSON),
+    )
+    final_answer_revision_user_input_parser.add_argument(
+        "--template",
+        default=str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON),
+    )
+    final_answer_revision_user_input_parser.add_argument(
+        "--base-reply-file",
+        default=None,
+        help="existing filled reply file to merge before applying these revisions; defaults to the latest autopilot reply file",
+    )
+    final_answer_revision_user_input_parser.add_argument(
+        "--output",
+        default=str(DEFAULT_FINAL_ANSWER_REVISION_USER_INPUT_TEXT),
+    )
+    final_answer_revision_user_input_parser.add_argument(
+        "--xlsx-output",
+        default=str(DEFAULT_FINAL_ANSWER_REVISION_USER_INPUT_XLSX),
+    )
+
     final_answer_reply_parser = subparsers.add_parser(
         "final-answer-reply",
         help="parse a plain-text final-answer reply into the local final-answer intake JSON and validation report",
@@ -1328,6 +1361,11 @@ def main() -> int:
     final_answer_autopilot_parser.add_argument(
         "--reply-file",
         default=str(DEFAULT_FINAL_ANSWER_USER_INPUT_XLSX),
+    )
+    final_answer_autopilot_parser.add_argument(
+        "--base-reply-file",
+        default=None,
+        help="merge this existing filled reply before --reply-file; aliases in --reply-file override the base",
     )
     final_answer_autopilot_parser.add_argument(
         "--reply-text",
@@ -3495,6 +3533,34 @@ def main() -> int:
         print(report.get("xlsx_validate_command") or report.get("validate_command", ""))
         return 0
 
+    if args.command == "final-answer-revision-user-input":
+        autopilot_path = Path(args.autopilot_json)
+        if not autopilot_path.exists():
+            raise FileNotFoundError(f"final answer autopilot report not found: {args.autopilot_json}")
+        template_path = Path(args.template)
+        template = {}
+        if template_path.exists():
+            template = json.loads(template_path.read_text(encoding="utf-8"))
+        report = write_final_answer_revision_user_input_file(
+            json.loads(autopilot_path.read_text(encoding="utf-8")),
+            template,
+            args.output,
+            args.xlsx_output,
+            base_reply_file=args.base_reply_file,
+        )
+        print(f"Wrote final answer revision input file to {report['output']}")
+        if report.get("xlsx_output"):
+            print(f"Wrote final answer revision input Excel to {report['xlsx_output']}")
+        print(f"Revision placeholders: {report.get('placeholder_count', 0)}")
+        aliases = report.get("placeholder_aliases") if isinstance(report.get("placeholder_aliases"), list) else []
+        if aliases:
+            print("Revision aliases: " + ", ".join(str(alias) for alias in aliases))
+        if report.get("base_reply_file"):
+            print(f"Base reply file: {report.get('base_reply_file')}")
+        print("Validate after filling:")
+        print(report.get("validate_command", ""))
+        return 0
+
     if args.command == "resume-after-answers":
         if bool(getattr(args, "reply_stdin", False)) and args.reply_text is not None:
             raise ValueError("--reply-stdin cannot be combined with --reply-text")
@@ -4791,9 +4857,121 @@ def _final_answer_markdown_cell(value: object) -> str:
     return text
 
 
+def _final_answer_reply_parser_error_count(report: dict[str, object]) -> int:
+    return (
+        int(report.get("unknown_key_count") or 0)
+        + int(report.get("duplicate_key_count") or 0)
+        + int(report.get("fake_marker_count") or 0)
+    )
+
+
+def _final_answer_reply_text_from_answer_payload(
+    template_payload: dict[str, object],
+    answers: dict[str, object],
+) -> str:
+    lines: list[str] = []
+    for field in template_payload.get("fields") or []:
+        if not isinstance(field, dict):
+            continue
+        alias = str(field.get("alias") or "").strip()
+        input_id = str(field.get("input_id") or "").strip()
+        if not alias:
+            continue
+        value = answers.get(alias)
+        if value is None and input_id:
+            value = answers.get(input_id)
+        if isinstance(value, dict):
+            answer_text = str(value.get("answer") or value.get("user_answer") or "").strip()
+            confirmed = bool(value.get("high_risk_user_confirmed"))
+        else:
+            answer_text = str(value or "").strip()
+            confirmed = False
+        if not answer_text:
+            continue
+        lines.append(f"{alias}\uff1a{answer_text}")
+        if bool(field.get("high_risk")) and confirmed:
+            lines.append(f"{alias}_confirmed\uff1a\u786e\u8ba4")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _final_answer_autopilot_reply_context(
+    args: argparse.Namespace,
+    reply_path: Path,
+    template_payload: dict[str, object],
+) -> dict[str, object]:
+    revision_text = final_answer_reply_text_from_file(reply_path)
+    base_reply_file = str(getattr(args, "base_reply_file", "") or "").strip()
+    if not base_reply_file:
+        return {
+            "reply_text": revision_text,
+            "base_reply_file": "",
+            "revision_reply_file": str(reply_path),
+            "merged_with_base": False,
+            "parser_error_count": 0,
+        }
+
+    base_path = Path(base_reply_file)
+    if not base_path.exists():
+        raise FileNotFoundError(f"base reply file does not exist: {base_reply_file}")
+    base_text = final_answer_reply_text_from_file(base_path)
+    base_report = build_final_answer_reply_intake(
+        template_payload,
+        base_text,
+        confirm_high_risk=False,
+        allow_synthetic_values=False,
+    )
+    revision_report = build_final_answer_reply_intake(
+        template_payload,
+        revision_text,
+        confirm_high_risk=False,
+        allow_synthetic_values=False,
+    )
+    base_payload = (
+        base_report.get("intake_payload")
+        if isinstance(base_report.get("intake_payload"), dict)
+        else {}
+    )
+    revision_payload = (
+        revision_report.get("intake_payload")
+        if isinstance(revision_report.get("intake_payload"), dict)
+        else {}
+    )
+    merged_answers = json.loads(
+        json.dumps(base_payload.get("answers") or {}, ensure_ascii=True)
+    )
+    revision_answers = revision_payload.get("answers") if isinstance(revision_payload.get("answers"), dict) else {}
+    for alias in revision_report.get("parsed_aliases") or []:
+        if alias in revision_answers:
+            merged_answers[str(alias)] = revision_answers[alias]
+    merged_text = _final_answer_reply_text_from_answer_payload(template_payload, merged_answers)
+    return {
+        "reply_text": merged_text,
+        "base_reply_file": str(base_path),
+        "revision_reply_file": str(reply_path),
+        "merged_with_base": True,
+        "base_reply_summary": {
+            "answer_count": int(base_report.get("answer_count") or 0),
+            "unknown_key_count": int(base_report.get("unknown_key_count") or 0),
+            "duplicate_key_count": int(base_report.get("duplicate_key_count") or 0),
+            "fake_marker_count": int(base_report.get("fake_marker_count") or 0),
+            "parsed_aliases": base_report.get("parsed_aliases") or [],
+        },
+        "revision_reply_summary": {
+            "answer_count": int(revision_report.get("answer_count") or 0),
+            "unknown_key_count": int(revision_report.get("unknown_key_count") or 0),
+            "duplicate_key_count": int(revision_report.get("duplicate_key_count") or 0),
+            "fake_marker_count": int(revision_report.get("fake_marker_count") or 0),
+            "parsed_aliases": revision_report.get("parsed_aliases") or [],
+        },
+        "parser_error_count": _final_answer_reply_parser_error_count(base_report)
+        + _final_answer_reply_parser_error_count(revision_report),
+    }
+
+
 def _final_answer_autopilot_validation_receipt(
     args: argparse.Namespace,
     reply_path: Path,
+    reply_text: str | None = None,
 ) -> dict[str, object]:
     try:
         if not reply_path.exists():
@@ -4821,7 +4999,9 @@ def _final_answer_autopilot_validation_receipt(
             }
         template_payload = json.loads(template_path.read_text(encoding="utf-8"))
         unblockers_payload = json.loads(unblockers_path.read_text(encoding="utf-8"))
-        reply_text = final_answer_reply_text_from_file(reply_path)
+        reply_context = _final_answer_autopilot_reply_context(args, reply_path, template_payload)
+        if reply_text is None:
+            reply_text = str(reply_context.get("reply_text") or "")
         reply_report = build_final_answer_reply_intake(
             template_payload,
             reply_text,
@@ -4873,12 +5053,16 @@ def _final_answer_autopilot_validation_receipt(
             int(reply_report.get("unknown_key_count") or 0)
             or int(reply_report.get("duplicate_key_count") or 0)
             or int(reply_report.get("fake_marker_count") or 0)
+            or int(reply_context.get("parser_error_count") or 0)
         )
         return {
             "available": True,
             "ready_for_finalize": bool(intake_report.get("ready_for_finalize"))
             and not parser_has_errors,
             "parser_has_errors": parser_has_errors,
+            "merged_with_base_reply": bool(reply_context.get("merged_with_base")),
+            "base_reply_file": str(reply_context.get("base_reply_file") or ""),
+            "revision_reply_file": str(reply_context.get("revision_reply_file") or ""),
             "answer_receipt": intake_report.get("answer_receipt") or {},
             "reply_summary": {
                 "parsed_line_count": int(reply_report.get("parsed_line_count") or 0),
@@ -4889,6 +5073,16 @@ def _final_answer_autopilot_validation_receipt(
                 "parsed_aliases": reply_report.get("parsed_aliases") or [],
                 "confirmed_high_risk_aliases": reply_report.get("confirmed_high_risk_aliases") or [],
                 "fake_marker_aliases": reply_report.get("fake_marker_aliases") or [],
+                "base_answer_count": int(
+                    (reply_context.get("base_reply_summary") or {}).get("answer_count")
+                    if isinstance(reply_context.get("base_reply_summary"), dict)
+                    else 0
+                ),
+                "revision_answer_count": int(
+                    (reply_context.get("revision_reply_summary") or {}).get("answer_count")
+                    if isinstance(reply_context.get("revision_reply_summary"), dict)
+                    else 0
+                ),
             },
             "intake_summary": intake_report.get("summary") or {},
             "problem_fields": problem_fields,
@@ -4932,6 +5126,7 @@ def _render_final_answer_autopilot_markdown(report: dict[str, object]) -> str:
         f"Status: {report.get('status')}",
         f"Reply source: {report.get('reply_source', 'reply_file')}",
         f"Reply file: `{report.get('reply_file')}`",
+        f"Base reply file: `{report.get('base_reply_file', '')}`",
         f"Attempts: {report.get('attempt_count', 0)}",
         f"Placeholder lines remaining: {report.get('placeholder_line_count', 0)}",
         f"Placeholder aliases remaining: {report.get('placeholder_alias_count', 0)}",
@@ -5078,6 +5273,7 @@ def _final_answer_autopilot_base_report(
         "reason": reason,
         "reply_source": reply_source,
         "reply_file": str(reply_file_for_report or args.reply_file),
+        "base_reply_file": str(getattr(args, "base_reply_file", "") or ""),
         "watch": bool(args.watch),
         "dry_run": bool(args.dry_run),
         "run_post_answer_pipeline": not bool(args.no_run_post_answer_pipeline),
@@ -5165,6 +5361,25 @@ def _run_final_answer_autopilot(args: argparse.Namespace) -> int:
     )
 
 
+def _final_answer_autopilot_effective_reply_path(
+    args: argparse.Namespace,
+    reply_path: Path,
+    temp_dir: Path,
+) -> tuple[Path, str]:
+    base_reply_file = str(getattr(args, "base_reply_file", "") or "").strip()
+    if not base_reply_file:
+        return reply_path, final_answer_reply_text_from_file(reply_path)
+    try:
+        template_payload = json.loads(Path(args.template).read_text(encoding="utf-8"))
+        reply_context = _final_answer_autopilot_reply_context(args, reply_path, template_payload)
+        reply_text = str(reply_context.get("reply_text") or "")
+    except Exception:
+        return reply_path, final_answer_reply_text_from_file(reply_path)
+    effective_path = temp_dir / "merged_final_answer_reply.txt"
+    effective_path.write_text(reply_text, encoding="utf-8")
+    return effective_path, reply_text
+
+
 def _run_final_answer_autopilot_for_reply_path(
     args: argparse.Namespace,
     reply_path: Path,
@@ -5172,47 +5387,26 @@ def _run_final_answer_autopilot_for_reply_path(
     reply_source: str,
     reply_file_for_report: str | Path,
 ) -> int:
-    validate_command = _final_answer_autopilot_validate_command(args, reply_path)
-    pipeline_command = _final_answer_autopilot_pipeline_command(args, reply_path)
     start = time.monotonic()
     attempt_count = 0
     interval = max(float(args.interval or 0), 0.25)
     timeout = max(float(args.timeout or 0), 0.0)
-    while True:
-        attempt_count += 1
-        if not reply_path.exists():
-            validation_receipt = _final_answer_autopilot_validation_receipt(args, reply_path)
-            report = _final_answer_autopilot_base_report(
-                args,
-                status="waiting_for_reply_file",
-                attempt_count=attempt_count,
-                placeholder_line_count=0,
-                validate_command=validate_command,
-                pipeline_command=pipeline_command,
-                reason="reply file does not exist",
-                reply_source=reply_source,
-                reply_file_for_report=reply_file_for_report,
-                validation_receipt=validation_receipt,
-            )
-            _write_final_answer_autopilot_report(report, args.json_output, args.markdown_output)
-            if not args.watch:
-                print(f"Final answer autopilot: {report['status']}")
-                return 2 if args.fail_on_not_ready else 0
-        else:
-            reply_text = final_answer_reply_text_from_file(reply_path)
-            placeholder_count = _final_answer_reply_placeholder_count(reply_text)
-            placeholder_aliases = _final_answer_reply_placeholder_aliases(reply_text)
-            if placeholder_count:
+    with tempfile.TemporaryDirectory(prefix="job_apply_final_answers_merge_") as merge_temp_dir:
+        merge_temp_path = Path(merge_temp_dir)
+        while True:
+            attempt_count += 1
+            validate_command = _final_answer_autopilot_validate_command(args, reply_path)
+            pipeline_command = _final_answer_autopilot_pipeline_command(args, reply_path)
+            if not reply_path.exists():
                 validation_receipt = _final_answer_autopilot_validation_receipt(args, reply_path)
                 report = _final_answer_autopilot_base_report(
                     args,
-                    status="waiting_for_filled_reply",
+                    status="waiting_for_reply_file",
                     attempt_count=attempt_count,
-                    placeholder_line_count=placeholder_count,
-                    placeholder_aliases=placeholder_aliases,
+                    placeholder_line_count=0,
                     validate_command=validate_command,
                     pipeline_command=pipeline_command,
-                    reason="reply file still contains <fill> placeholders",
+                    reason="reply file does not exist",
                     reply_source=reply_source,
                     reply_file_for_report=reply_file_for_report,
                     validation_receipt=validation_receipt,
@@ -5220,12 +5414,48 @@ def _run_final_answer_autopilot_for_reply_path(
                 _write_final_answer_autopilot_report(report, args.json_output, args.markdown_output)
                 if not args.watch:
                     print(f"Final answer autopilot: {report['status']}")
-                    print(f"Placeholder lines remaining: {placeholder_count}")
-                    if placeholder_aliases:
-                        print("Placeholder aliases: " + ", ".join(placeholder_aliases))
                     return 2 if args.fail_on_not_ready else 0
             else:
-                validation_receipt = _final_answer_autopilot_validation_receipt(args, reply_path)
+                effective_reply_path, reply_text = _final_answer_autopilot_effective_reply_path(
+                    args,
+                    reply_path,
+                    merge_temp_path,
+                )
+                validate_command = _final_answer_autopilot_validate_command(args, effective_reply_path)
+                pipeline_command = _final_answer_autopilot_pipeline_command(args, effective_reply_path)
+                placeholder_count = _final_answer_reply_placeholder_count(reply_text)
+                placeholder_aliases = _final_answer_reply_placeholder_aliases(reply_text)
+                if placeholder_count:
+                    validation_receipt = _final_answer_autopilot_validation_receipt(
+                        args,
+                        reply_path,
+                        reply_text=reply_text,
+                    )
+                    report = _final_answer_autopilot_base_report(
+                        args,
+                        status="waiting_for_filled_reply",
+                        attempt_count=attempt_count,
+                        placeholder_line_count=placeholder_count,
+                        placeholder_aliases=placeholder_aliases,
+                        validate_command=validate_command,
+                        pipeline_command=pipeline_command,
+                        reason="reply file still contains <fill> placeholders",
+                        reply_source=reply_source,
+                        reply_file_for_report=reply_file_for_report,
+                        validation_receipt=validation_receipt,
+                    )
+                    _write_final_answer_autopilot_report(report, args.json_output, args.markdown_output)
+                    if not args.watch:
+                        print(f"Final answer autopilot: {report['status']}")
+                        print(f"Placeholder lines remaining: {placeholder_count}")
+                        if placeholder_aliases:
+                            print("Placeholder aliases: " + ", ".join(placeholder_aliases))
+                        return 2 if args.fail_on_not_ready else 0
+                validation_receipt = _final_answer_autopilot_validation_receipt(
+                    args,
+                    reply_path,
+                    reply_text=reply_text,
+                )
                 validate_result = subprocess.run(
                     validate_command,
                     cwd=Path.cwd(),
@@ -5237,7 +5467,9 @@ def _run_final_answer_autopilot_for_reply_path(
                     print(validate_result.stdout, end="")
                 if validate_result.stderr:
                     print(validate_result.stderr, end="", file=sys.stderr)
-                if validate_result.returncode != 0:
+                validation_ready = bool(validation_receipt.get("ready_for_finalize"))
+                if validate_result.returncode != 0 or not validation_ready:
+                    validate_exit_code = validate_result.returncode or 2
                     report = _final_answer_autopilot_base_report(
                         args,
                         status="validation_failed",
@@ -5245,7 +5477,7 @@ def _run_final_answer_autopilot_for_reply_path(
                         placeholder_line_count=0,
                         validate_command=validate_command,
                         pipeline_command=pipeline_command,
-                        validate_exit_code=validate_result.returncode,
+                        validate_exit_code=validate_exit_code,
                         reason="filled reply did not pass final-answer validation",
                         reply_source=reply_source,
                         reply_file_for_report=reply_file_for_report,
@@ -5258,7 +5490,7 @@ def _run_final_answer_autopilot_for_reply_path(
                     ):
                         print(f"Wrote final answer revision prompt to {args.revision_markdown_output}")
                     print(f"Final answer autopilot: {report['status']}")
-                    return validate_result.returncode if args.fail_on_not_ready else 0
+                    return validate_exit_code if args.fail_on_not_ready else 0
                 if args.dry_run or args.no_run_post_answer_pipeline:
                     report = _final_answer_autopilot_base_report(
                         args,
@@ -5317,12 +5549,12 @@ def _run_final_answer_autopilot_for_reply_path(
                 if args.fail_on_not_ready and final_audit_failed:
                     return 2
                 return pipeline_result.returncode if args.fail_on_not_ready else 0
-        if not args.watch:
-            return 2 if args.fail_on_not_ready else 0
-        if timeout and time.monotonic() - start >= timeout:
-            print("Final answer autopilot: timed out waiting for filled reply")
-            return 2 if args.fail_on_not_ready else 0
-        time.sleep(interval)
+            if not args.watch:
+                return 2 if args.fail_on_not_ready else 0
+            if timeout and time.monotonic() - start >= timeout:
+                print("Final answer autopilot: timed out waiting for filled reply")
+                return 2 if args.fail_on_not_ready else 0
+            time.sleep(interval)
 
 
 def _run_post_answer_pipeline(args: argparse.Namespace) -> int:

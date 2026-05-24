@@ -214,6 +214,7 @@ from job_apply_agent.core import (
     write_final_answer_intake_template,
     write_final_answer_intake_update,
     write_final_answer_blocker_report,
+    write_final_answer_revision_user_input_file,
     write_final_answer_user_input_file,
     write_final_answer_reply_intake,
     write_goal_readiness_audit,
@@ -8793,6 +8794,147 @@ class JobApplyAgentTests(unittest.TestCase):
                     final_answer_reply_text_from_file(numbers_path),
                 )
                 exporter.assert_called_once()
+
+    def test_final_answer_revision_input_merges_with_base_reply_file(self) -> None:
+        unblockers = {
+            "unblockers": [
+                {
+                    "input_id": "profile_zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "high_risk": False,
+                    "required_count": 1,
+                },
+                {
+                    "input_id": "answer_memory_health_requirement_default_policy",
+                    "question": "What health requirement answer should automation use?",
+                    "high_risk": True,
+                    "required_count": 2,
+                },
+            ]
+        }
+        template = build_final_answer_intake_template(unblockers)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            template_path = root / "template.json"
+            unblockers_path = root / "unblockers.json"
+            base_reply_path = root / "base_reply.txt"
+            autopilot_path = root / "autopilot.json"
+            autopilot_markdown_path = root / "autopilot.md"
+            revision_path = root / "revision.txt"
+            revision_xlsx_path = root / "revision.xlsx"
+            revision_filled_xlsx_path = root / "revision_filled.xlsx"
+            merged_report_path = root / "merged_autopilot.json"
+            merged_markdown_path = root / "merged_autopilot.md"
+            template_path.write_text(json.dumps(template, ensure_ascii=True, indent=2), encoding="utf-8")
+            unblockers_path.write_text(json.dumps(unblockers, ensure_ascii=True, indent=2), encoding="utf-8")
+            base_reply_path.write_text(
+                "zip_or_postal_code\uff1a98004\n"
+                "health_requirement\uff1ayes\n"
+                "health_requirement_confirmed\uff1a\u786e\u8ba4\n",
+                encoding="utf-8",
+            )
+
+            vague_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "job_apply_agent",
+                    "final-answer-autopilot",
+                    "--template",
+                    str(template_path),
+                    "--unblockers",
+                    str(unblockers_path),
+                    "--reply-file",
+                    str(base_reply_path),
+                    "--json-output",
+                    str(autopilot_path),
+                    "--markdown-output",
+                    str(autopilot_markdown_path),
+                    "--dry-run",
+                    "--fail-on-not-ready",
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(vague_result.returncode, 2)
+            autopilot_report = json.loads(autopilot_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                autopilot_report["validation_receipt"]["answer_receipt"][
+                    "needs_more_specific_aliases"
+                ],
+                ["health_requirement"],
+            )
+
+            revision_report = write_final_answer_revision_user_input_file(
+                autopilot_report,
+                template,
+                revision_path,
+                revision_xlsx_path,
+            )
+            self.assertEqual(revision_report["placeholder_aliases"], ["health_requirement"])
+            self.assertIn("--base-reply-file", revision_report["validate_command"])
+            self.assertIn(str(base_reply_path), revision_report["validate_command"])
+            revision_text = revision_path.read_text(encoding="utf-8")
+            self.assertIn("health_requirement\uff1a<fill>", revision_text)
+            self.assertNotIn("zip_or_postal_code\uff1a<fill>", revision_text)
+            self.assertIn("health_requirement\uff1a<fill>", final_answer_reply_text_from_file(revision_xlsx_path))
+
+            specific_answer = (
+                "I can comply with standard health, vaccination, and client-site "
+                "requirements; exceptions: none."
+            )
+            with zipfile.ZipFile(revision_xlsx_path) as source, zipfile.ZipFile(
+                revision_filled_xlsx_path,
+                "w",
+                compression=zipfile.ZIP_DEFLATED,
+            ) as target:
+                for item in source.infolist():
+                    data = source.read(item.filename)
+                    if item.filename == "xl/worksheets/sheet1.xml":
+                        data = data.replace(b"&lt;fill&gt;", specific_answer.encode("utf-8"))
+                    target.writestr(item, data)
+
+            merged_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "job_apply_agent",
+                    "final-answer-autopilot",
+                    "--template",
+                    str(template_path),
+                    "--unblockers",
+                    str(unblockers_path),
+                    "--base-reply-file",
+                    str(base_reply_path),
+                    "--reply-file",
+                    str(revision_filled_xlsx_path),
+                    "--json-output",
+                    str(merged_report_path),
+                    "--markdown-output",
+                    str(merged_markdown_path),
+                    "--dry-run",
+                    "--fail-on-not-ready",
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(merged_result.returncode, 0, merged_result.stderr)
+            merged_report_text = merged_report_path.read_text(encoding="utf-8")
+            merged_report = json.loads(merged_report_text)
+            self.assertEqual(merged_report["status"], "validated_ready")
+            self.assertTrue(merged_report["validation_receipt"]["ready_for_finalize"])
+            self.assertTrue(merged_report["validation_receipt"]["merged_with_base_reply"])
+            self.assertEqual(
+                merged_report["validation_receipt"]["answer_receipt"]["ready_aliases"],
+                ["zip_or_postal_code", "health_requirement"],
+            )
+            self.assertNotIn("98004", merged_report_text)
+            self.assertNotIn(specific_answer, merged_report_text)
+            self.assertNotIn(specific_answer, merged_markdown_path.read_text(encoding="utf-8"))
 
     def test_final_answer_autopilot_validates_filled_reply_without_storing_answer_text(self) -> None:
         unblockers = {
