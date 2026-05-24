@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Session Continuity"
+  short_description: "Resume Codex sessions from local context"
+  default_prompt: "Use $codex-session-continuity to resume the most relevant prior Codex session context before continuing."
