@@ -10950,6 +10950,19 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(audit["completion_verdict"]["satisfied_requirement_count"], 13)
         self.assertEqual(audit["completion_verdict"]["blocking_requirement_count"], 1)
         self.assertFalse(audit["completion_verdict"]["real_employer_unattended_submit_allowed"])
+        self.assertIn(
+            "final_answer_user_input_needed.txt",
+            audit["completion_verdict"]["final_answer_user_input_file"],
+        )
+        self.assertIn(
+            "final-answer-autopilot --reply-file",
+            audit["completion_verdict"]["file_autopilot_validate_command"],
+        )
+        self.assertIn("--dry-run", audit["completion_verdict"]["file_autopilot_validate_command"])
+        self.assertIn(
+            "--apply --live-check --include-values",
+            audit["completion_verdict"]["file_autopilot_run_command"],
+        )
         self.assertIn("--reply-stdin", audit["completion_verdict"]["direct_autopilot_command"])
         self.assertEqual(len(audit["completion_checklist"]), 14)
         self.assertTrue(audit["completion_checklist"][0]["counts_as_complete"])
@@ -11173,6 +11186,9 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Completion Verdict", markdown)
         self.assertIn("blocking requirement IDs: real_user_answer_learning", markdown)
         self.assertIn("blocking final-answer aliases: zip_or_postal_code, citizenship_status", markdown)
+        self.assertIn("final-answer user input file", markdown)
+        self.assertIn("file validate command", markdown)
+        self.assertIn("final_answer_user_input_needed.txt", markdown)
         self.assertIn("Completion Checklist", markdown)
         self.assertIn("needs_user_answers", markdown)
         self.assertIn("real platform coverage achieved: true", markdown)
@@ -11271,6 +11287,17 @@ class JobApplyAgentTests(unittest.TestCase):
                     "zip_or_postal_code",
                     "citizenship_status",
                 ],
+                "final_answer_user_input_file": "job_apply_agent/outbox/final_answer_user_input_needed.txt",
+                "file_autopilot_validate_command": (
+                    "python3 -m job_apply_agent final-answer-autopilot "
+                    "--reply-file job_apply_agent/outbox/final_answer_user_input_needed.txt "
+                    "--dry-run --fail-on-not-ready"
+                ),
+                "file_autopilot_run_command": (
+                    "python3 -m job_apply_agent final-answer-autopilot "
+                    "--reply-file job_apply_agent/outbox/final_answer_user_input_needed.txt "
+                    "--apply --live-check --include-values --fail-on-not-ready"
+                ),
                 "direct_autopilot_command": (
                     "python3 -m job_apply_agent final-answer-autopilot "
                     "--reply-stdin --apply --live-check "
@@ -11670,6 +11697,18 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(
             report["summary"]["goal_completion_blocking_final_answer_aliases"],
             ["zip_or_postal_code", "citizenship_status"],
+        )
+        self.assertIn(
+            "final_answer_user_input_needed.txt",
+            report["summary"]["goal_completion_final_answer_user_input_file"],
+        )
+        self.assertIn(
+            "final-answer-autopilot --reply-file",
+            report["summary"]["goal_completion_file_autopilot_validate_command"],
+        )
+        self.assertIn(
+            "--apply --live-check --include-values",
+            report["summary"]["goal_completion_file_autopilot_run_command"],
         )
         self.assertIn("--reply-stdin", report["summary"]["goal_completion_direct_autopilot_command"])
         self.assertEqual(report["goal_completion_verdict"]["status"], "waiting_for_truthful_user_answers")

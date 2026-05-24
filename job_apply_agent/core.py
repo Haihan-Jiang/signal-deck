@@ -16573,6 +16573,9 @@ def render_goal_readiness_audit_markdown(audit: dict[str, Any]) -> str:
         f"- selected 100 queue ready now: {str(bool(verdict.get('selected_queue_supervised_autofill_ready'))).lower()}",
         f"- ready after truthful answers: {str(bool(verdict.get('supervised_autofill_ready_after_user_answers'))).lower()}",
         f"- real employer final submit supervised: {str(bool(verdict.get('real_employer_final_submit_supervised'))).lower()}",
+        f"- final-answer user input file: `{verdict.get('final_answer_user_input_file', '')}`",
+        f"- file validate command: `{verdict.get('file_autopilot_validate_command', '')}`",
+        f"- file run command after answers: `{verdict.get('file_autopilot_run_command', '')}`",
         f"- next command after answers: `{verdict.get('direct_autopilot_command', '')}`",
         "",
         "## Completion Checklist",
@@ -16959,6 +16962,15 @@ def _goal_completion_verdict(
         ),
         "real_employer_final_submit_supervised": True,
         "real_employer_unattended_submit_allowed": False,
+        "final_answer_user_input_file": FINAL_ANSWER_USER_INPUT_PATH,
+        "file_autopilot_validate_command": (
+            f"python3 -m job_apply_agent final-answer-autopilot --reply-file "
+            f"{FINAL_ANSWER_USER_INPUT_PATH} --dry-run --fail-on-not-ready"
+        ),
+        "file_autopilot_run_command": (
+            f"python3 -m job_apply_agent final-answer-autopilot --reply-file "
+            f"{FINAL_ANSWER_USER_INPUT_PATH} --apply --live-check --include-values --fail-on-not-ready"
+        ),
         "direct_autopilot_command": (
             "python3 -m job_apply_agent final-answer-autopilot "
             "--reply-stdin --apply --live-check "
@@ -17109,6 +17121,15 @@ def build_automation_handoff_report(
         ),
         "goal_completion_direct_autopilot_command": goal_completion_verdict.get(
             "direct_autopilot_command", ""
+        ),
+        "goal_completion_final_answer_user_input_file": goal_completion_verdict.get(
+            "final_answer_user_input_file", ""
+        ),
+        "goal_completion_file_autopilot_validate_command": goal_completion_verdict.get(
+            "file_autopilot_validate_command", ""
+        ),
+        "goal_completion_file_autopilot_run_command": goal_completion_verdict.get(
+            "file_autopilot_run_command", ""
         ),
         "can_unattended_submit_real_employers": False,
         "latest_preflight_generated_at": blocker_summary.get("latest_preflight_generated_at", ""),
@@ -17632,6 +17653,9 @@ def render_automation_handoff_markdown(report: dict[str, Any]) -> str:
         + (", ".join(summary.get("goal_completion_blocking_requirement_ids") or []) or "none"),
         "- blocking final-answer aliases: "
         + (", ".join(summary.get("goal_completion_blocking_final_answer_aliases") or []) or "none"),
+        f"- final-answer user input file: `{summary.get('goal_completion_final_answer_user_input_file', '')}`",
+        f"- file autopilot validate command: `{summary.get('goal_completion_file_autopilot_validate_command', '')}`",
+        f"- file autopilot run command: `{summary.get('goal_completion_file_autopilot_run_command', '')}`",
         f"- direct autopilot command: `{summary.get('goal_completion_direct_autopilot_command', '')}`",
         f"- latest preflight stale: {str(bool(summary.get('latest_preflight_stale'))).lower()}",
         f"- latest preflight age seconds: {summary.get('latest_preflight_age_seconds')}",
