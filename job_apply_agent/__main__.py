@@ -402,6 +402,7 @@ DEFAULT_TOPUP_CANDIDATES_MARKDOWN = Path(__file__).with_name("outbox") / "topup_
 DEFAULT_OBSERVED_CANDIDATES = Path(__file__).with_name("outbox") / "observed_candidates.jsonl"
 DEFAULT_CANDIDATE_OBSERVATION_JSON = Path(__file__).with_name("outbox") / "candidate_observation_latest.json"
 DEFAULT_CANDIDATE_OBSERVATION_MARKDOWN = Path(__file__).with_name("outbox") / "candidate_observation_latest.md"
+DEFAULT_QUESTION_EXPORT_JSON = Path(__file__).with_name("outbox") / "application_questions_latest.json"
 DEFAULT_QUESTION_EXPORT_XLSX = Path(__file__).with_name("outbox") / "application_questions_latest.xlsx"
 DEFAULT_QUESTION_EXPORT_HTML = Path(__file__).with_name("outbox") / "application_questions_latest.html"
 DEFAULT_PLATFORM_QUESTION_PLAYBOOK_JSON = (
@@ -2182,6 +2183,7 @@ def main() -> int:
     )
     export_questions_parser.add_argument("--xlsx-output", default=str(DEFAULT_QUESTION_EXPORT_XLSX))
     export_questions_parser.add_argument("--html-output", default=str(DEFAULT_QUESTION_EXPORT_HTML))
+    export_questions_parser.add_argument("--json-output", default=str(DEFAULT_QUESTION_EXPORT_JSON))
 
     platform_playbook_parser = subparsers.add_parser(
         "platform-question-playbook",
@@ -2525,6 +2527,7 @@ def main() -> int:
             learning_tasks,
             args.xlsx_output,
             args.html_output,
+            args.json_output,
             source_artifacts=_question_export_source_artifacts(
                 {
                     "Answer gaps": args.gaps_json,
@@ -2609,6 +2612,7 @@ def main() -> int:
             closed_jobs=_load_optional_json(args.closed_jobs_json),
             profile=_load_optional_json(args.profile_json),
         )
+        print(f"Wrote question JSON to {args.json_output}")
         print(f"Wrote question Excel to {args.xlsx_output}")
         print(f"Wrote question HTML to {args.html_output}")
         print(f"Questions: {len(export.get('question_rows', []))}")
@@ -7603,6 +7607,7 @@ def _refresh_application_automation_reports() -> dict[str, object]:
             json.loads(DEFAULT_LEARNING_TASKS_JSON.read_text(encoding="utf-8")),
             DEFAULT_QUESTION_EXPORT_XLSX,
             DEFAULT_QUESTION_EXPORT_HTML,
+            DEFAULT_QUESTION_EXPORT_JSON,
             source_artifacts=_question_export_source_artifacts(
                 {
                     "Answer gaps": str(DEFAULT_GAPS_JSON),

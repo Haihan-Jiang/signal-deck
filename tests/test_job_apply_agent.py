@@ -16465,6 +16465,7 @@ class JobApplyAgentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             xlsx_output = Path(temp_dir) / "questions.xlsx"
             html_output = Path(temp_dir) / "questions.html"
+            json_output = Path(temp_dir) / "questions.json"
             result = write_question_export(
                 gaps,
                 readiness,
@@ -16473,6 +16474,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 learning_tasks,
                 xlsx_output,
                 html_output,
+                json_output,
                 source_artifacts=source_artifacts,
                 synthetic_browser_execution=synthetic_browser_execution,
                 fake_learning_probe=fake_learning_probe,
@@ -16540,8 +16542,19 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(result["summary"]["answer_memory_count"], 1)
             self.assertEqual(result["summary"]["closed_posting_count"], 1)
             self.assertGreaterEqual(result["summary"]["profile_snapshot_field_count"], 1)
+            self.assertEqual(result["outputs"]["json"], str(json_output))
             self.assertTrue(xlsx_output.exists())
             self.assertTrue(html_output.exists())
+            self.assertTrue(json_output.exists())
+            json_report = json.loads(json_output.read_text(encoding="utf-8"))
+            self.assertEqual(json_report["summary"]["goal_audit_status"], "needs_user_answers")
+            self.assertEqual(len(json_report["question_rows"]), 2)
+            self.assertTrue(
+                any(
+                    row["requirement"] == "Research real platforms and roles at 100-position depth"
+                    for row in json_report["goal_evidence"]
+                )
+            )
             with zipfile.ZipFile(xlsx_output) as workbook:
                 names = set(workbook.namelist())
                 self.assertIn("xl/workbook.xml", names)

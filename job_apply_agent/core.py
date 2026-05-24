@@ -20784,6 +20784,7 @@ def write_question_export(
     learning_tasks: dict[str, Any],
     xlsx_output: str | Path,
     html_output: str | Path,
+    json_output: str | Path | None = None,
     source_artifacts: list[dict[str, Any]] | None = None,
     synthetic_browser_execution: dict[str, Any] | None = None,
     fake_learning_probe: dict[str, Any] | None = None,
@@ -20838,11 +20839,22 @@ def write_question_export(
     )
     xlsx_path = Path(xlsx_output)
     html_path = Path(html_output)
+    json_path = Path(json_output) if json_output else None
     xlsx_path.parent.mkdir(parents=True, exist_ok=True)
     html_path.parent.mkdir(parents=True, exist_ok=True)
+    if json_path:
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+    outputs = {"xlsx": str(xlsx_path), "html": str(html_path)}
+    if json_path:
+        outputs["json"] = str(json_path)
+    export["outputs"] = outputs
     _write_question_export_xlsx(export, xlsx_path)
     html_path.write_text(render_question_export_html(export), encoding="utf-8")
-    export["outputs"] = {"xlsx": str(xlsx_path), "html": str(html_path)}
+    if json_path:
+        json_path.write_text(
+            json.dumps(export, ensure_ascii=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
     return export
 
 
