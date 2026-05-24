@@ -4930,6 +4930,7 @@ def _final_answer_autopilot_audit_commands() -> list[tuple[str, list[str]]]:
         ("submission_safety_audit", [sys.executable, "-m", "job_apply_agent", "submission-safety-audit"]),
         ("goal_audit", [sys.executable, "-m", "job_apply_agent", "goal-audit"]),
         ("automation_handoff", [sys.executable, "-m", "job_apply_agent", "automation-handoff"]),
+        ("goal_proof", [sys.executable, "-m", "job_apply_agent", "goal-proof"]),
     ]
 
 
