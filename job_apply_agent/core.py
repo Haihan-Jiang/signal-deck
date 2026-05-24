@@ -18817,7 +18817,6 @@ def _automation_handoff_next_commands(summary: dict[str, Any]) -> list[str]:
         or "<base_reply_file>"
     )
     commands = [
-        _automation_handoff_one_command_resume(summary),
         "python3 -m job_apply_agent final-answer-revision-user-input",
         shlex.join(
             [
@@ -18849,6 +18848,7 @@ def _automation_handoff_next_commands(summary: dict[str, Any]) -> list[str]:
                 "--fail-on-not-ready",
             ]
         ),
+        _automation_handoff_one_command_resume(summary),
         "python3 -m job_apply_agent final-answer-blockers --print-minimal-reply",
         "python3 -m job_apply_agent final-answer-user-input",
         "python3 -m job_apply_agent rehearse-after-answers",
