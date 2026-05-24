@@ -9616,6 +9616,49 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertIn("Resume after answers: waiting_for_filled_reply", resume_validate_result.stdout)
             self.assertIn("Placeholder aliases: zip_or_postal_code, health_requirement", resume_validate_result.stdout)
             self.assertNotIn("Fake/test markers", resume_validate_result.stdout)
+            vague_reply_path = root / "vague_reply.txt"
+            revision_path = root / "revision.md"
+            vague_reply_path.write_text(
+                "zip_or_postal_code\uff1a98004\n"
+                "health_requirement\uff1ayes\n"
+                "health_requirement_confirmed\uff1a\u786e\u8ba4\n",
+                encoding="utf-8",
+            )
+            autopilot_vague_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "job_apply_agent",
+                    "final-answer-autopilot",
+                    "--template",
+                    str(template_path),
+                    "--unblockers",
+                    str(unblockers_path),
+                    "--reply-file",
+                    str(vague_reply_path),
+                    "--json-output",
+                    str(root / "autopilot_vague.json"),
+                    "--markdown-output",
+                    str(root / "autopilot_vague.md"),
+                    "--revision-markdown-output",
+                    str(revision_path),
+                    "--dry-run",
+                    "--fail-on-not-ready",
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(autopilot_vague_result.returncode, 2)
+            self.assertIn("Wrote final answer revision prompt", autopilot_vague_result.stdout)
+            revision_text = revision_path.read_text(encoding="utf-8")
+            self.assertIn("Final Answer Revision Needed", revision_text)
+            self.assertIn("health_requirement", revision_text)
+            self.assertIn("too brief for reusable high-risk answer", revision_text)
+            self.assertIn("This file intentionally redacts answer text", revision_text)
+            self.assertNotIn("98004", revision_text)
+            self.assertNotIn("| yes |", revision_text)
 
     def test_final_answer_intake_server_post_answer_flags_are_guarded(self) -> None:
         base_args = {

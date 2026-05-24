@@ -252,6 +252,9 @@ DEFAULT_FINAL_ANSWER_AUTOPILOT_JSON = (
 DEFAULT_FINAL_ANSWER_AUTOPILOT_MARKDOWN = (
     Path(__file__).with_name("outbox") / "final_answer_autopilot_latest.md"
 )
+DEFAULT_FINAL_ANSWER_REVISION_MARKDOWN = (
+    Path(__file__).with_name("outbox") / "final_answer_revision_needed.md"
+)
 DEFAULT_FINAL_ANSWER_REPLY_JSON = (
     Path(__file__).with_name("outbox") / "final_answer_reply_intake_latest.json"
 )
@@ -1374,6 +1377,10 @@ def main() -> int:
     final_answer_autopilot_parser.add_argument(
         "--markdown-output",
         default=str(DEFAULT_FINAL_ANSWER_AUTOPILOT_MARKDOWN),
+    )
+    final_answer_autopilot_parser.add_argument(
+        "--revision-markdown-output",
+        default=str(DEFAULT_FINAL_ANSWER_REVISION_MARKDOWN),
     )
     final_answer_autopilot_parser.add_argument(
         "--skip-final-audits",
@@ -4666,6 +4673,85 @@ def _write_final_answer_autopilot_report(
     markdown_path.write_text(_render_final_answer_autopilot_markdown(report), encoding="utf-8")
 
 
+def _write_final_answer_revision_markdown(
+    report: dict[str, object],
+    markdown_output: str | Path,
+) -> bool:
+    validation_receipt = (
+        report.get("validation_receipt")
+        if isinstance(report.get("validation_receipt"), dict)
+        else {}
+    )
+    problem_fields = (
+        validation_receipt.get("problem_fields")
+        if isinstance(validation_receipt.get("problem_fields"), list)
+        else []
+    )
+    if not problem_fields:
+        return False
+    markdown_path = Path(markdown_output)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.write_text(
+        _render_final_answer_revision_markdown(report, problem_fields),
+        encoding="utf-8",
+    )
+    return True
+
+
+def _render_final_answer_revision_markdown(
+    report: dict[str, object],
+    problem_fields: list[object],
+) -> str:
+    lines = [
+        "# Final Answer Revision Needed",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        f"Validation status: `{report.get('status')}`",
+        f"Reply source: `{report.get('reply_source', '')}`",
+        f"Reply file: `{report.get('reply_file', '')}`",
+        "",
+        "This file intentionally redacts answer text. Revise only the rows below.",
+        "",
+        "| Alias | Status | Reason | What to add | Expected shape |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for raw_field in problem_fields:
+        if not isinstance(raw_field, dict):
+            continue
+        alias = str(raw_field.get("alias") or "")
+        status = str(raw_field.get("status") or "")
+        reason = str(raw_field.get("specificity_reason") or "")
+        hint = str(raw_field.get("hint") or "")
+        expected_shape = str(raw_field.get("expected_shape") or "")
+        lines.append(
+            "| "
+            + " | ".join(
+                _final_answer_markdown_cell(value)
+                for value in [alias, status, reason or "n/a", hint or "Use a specific reusable answer.", expected_shape or "n/a"]
+            )
+            + " |"
+        )
+    lines.extend(
+        [
+            "",
+            "After editing, rerun:",
+            "",
+            "```bash",
+            str(report.get("validate_command") or ""),
+            "```",
+            "",
+            "The validation report and this revision prompt do not store answer text.",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _final_answer_markdown_cell(value: object) -> str:
+    text = str(value or "")
+    text = text.replace("\n", " ").replace("|", "\\|")
+    return text
+
+
 def _final_answer_autopilot_validation_receipt(
     args: argparse.Namespace,
     reply_path: Path,
@@ -4713,6 +4799,37 @@ def _final_answer_autopilot_validation_receipt(
             intake_payload,
             confirm_high_risk=False,
         )
+        template_fields = {
+            str(field.get("alias") or "").strip(): field
+            for field in template_payload.get("fields") or []
+            if isinstance(field, dict) and str(field.get("alias") or "").strip()
+        }
+        problem_fields: list[dict[str, object]] = []
+        for field in intake_report.get("fields") or []:
+            if not isinstance(field, dict) or field.get("status") == "ready":
+                continue
+            alias = str(field.get("alias") or "").strip()
+            template_field = template_fields.get(alias, {})
+            problem_fields.append(
+                {
+                    "alias": alias,
+                    "status": str(field.get("status") or ""),
+                    "high_risk": bool(field.get("high_risk")),
+                    "specificity_reason": str(field.get("specificity_reason") or ""),
+                    "question": str(template_field.get("question") or ""),
+                    "hint": str(
+                        template_field.get("answer_specificity_hint")
+                        or template_field.get("answer_format_hint")
+                        or ""
+                    ),
+                    "expected_shape": str(template_field.get("answer_example_shape") or ""),
+                    "observed_prompt": str(
+                        (template_field.get("observed_prompt_examples") or [""])[0]
+                        if isinstance(template_field.get("observed_prompt_examples"), list)
+                        else ""
+                    ),
+                }
+            )
         parser_has_errors = bool(
             int(reply_report.get("unknown_key_count") or 0)
             or int(reply_report.get("duplicate_key_count") or 0)
@@ -4735,6 +4852,7 @@ def _final_answer_autopilot_validation_receipt(
                 "fake_marker_aliases": reply_report.get("fake_marker_aliases") or [],
             },
             "intake_summary": intake_report.get("summary") or {},
+            "problem_fields": problem_fields,
             "policy": {
                 "stores_answer_text": False,
                 "markdown_redacts_answer_text": True,
@@ -4856,6 +4974,7 @@ def _render_final_answer_autopilot_markdown(report: dict[str, object]) -> str:
             "",
             f"- validate: `{report.get('validate_command', '')}`",
             f"- pipeline: `{report.get('pipeline_command', '')}`",
+            f"- revision prompt: `{report.get('revision_markdown_output', '')}`",
             "",
             "## Final Audits",
             "",
@@ -4932,6 +5051,7 @@ def _final_answer_autopilot_base_report(
         "placeholder_alias_count": len(safe_placeholder_aliases),
         "placeholder_aliases": safe_placeholder_aliases,
         "validation_receipt": validation_receipt or {},
+        "revision_markdown_output": str(getattr(args, "revision_markdown_output", "")),
         "validate_command": shlex.join(validate_command),
         "pipeline_command": shlex.join(pipeline_command),
         "final_audits_requested": not bool(args.skip_final_audits),
@@ -5093,6 +5213,11 @@ def _run_final_answer_autopilot_for_reply_path(
                         validation_receipt=validation_receipt,
                     )
                     _write_final_answer_autopilot_report(report, args.json_output, args.markdown_output)
+                    if _write_final_answer_revision_markdown(
+                        report,
+                        args.revision_markdown_output,
+                    ):
+                        print(f"Wrote final answer revision prompt to {args.revision_markdown_output}")
                     print(f"Final answer autopilot: {report['status']}")
                     return validate_result.returncode if args.fail_on_not_ready else 0
                 if args.dry_run or args.no_run_post_answer_pipeline:
