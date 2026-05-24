@@ -57,6 +57,7 @@ from job_apply_agent.core import (
     build_final_answer_intake_template,
     build_final_answer_intake_update,
     build_goal_readiness_audit,
+    build_goal_proof_report,
     build_learning_approval_pack,
     build_platform_question_playbook,
     build_position_execution_audit,
@@ -153,6 +154,7 @@ from job_apply_agent.core import (
     render_final_answer_reply_template_text,
     render_final_answer_user_input_text,
     render_goal_readiness_audit_markdown,
+    render_goal_proof_markdown,
     render_learning_approval_pack_markdown,
     render_learning_task_template_markdown,
     render_pre_submit_review_markdown,
@@ -218,6 +220,7 @@ from job_apply_agent.core import (
     write_final_answer_user_input_file,
     write_final_answer_reply_intake,
     write_goal_readiness_audit,
+    write_goal_proof_report,
     write_learning_approval_pack,
     write_learning_task_template,
     write_pre_submit_review,
@@ -11824,6 +11827,153 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(markdown_output.exists())
             self.assertIn("completion_verdict", written)
             self.assertIn("Real employer unattended submit: false", markdown_output.read_text())
+
+    def test_goal_proof_report_ties_goal_requirements_to_current_artifacts(self) -> None:
+        goal = {
+            "goal_complete": False,
+            "can_unattended_submit_real_employers": False,
+            "requirements": [{"id": "closed_posting_filter", "status": "achieved"}],
+            "completion_verdict": {
+                "status": "waiting_for_truthful_user_answers",
+                "blocking_final_answer_aliases": [
+                    "citizenship_status",
+                    "interview_recording_consent",
+                ],
+                "real_employer_unattended_submit_allowed": False,
+            },
+            "latest_final_answer_validation": {
+                "answer_input_count": 6,
+                "ready_alias_count": 4,
+                "needs_more_specific_aliases": [
+                    "citizenship_status",
+                    "interview_recording_consent",
+                ],
+                "safe_to_resume_after_answers": False,
+            },
+        }
+        automation_handoff = {
+            "one_command_resume": (
+                "python3 -m job_apply_agent resume-after-answers "
+                "--base-reply-file base.numbers --reply-file revision.xlsx"
+            ),
+            "next_commands": [
+                "python3 -m job_apply_agent final-answer-revision-user-input",
+                "python3 -m job_apply_agent resume-after-answers --reply-file revision.xlsx",
+            ],
+            "summary": {
+                "latest_final_answer_validation_answer_count": 6,
+                "latest_final_answer_validation_ready_count": 4,
+            },
+        }
+        coverage = {
+            "positions_observed_total": 2400,
+            "target_platforms": ["Ashby", "Greenhouse", "Lever", "LinkedIn"],
+            "real_platform_role_target_achieved": True,
+        }
+        closed_preflight = {
+            "candidate_count": 100,
+            "live_checked_count": 100,
+            "open_eligible_count": 100,
+            "closed_count": 0,
+            "uncertain_count": 0,
+            "identity_unverified_count": 0,
+            "error_count": 0,
+        }
+        closed_jobs = {"jobs": [{"key": "linkedin:4415090263"}]}
+        playbook = {
+            "summary": {
+                "target_platform_count": 4,
+                "target_platforms_at_100_count": 4,
+                "observed_position_count": 2400,
+                "research_question_item_count": 1900,
+            }
+        }
+        position = {
+            "summary": {
+                "target_count": 100,
+                "position_count": 100,
+                "ready_after_answers_count": 100,
+                "live_open_eligible_count": 100,
+                "local_synthetic_submit_position_count": 100,
+                "local_synthetic_submit_count": 100,
+                "selector_miss_position_count": 0,
+                "synthetic_after_answers_selector_miss_position_count": 0,
+                "final_submit_stop_position_count": 100,
+                "final_submit_stop_count": 100,
+                "unsafe_real_submit_position_count": 0,
+            }
+        }
+        dependencies = {
+            "summary": {
+                "selected_position_count": 100,
+                "known_unresolved_alias_count": 2,
+                "known_unresolved_aliases": [
+                    "citizenship_status",
+                    "interview_recording_consent",
+                ],
+                "ready_after_truthful_answers_count": 100,
+                "all_selected_dependencies_accounted_for": True,
+            }
+        }
+        safety = {
+            "status": "safe",
+            "safe": True,
+            "issue_count": 0,
+            "warning_count": 1,
+            "summary": {
+                "apply_packet_final_submit_stop_count": 100,
+            },
+        }
+        report = build_goal_proof_report(
+            goal_readiness_audit=goal,
+            automation_handoff=automation_handoff,
+            coverage_gate=coverage,
+            closed_preflight=closed_preflight,
+            closed_jobs=closed_jobs,
+            platform_question_playbook=playbook,
+            position_execution_audit=position,
+            selected_answer_dependencies=dependencies,
+            submission_safety_audit=safety,
+        )
+        markdown = render_goal_proof_markdown(report)
+
+        self.assertEqual(report["status"], "waiting_for_truthful_user_answers")
+        self.assertEqual(report["summary"]["requirement_count"], 8)
+        self.assertEqual(report["summary"]["blocking_count"], 1)
+        self.assertEqual(
+            report["summary"]["blocking_final_answer_aliases"],
+            ["citizenship_status", "interview_recording_consent"],
+        )
+        statuses = {row["id"]: row["status"] for row in report["requirements"]}
+        self.assertEqual(statuses["closed_posting_filter"], "proved")
+        self.assertEqual(statuses["local_synthetic_submit_100"], "proved")
+        self.assertEqual(statuses["truthful_answer_gate"], "blocked_on_user_answers")
+        self.assertEqual(statuses["submission_safety_boundary"], "proved")
+        self.assertIn("Goal Completion Proof", markdown)
+        self.assertIn("blocking final-answer aliases: citizenship_status, interview_recording_consent", markdown)
+        self.assertIn("resume-after-answers", markdown)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            written = write_goal_proof_report(
+                root / "proof.json",
+                root / "proof.md",
+                root / "proof.html",
+                goal_readiness_audit=goal,
+                automation_handoff=automation_handoff,
+                coverage_gate=coverage,
+                closed_preflight=closed_preflight,
+                closed_jobs=closed_jobs,
+                platform_question_playbook=playbook,
+                position_execution_audit=position,
+                selected_answer_dependencies=dependencies,
+                submission_safety_audit=safety,
+                source_paths={"goal_readiness_audit": "goal.json"},
+            )
+            self.assertEqual(written["source_paths"]["goal_readiness_audit"], "goal.json")
+            self.assertTrue((root / "proof.json").exists())
+            self.assertTrue((root / "proof.md").exists())
+            self.assertTrue((root / "proof.html").exists())
 
     def test_automation_handoff_report_prioritizes_answers_and_stop_actions(self) -> None:
         goal_readiness_audit = {

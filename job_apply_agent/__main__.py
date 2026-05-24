@@ -86,6 +86,7 @@ from .core import (
     build_synthetic_final_answer_reply_text,
     build_synthetic_unblocker_compact_updates,
     write_goal_readiness_audit,
+    write_goal_proof_report,
     write_critical_input_suggestion_packet,
     write_learning_approval_pack,
     write_learning_task_template,
@@ -411,6 +412,9 @@ DEFAULT_PLATFORM_QUESTION_PLAYBOOK_HTML = (
 )
 DEFAULT_GOAL_AUDIT_JSON = Path(__file__).with_name("outbox") / "goal_readiness_audit_latest.json"
 DEFAULT_GOAL_AUDIT_MARKDOWN = Path(__file__).with_name("outbox") / "goal_readiness_audit_latest.md"
+DEFAULT_GOAL_PROOF_JSON = Path(__file__).with_name("outbox") / "goal_completion_proof_latest.json"
+DEFAULT_GOAL_PROOF_MARKDOWN = Path(__file__).with_name("outbox") / "goal_completion_proof_latest.md"
+DEFAULT_GOAL_PROOF_HTML = Path(__file__).with_name("outbox") / "goal_completion_proof_latest.html"
 DEFAULT_POSITION_EXECUTION_AUDIT_JSON = (
     Path(__file__).with_name("outbox") / "position_execution_audit_latest.json"
 )
@@ -2339,6 +2343,40 @@ def main() -> int:
         help="exit non-zero unless the goal audit proves completion",
     )
 
+    goal_proof_parser = subparsers.add_parser(
+        "goal-proof",
+        help="write a requirement-by-requirement proof matrix for the active 100-position goal",
+    )
+    goal_proof_parser.add_argument("--goal-audit-json", default=str(DEFAULT_GOAL_AUDIT_JSON))
+    goal_proof_parser.add_argument("--automation-handoff-json", default=str(DEFAULT_AUTOMATION_HANDOFF_JSON))
+    goal_proof_parser.add_argument("--coverage-gate-json", default=str(DEFAULT_COVERAGE_GATE_JSON))
+    goal_proof_parser.add_argument("--closed-preflight-json", default=str(DEFAULT_CLOSED_PREFLIGHT_JSON))
+    goal_proof_parser.add_argument("--closed-jobs-json", default=str(DEFAULT_CLOSED_JOBS))
+    goal_proof_parser.add_argument(
+        "--platform-question-playbook-json",
+        default=str(DEFAULT_PLATFORM_QUESTION_PLAYBOOK_JSON),
+    )
+    goal_proof_parser.add_argument(
+        "--position-execution-audit-json",
+        default=str(DEFAULT_POSITION_EXECUTION_AUDIT_JSON),
+    )
+    goal_proof_parser.add_argument(
+        "--selected-answer-dependencies-json",
+        default=str(DEFAULT_SELECTED_ANSWER_DEPENDENCIES_JSON),
+    )
+    goal_proof_parser.add_argument(
+        "--submission-safety-audit-json",
+        default=str(DEFAULT_SUBMISSION_SAFETY_AUDIT_JSON),
+    )
+    goal_proof_parser.add_argument("--json-output", default=str(DEFAULT_GOAL_PROOF_JSON))
+    goal_proof_parser.add_argument("--markdown-output", default=str(DEFAULT_GOAL_PROOF_MARKDOWN))
+    goal_proof_parser.add_argument("--html-output", default=str(DEFAULT_GOAL_PROOF_HTML))
+    goal_proof_parser.add_argument(
+        "--fail-on-incomplete",
+        action="store_true",
+        help="exit non-zero unless the proof matrix proves the full goal complete",
+    )
+
     args = parser.parse_args()
 
     if args.command == "learn":
@@ -2753,6 +2791,46 @@ def main() -> int:
         )
         print(f"Goal complete: {str(bool(audit.get('goal_complete'))).lower()}")
         if args.fail_on_incomplete and not audit.get("goal_complete"):
+            return 2
+        return 0
+
+    if args.command == "goal-proof":
+        report = write_goal_proof_report(
+            args.json_output,
+            args.markdown_output,
+            args.html_output,
+            goal_readiness_audit=_load_optional_json(args.goal_audit_json),
+            automation_handoff=_load_optional_json(args.automation_handoff_json),
+            coverage_gate=_load_optional_json(args.coverage_gate_json),
+            closed_preflight=_load_optional_json(args.closed_preflight_json),
+            closed_jobs=_load_optional_json(args.closed_jobs_json),
+            platform_question_playbook=_load_optional_json(args.platform_question_playbook_json),
+            position_execution_audit=_load_optional_json(args.position_execution_audit_json),
+            selected_answer_dependencies=_load_optional_json(args.selected_answer_dependencies_json),
+            submission_safety_audit=_load_optional_json(args.submission_safety_audit_json),
+            source_paths={
+                "goal_readiness_audit": args.goal_audit_json,
+                "automation_handoff": args.automation_handoff_json,
+                "coverage_gate": args.coverage_gate_json,
+                "closed_preflight": args.closed_preflight_json,
+                "closed_jobs": args.closed_jobs_json,
+                "platform_question_playbook": args.platform_question_playbook_json,
+                "position_execution_audit": args.position_execution_audit_json,
+                "selected_answer_dependencies": args.selected_answer_dependencies_json,
+                "submission_safety_audit": args.submission_safety_audit_json,
+            },
+        )
+        summary = report.get("summary") or {}
+        print(f"Wrote goal proof JSON to {args.json_output}")
+        print(f"Wrote goal proof Markdown to {args.markdown_output}")
+        print(f"Wrote goal proof HTML to {args.html_output}")
+        print(f"Status: {report.get('status')}")
+        print(f"Proved items: {summary.get('proved_count', 0)} / {summary.get('requirement_count', 0)}")
+        print(f"Blocking items: {summary.get('blocking_count', 0)}")
+        aliases = summary.get("blocking_final_answer_aliases")
+        if isinstance(aliases, list) and aliases:
+            print("Blocking answer aliases: " + ", ".join(str(alias) for alias in aliases))
+        if args.fail_on_incomplete and not bool(summary.get("goal_complete")):
             return 2
         return 0
 

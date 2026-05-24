@@ -16661,6 +16661,441 @@ def write_goal_readiness_audit(
     return audit
 
 
+def build_goal_proof_report(
+    *,
+    goal_readiness_audit: dict[str, Any] | None = None,
+    automation_handoff: dict[str, Any] | None = None,
+    coverage_gate: dict[str, Any] | None = None,
+    closed_preflight: dict[str, Any] | None = None,
+    closed_jobs: dict[str, Any] | None = None,
+    platform_question_playbook: dict[str, Any] | None = None,
+    position_execution_audit: dict[str, Any] | None = None,
+    selected_answer_dependencies: dict[str, Any] | None = None,
+    submission_safety_audit: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    goal = goal_readiness_audit or {}
+    handoff = automation_handoff or {}
+    coverage = coverage_gate or {}
+    preflight = closed_preflight or {}
+    closed = closed_jobs or {}
+    playbook = platform_question_playbook or {}
+    position = position_execution_audit or {}
+    dependencies = selected_answer_dependencies or {}
+    safety = submission_safety_audit or {}
+    goal_summary = goal.get("blocker_summary") or {}
+    handoff_summary = handoff.get("summary") or {}
+    playbook_summary = playbook.get("summary") or {}
+    position_summary = position.get("summary") or {}
+    dependency_summary = dependencies.get("summary") or {}
+    safety_summary = safety.get("summary") or {}
+    verdict = goal.get("completion_verdict") if isinstance(goal.get("completion_verdict"), dict) else {}
+    latest_validation = (
+        goal.get("latest_final_answer_validation")
+        if isinstance(goal.get("latest_final_answer_validation"), dict)
+        else {}
+    )
+    blocking_aliases = _string_list(verdict.get("blocking_final_answer_aliases"))
+    if not blocking_aliases:
+        blocking_aliases = _goal_latest_final_answer_problem_aliases(latest_validation)
+    one_command_resume = str(handoff.get("one_command_resume") or "").strip()
+    next_commands = _string_list(handoff.get("next_commands"))
+    target_platforms = _string_list((coverage.get("target_platforms") or [])) or _string_list(
+        position_summary.get("target_platforms")
+    )
+
+    requirements = [
+        {
+            "id": "closed_posting_filter",
+            "requirement": "Skip postings that are closed, expired, removed, filled, or no longer accepting applications before notify/open/apply.",
+            "status": "proved"
+            if _goal_proof_closed_filter_ready(goal, preflight, closed)
+            else "missing_evidence",
+            "evidence": {
+                "closed_registry_count": _closed_registry_count(closed),
+                "preflight_candidates": int(preflight.get("candidate_count") or 0),
+                "live_checked": int(preflight.get("live_checked_count") or 0),
+                "open_eligible": int(preflight.get("open_eligible_count") or 0),
+                "closed": int(preflight.get("closed_count") or 0),
+                "uncertain": int(preflight.get("uncertain_count") or 0),
+                "identity_unverified": int(preflight.get("identity_unverified_count") or 0),
+                "errors": int(preflight.get("error_count") or 0),
+                "goal_requirement_status": _goal_proof_requirement_status(goal, "closed_posting_filter"),
+            },
+            "source_artifacts": ["closed_preflight", "closed_jobs", "goal_readiness_audit"],
+        },
+        {
+            "id": "research_100_per_target_platform",
+            "requirement": "Research at least 100 positions for each target platform and summarize platform-specific questions.",
+            "status": "proved"
+            if bool(coverage.get("real_platform_role_target_achieved"))
+            and int(playbook_summary.get("target_platforms_at_100_count") or 0)
+            >= int(playbook_summary.get("target_platform_count") or 0)
+            and int(playbook_summary.get("target_platform_count") or 0) > 0
+            else "missing_evidence",
+            "evidence": {
+                "positions_observed_total": int(coverage.get("positions_observed_total") or playbook_summary.get("observed_position_count") or 0),
+                "target_platforms": target_platforms,
+                "target_platform_count": int(playbook_summary.get("target_platform_count") or 0),
+                "target_platforms_at_100": int(playbook_summary.get("target_platforms_at_100_count") or 0),
+                "real_platform_role_target_achieved": bool(coverage.get("real_platform_role_target_achieved")),
+                "question_items": int(playbook_summary.get("research_question_item_count") or 0),
+            },
+            "source_artifacts": ["coverage_gate", "platform_question_playbook"],
+        },
+        {
+            "id": "selected_100_position_execution",
+            "requirement": "Keep a selected 100-position queue with per-position execution evidence.",
+            "status": "proved"
+            if int(position_summary.get("position_count") or 0) >= 100
+            and int(position_summary.get("ready_after_answers_count") or 0) >= 100
+            else "missing_evidence",
+            "evidence": {
+                "positions": int(position_summary.get("position_count") or 0),
+                "target": int(position_summary.get("target_count") or 100),
+                "ready_after_answers": int(position_summary.get("ready_after_answers_count") or 0),
+                "live_open_eligible": int(position_summary.get("live_open_eligible_count") or 0),
+            },
+            "source_artifacts": ["position_execution_audit", "apply_queue_autofill_packet"],
+        },
+        {
+            "id": "local_synthetic_submit_100",
+            "requirement": "Run fake/local synthetic application execution through the 100 selected positions without selector misses.",
+            "status": "proved"
+            if int(position_summary.get("local_synthetic_submit_position_count") or 0) >= 100
+            and int(position_summary.get("selector_miss_position_count") or 0) == 0
+            and int(position_summary.get("synthetic_after_answers_selector_miss_position_count") or 0) == 0
+            else "missing_evidence",
+            "evidence": {
+                "local_synthetic_submit_positions": int(position_summary.get("local_synthetic_submit_position_count") or 0),
+                "local_synthetic_submit_count": int(position_summary.get("local_synthetic_submit_count") or 0),
+                "selector_miss_positions": int(position_summary.get("selector_miss_position_count") or 0),
+                "synthetic_after_answers_selector_miss_positions": int(position_summary.get("synthetic_after_answers_selector_miss_position_count") or 0),
+            },
+            "source_artifacts": ["position_execution_audit", "submission_safety_audit"],
+        },
+        {
+            "id": "question_and_answer_dependency_map",
+            "requirement": "Summarize observed questions and map unresolved reusable answers for the selected 100-position queue.",
+            "status": "proved"
+            if bool(dependency_summary.get("all_selected_dependencies_accounted_for"))
+            and int(dependency_summary.get("selected_position_count") or 0) >= 100
+            else "missing_evidence",
+            "evidence": {
+                "selected_positions": int(dependency_summary.get("selected_position_count") or 0),
+                "known_unresolved_alias_count": int(dependency_summary.get("known_unresolved_alias_count") or 0),
+                "known_unresolved_aliases": _string_list(dependency_summary.get("known_unresolved_aliases")),
+                "ready_after_truthful_answers": int(dependency_summary.get("ready_after_truthful_answers_count") or 0),
+                "all_dependencies_accounted_for": bool(dependency_summary.get("all_selected_dependencies_accounted_for")),
+                "question_items": int(playbook_summary.get("research_question_item_count") or 0),
+            },
+            "source_artifacts": ["selected_answer_dependencies", "platform_question_playbook"],
+        },
+        {
+            "id": "truthful_answer_gate",
+            "requirement": "Use the user's truthful reusable answers before real supervised autofill.",
+            "status": "blocked_on_user_answers" if blocking_aliases else "proved",
+            "evidence": {
+                "latest_answer_count": int(
+                    latest_validation.get("answer_input_count")
+                    or handoff_summary.get("latest_final_answer_validation_answer_count")
+                    or 0
+                ),
+                "latest_ready_count": int(
+                    latest_validation.get("ready_alias_count")
+                    or handoff_summary.get("latest_final_answer_validation_ready_count")
+                    or 0
+                ),
+                "blocking_aliases": blocking_aliases,
+                "safe_to_resume_after_answers": bool(
+                    latest_validation.get("safe_to_resume_after_answers")
+                    or handoff_summary.get("latest_final_answer_validation_safe_to_resume")
+                ),
+                "one_command_resume": one_command_resume,
+            },
+            "source_artifacts": ["goal_readiness_audit", "automation_handoff", "final_answer_autopilot"],
+        },
+        {
+            "id": "submission_safety_boundary",
+            "requirement": "Do not submit fake data to real employers and keep final submit as a supervised stop.",
+            "status": "proved"
+            if bool(safety.get("safe"))
+            and int(safety.get("issue_count") or 0) == 0
+            and int(safety_summary.get("apply_packet_final_submit_stop_count") or position_summary.get("final_submit_stop_count") or 0) >= 100
+            else "missing_evidence",
+            "evidence": {
+                "safety_status": safety.get("status", ""),
+                "issues": int(safety.get("issue_count") or 0),
+                "warnings": int(safety.get("warning_count") or 0),
+                "final_submit_stops": int(safety_summary.get("apply_packet_final_submit_stop_count") or position_summary.get("final_submit_stop_count") or 0),
+                "unsafe_real_submit_positions": int(position_summary.get("unsafe_real_submit_position_count") or 0),
+                "real_employer_unattended_submit_allowed": bool(verdict.get("real_employer_unattended_submit_allowed")),
+            },
+            "source_artifacts": ["submission_safety_audit", "position_execution_audit", "goal_readiness_audit"],
+        },
+        {
+            "id": "resume_and_open_runbook",
+            "requirement": "Expose the next resume command for applying approved answers, live-checking, and opening the 100-position queue.",
+            "status": "proved" if "resume-after-answers" in one_command_resume else "missing_evidence",
+            "evidence": {
+                "one_command_resume": one_command_resume,
+                "next_commands": next_commands[:6],
+            },
+            "source_artifacts": ["automation_handoff"],
+        },
+    ]
+    complete_statuses = {"proved", "supervised_policy_gate"}
+    proved_count = sum(1 for row in requirements if row.get("status") in complete_statuses)
+    blocking_rows = [row for row in requirements if row.get("status") == "blocked_on_user_answers"]
+    missing_rows = [row for row in requirements if row.get("status") not in complete_statuses and row.get("status") != "blocked_on_user_answers"]
+    goal_complete = bool(goal.get("goal_complete"))
+    status = (
+        "complete"
+        if goal_complete and not blocking_rows and not missing_rows
+        else "waiting_for_truthful_user_answers"
+        if blocking_rows and not missing_rows
+        else "needs_evidence"
+    )
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "goal_proof_report",
+        "status": status,
+        "summary": {
+            "goal_complete": goal_complete,
+            "completion_verdict": verdict.get("status", ""),
+            "requirement_count": len(requirements),
+            "proved_count": proved_count,
+            "blocking_count": len(blocking_rows),
+            "missing_count": len(missing_rows),
+            "blocking_requirement_ids": [row.get("id") for row in blocking_rows],
+            "missing_requirement_ids": [row.get("id") for row in missing_rows],
+            "blocking_final_answer_aliases": blocking_aliases,
+            "selected_positions": int(position_summary.get("position_count") or 0),
+            "local_synthetic_submit_positions": int(position_summary.get("local_synthetic_submit_position_count") or 0),
+            "selector_miss_positions": int(position_summary.get("selector_miss_position_count") or 0),
+            "final_submit_stop_positions": int(position_summary.get("final_submit_stop_position_count") or 0),
+            "closed_registry_count": _closed_registry_count(closed),
+            "preflight_open_eligible": int(preflight.get("open_eligible_count") or 0),
+            "question_items": int(playbook_summary.get("research_question_item_count") or 0),
+            "can_unattended_submit_real_employers": bool(goal.get("can_unattended_submit_real_employers")),
+            "one_command_resume": one_command_resume,
+        },
+        "requirements": requirements,
+        "completion_verdict": verdict,
+        "next_commands": next_commands,
+        "policy": {
+            "fake_data_real_submission_allowed": False,
+            "real_employer_final_submit_supervised": True,
+            "closed_preflight_required_before_open": True,
+            "proof_does_not_store_answer_text": True,
+        },
+    }
+
+
+def write_goal_proof_report(
+    json_output: str | Path,
+    markdown_output: str | Path,
+    html_output: str | Path,
+    *,
+    goal_readiness_audit: dict[str, Any] | None = None,
+    automation_handoff: dict[str, Any] | None = None,
+    coverage_gate: dict[str, Any] | None = None,
+    closed_preflight: dict[str, Any] | None = None,
+    closed_jobs: dict[str, Any] | None = None,
+    platform_question_playbook: dict[str, Any] | None = None,
+    position_execution_audit: dict[str, Any] | None = None,
+    selected_answer_dependencies: dict[str, Any] | None = None,
+    submission_safety_audit: dict[str, Any] | None = None,
+    source_paths: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    report = build_goal_proof_report(
+        goal_readiness_audit=goal_readiness_audit,
+        automation_handoff=automation_handoff,
+        coverage_gate=coverage_gate,
+        closed_preflight=closed_preflight,
+        closed_jobs=closed_jobs,
+        platform_question_playbook=platform_question_playbook,
+        position_execution_audit=position_execution_audit,
+        selected_answer_dependencies=selected_answer_dependencies,
+        submission_safety_audit=submission_safety_audit,
+    )
+    report["source_paths"] = dict(source_paths or {})
+    report["outputs"] = {
+        "json": str(json_output),
+        "markdown": str(markdown_output),
+        "html": str(html_output),
+    }
+    json_path = Path(json_output)
+    markdown_path = Path(markdown_output)
+    html_path = Path(html_output)
+    for path in [json_path, markdown_path, html_path]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write_json(json_path, report)
+    markdown_path.write_text(render_goal_proof_markdown(report), encoding="utf-8")
+    html_path.write_text(render_goal_proof_html(report), encoding="utf-8")
+    return report
+
+
+def render_goal_proof_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    lines = [
+        "# Goal Completion Proof",
+        "",
+        f"Generated: {report.get('generated_at')}",
+        f"Status: {report.get('status')}",
+        f"Goal complete: {str(bool(summary.get('goal_complete'))).lower()}",
+        f"Proved items: {summary.get('proved_count', 0)} / {summary.get('requirement_count', 0)}",
+        f"Blocking items: {summary.get('blocking_count', 0)}",
+        "- blocking final-answer aliases: "
+        + (", ".join(summary.get("blocking_final_answer_aliases") or []) or "none"),
+        f"- selected positions: {summary.get('selected_positions', 0)}",
+        f"- local synthetic submit positions: {summary.get('local_synthetic_submit_positions', 0)}",
+        f"- selector-miss positions: {summary.get('selector_miss_positions', 0)}",
+        f"- final-submit stop positions: {summary.get('final_submit_stop_positions', 0)}",
+        f"- closed registry count: {summary.get('closed_registry_count', 0)}",
+        f"- live preflight open eligible: {summary.get('preflight_open_eligible', 0)}",
+        f"- question items: {summary.get('question_items', 0)}",
+        f"- unattended real employer submit: {str(bool(summary.get('can_unattended_submit_real_employers'))).lower()}",
+        f"- one-command resume: `{summary.get('one_command_resume', '')}`",
+        "",
+        "## Requirements",
+        "",
+    ]
+    lines.extend(
+        _simple_markdown_table(
+            ["ID", "Status", "Requirement", "Evidence"],
+            [
+                [
+                    row.get("id"),
+                    row.get("status"),
+                    row.get("requirement"),
+                    _goal_proof_evidence_text(row.get("evidence") or {}),
+                ]
+                for row in report.get("requirements") or []
+            ],
+        )
+    )
+    lines.extend(["", "## Source Artifacts", ""])
+    source_paths = report.get("source_paths") or {}
+    if source_paths:
+        for key, value in sorted(source_paths.items()):
+            lines.append(f"- {key}: `{value}`")
+    else:
+        lines.append("- None")
+    lines.extend(["", "## Next Commands", ""])
+    commands = report.get("next_commands") or []
+    if commands:
+        for command in commands[:12]:
+            lines.append(f"- `{command}`")
+    else:
+        lines.append("- None")
+    lines.extend(["", "## Policy", ""])
+    for key, value in sorted((report.get("policy") or {}).items()):
+        lines.append(f"- {key}: {value}")
+    return "\n".join(lines) + "\n"
+
+
+def render_goal_proof_html(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    return "\n".join(
+        [
+            "<!doctype html>",
+            '<html lang="en">',
+            "<head>",
+            '<meta charset="utf-8">',
+            '<meta name="viewport" content="width=device-width, initial-scale=1">',
+            "<title>Goal Completion Proof</title>",
+            "<style>",
+            _question_export_css(),
+            "</style>",
+            "</head>",
+            "<body>",
+            "<main>",
+            "<h1>Goal Completion Proof</h1>",
+            f"<p class=\"muted\">Generated: {_html_escape(report.get('generated_at'))}</p>",
+            _html_kpis(
+                [
+                    ("Status", report.get("status")),
+                    ("Goal complete", str(bool(summary.get("goal_complete"))).lower()),
+                    ("Proved", f"{summary.get('proved_count', 0)} / {summary.get('requirement_count', 0)}"),
+                    ("Blocking", summary.get("blocking_count", 0)),
+                    ("Selected positions", summary.get("selected_positions", 0)),
+                    ("Synthetic submits", summary.get("local_synthetic_submit_positions", 0)),
+                    ("Selector misses", summary.get("selector_miss_positions", 0)),
+                    ("Final stops", summary.get("final_submit_stop_positions", 0)),
+                    ("Closed registry", summary.get("closed_registry_count", 0)),
+                    ("Open preflight", summary.get("preflight_open_eligible", 0)),
+                    (
+                        "Blocking aliases",
+                        ", ".join(summary.get("blocking_final_answer_aliases") or []) or "none",
+                    ),
+                ]
+            ),
+            "<section><h2>Requirements</h2>",
+            _html_table(
+                ["ID", "Status", "Requirement", "Evidence", "Artifacts"],
+                [
+                    [
+                        row.get("id"),
+                        row.get("status"),
+                        row.get("requirement"),
+                        _goal_proof_evidence_text(row.get("evidence") or {}),
+                        ", ".join(_string_list(row.get("source_artifacts"))),
+                    ]
+                    for row in report.get("requirements") or []
+                ],
+            ),
+            "</section>",
+            "<section><h2>Source Artifacts</h2>",
+            _html_key_value_table(report.get("source_paths") or {}),
+            "</section>",
+            "<section><h2>Next Commands</h2>",
+            _html_table(
+                ["Command"],
+                [[command] for command in (report.get("next_commands") or [])[:12]],
+            ),
+            "</section>",
+            "<section><h2>Policy</h2>",
+            _html_key_value_table(report.get("policy") or {}),
+            "</section>",
+            "</main>",
+            "</body>",
+            "</html>",
+        ]
+    )
+
+
+def _goal_proof_evidence_text(evidence: dict[str, Any]) -> str:
+    return "; ".join(
+        f"{key}={json.dumps(value, ensure_ascii=True) if isinstance(value, (list, dict)) else value}"
+        for key, value in evidence.items()
+    )
+
+
+def _goal_proof_requirement_status(goal: dict[str, Any], requirement_id: str) -> str:
+    for row in goal.get("requirements") or []:
+        if isinstance(row, dict) and row.get("id") == requirement_id:
+            return str(row.get("status") or "")
+    return ""
+
+
+def _goal_proof_closed_filter_ready(
+    goal: dict[str, Any],
+    closed_preflight: dict[str, Any],
+    closed_jobs: dict[str, Any],
+) -> bool:
+    if _goal_proof_requirement_status(goal, "closed_posting_filter") == "achieved":
+        return True
+    return bool(
+        _closed_registry_count(closed_jobs) >= 0
+        and int(closed_preflight.get("candidate_count") or 0) >= 100
+        and int(closed_preflight.get("live_checked_count") or 0) >= 100
+        and int(closed_preflight.get("open_eligible_count") or 0) >= 100
+        and int(closed_preflight.get("uncertain_count") or 0) == 0
+        and int(closed_preflight.get("identity_unverified_count") or 0) == 0
+        and int(closed_preflight.get("error_count") or 0) == 0
+    )
+
+
 def render_goal_readiness_audit_markdown(audit: dict[str, Any]) -> str:
     summary = audit.get("blocker_summary") or {}
     verdict = audit.get("completion_verdict") if isinstance(audit.get("completion_verdict"), dict) else {}
@@ -18929,6 +19364,7 @@ def _automation_handoff_next_commands(summary: dict[str, Any]) -> list[str]:
         "python3 -m job_apply_agent selected-answer-dependencies",
         "python3 -m job_apply_agent apply-queue-handoff --open-browser --open-limit 100",
         "python3 -m job_apply_agent automation-handoff",
+        "python3 -m job_apply_agent goal-proof",
         "python3 -m job_apply_agent export-questions",
     ]
     if summary.get("updates_ready_for_apply"):
