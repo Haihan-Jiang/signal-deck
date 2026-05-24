@@ -14,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from .core import (
+    FINAL_ANSWER_INTAKE_ALIASES,
     FINAL_ANSWER_INTAKE_EXAMPLE_SHAPES,
     FINAL_ANSWER_INTAKE_FORMAT_HINTS,
     FINAL_ANSWER_INTAKE_SPECIFICITY_HINTS,
@@ -3797,6 +3798,7 @@ def main() -> int:
                 print("Placeholder aliases: " + ", ".join(placeholder_aliases))
             return 2
         args.command = "final-answer-reply"
+        args.resume_after_answers = True
         args.template = str(args.template)
         args.unblockers = str(args.unblockers)
         args.reply_text = resume_reply_text
@@ -3952,6 +3954,15 @@ def main() -> int:
             raise FileNotFoundError(f"critical input unblockers not found: {args.unblockers}")
         template_payload = json.loads(template_path.read_text(encoding="utf-8"))
         unblockers_payload = json.loads(unblockers_path.read_text(encoding="utf-8"))
+        if args.validate_only and bool(getattr(args, "resume_after_answers", False)):
+            fallback_unblockers = _resume_validation_fallback_unblockers(
+                template_payload,
+                unblockers_payload,
+                str(reply_text or ""),
+            )
+            if fallback_unblockers is not None:
+                unblockers_payload = fallback_unblockers
+                template_payload = build_final_answer_intake_template(fallback_unblockers)
         if args.validate_only:
             report = build_final_answer_reply_intake(
                 template_payload,
@@ -6547,6 +6558,46 @@ def _write_post_answer_pipeline_report(
     markdown_path.parent.mkdir(parents=True, exist_ok=True)
     json_path.write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
     markdown_path.write_text(_render_post_answer_pipeline_markdown(report), encoding="utf-8")
+
+
+def _resume_validation_fallback_unblockers(
+    template_payload: dict[str, object],
+    unblockers_payload: dict[str, object],
+    reply_text: str,
+) -> dict[str, object] | None:
+    if template_payload.get("fields") or template_payload.get("answers"):
+        return None
+    if unblockers_payload.get("unblockers"):
+        return None
+    if not str(reply_text or "").strip():
+        return None
+    rows: list[dict[str, object]] = []
+    for input_id, alias in FINAL_ANSWER_INTAKE_ALIASES.items():
+        high_risk = alias != "zip_or_postal_code"
+        rows.append(
+            {
+                "input_id": input_id,
+                "question": FINAL_ANSWER_INTAKE_FORMAT_HINTS.get(alias, alias),
+                "required_user_response": FINAL_ANSWER_INTAKE_EXAMPLE_SHAPES.get(alias, ""),
+                "input_type": "high_risk_exact_confirmation" if high_risk else "profile_or_resume_fact",
+                "approval_risk": "high" if high_risk else "needs_review",
+                "high_risk": high_risk,
+                "required_count": 0,
+                "platforms": [],
+                "labels": [alias],
+                "why_not_inferred": "resume validate-only fallback for already-resolved final answer blockers",
+            }
+        )
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "resume_after_answers_validate_only_fallback_unblockers",
+        "unblockers": rows,
+        "policy": {
+            "validate_only": True,
+            "writes_profile_or_memory": False,
+            "submits_real_applications": False,
+        },
+    }
 
 
 def _render_post_answer_pipeline_markdown(report: dict[str, object]) -> str:

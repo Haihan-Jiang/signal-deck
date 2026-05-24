@@ -12289,6 +12289,180 @@ class JobApplyAgentTests(unittest.TestCase):
             selected_ready_audit["blocker_summary"]["position_execution_global_remaining_user_answers"],
             2,
         )
+        ready_gaps = {
+            **gaps,
+            "coverage_counts": {"final_submit_confirmation": 1, "sensitive_not_stored": 3},
+        }
+        ready_readiness = {
+            **readiness,
+            "manual_gate_count": 1,
+        }
+        ready_critical_status = {"summary": {"waiting_count": 0, "supervised_only_count": 1}}
+        ready_critical_updates = {
+            "summary": {
+                "update_entry_count": 6,
+                "waiting_after_update_count": 0,
+                "ready_after_update_count": 6,
+                "data_blocking_prompts_after": 0,
+                "unknown_updates": 0,
+                "high_risk_unconfirmed_count": 0,
+            },
+            "waiting_rows": [],
+        }
+        ready_playbook = json.loads(json.dumps(platform_question_playbook))
+        ready_playbook["summary"]["final_answer_missing_count"] = 0
+        ready_dependencies = json.loads(json.dumps(selected_answer_dependencies))
+        ready_dependencies["status"] = "ready_for_supervised_autofill"
+        ready_dependencies["summary"]["known_unresolved_alias_count"] = 0
+        ready_dependencies["summary"]["known_unresolved_aliases"] = []
+        ready_dependencies["summary"]["positions_with_final_answer_dependencies"] = 0
+        ready_dependencies["summary"]["direct_dependency_prompt_count"] = 0
+        ready_dependencies["summary"]["global_blockers_not_seen_in_selected_positions"] = []
+        ready_position_execution_audit["summary"]["global_remaining_user_answer_count"] = 0
+        overwritten_synthetic_rehearsal = {
+            "status": "synthetic_queue_rehearsal_not_ready",
+            "source": "final_answer_reply_synthetic_rehearsal",
+            "ready_for_workflow": True,
+            "synthetic_final_answers": True,
+            "synthetic_queue_rehearsal_requested": True,
+            "policy": {"submits_real_applications": False},
+            "final_answer_intake_report": {
+                "summary": {
+                    "answer_input_count": 0,
+                    "missing_unblocker_count": 0,
+                    "unconfirmed_high_risk_count": 0,
+                    "needs_more_specific_answer_count": 0,
+                    "unknown_answer_count": 0,
+                }
+            },
+            "synthetic_queue_rehearsal": {
+                "ready_for_supervised_browser_autofill": False,
+                "submits_real_applications": False,
+                "autofill_packet_selected": 100,
+                "autofill_packet_selector_misses": 0,
+                "autofill_packet_final_submit_stops": 100,
+            },
+        }
+        direct_submission_safety = {
+            "status": "safe",
+            "safe": True,
+            "issue_count": 0,
+            "warning_count": 0,
+            "summary": {
+                "post_answer_status": "ready_for_supervised_autofill",
+                "post_answer_synthetic_queue_ready": False,
+                "post_answer_synthetic_autofill_selected_count": 0,
+                "post_answer_synthetic_selector_miss_count": 0,
+                "post_answer_synthetic_final_submit_stop_count": 0,
+                "apply_packet_selected_count": 100,
+                "apply_packet_selector_miss_count": 0,
+                "apply_packet_final_submit_stop_count": 100,
+            },
+            "checks": [
+                {"id": "apply_queue_final_submit_stop_coverage", "status": "pass"},
+                {"id": "apply_queue_no_unattended_real_submit", "status": "pass"},
+            ],
+        }
+        successful_final_answer_autopilot = {
+            "status": "pipeline_complete",
+            "reply_source": "inline",
+            "reply_file": "<inline reply text redacted>",
+            "base_reply_file": "/tmp/final_answer_user_input_needed 2.numbers",
+            "apply_requested": True,
+            "open_browser_requested": False,
+            "submits_real_applications": False,
+            "final_submit_remains_supervised": True,
+            "pipeline_exit_code": 0,
+            "validation_receipt": {
+                "available": True,
+                "ready_for_finalize": True,
+                "parser_has_errors": False,
+                "answer_receipt": {
+                    "required_aliases": [
+                        "zip_or_postal_code",
+                        "citizenship_status",
+                        "background_or_export_control",
+                        "country_work_permit",
+                        "interview_recording_consent",
+                        "health_requirement",
+                    ],
+                    "present_aliases": [
+                        "zip_or_postal_code",
+                        "citizenship_status",
+                        "background_or_export_control",
+                        "country_work_permit",
+                        "interview_recording_consent",
+                        "health_requirement",
+                    ],
+                    "ready_aliases": [
+                        "zip_or_postal_code",
+                        "citizenship_status",
+                        "background_or_export_control",
+                        "country_work_permit",
+                        "interview_recording_consent",
+                        "health_requirement",
+                    ],
+                    "missing_aliases": [],
+                    "unconfirmed_high_risk_aliases": [],
+                    "needs_more_specific_aliases": [],
+                    "unknown_answer_keys": [],
+                    "safe_to_resume_after_answers": True,
+                    "answer_text_stored_in_receipt": False,
+                    "submits_real_applications": False,
+                },
+                "reply_summary": {"answer_count": 6, "unknown_key_count": 0},
+                "intake_summary": {
+                    "answer_input_count": 6,
+                    "missing_unblocker_count": 0,
+                    "unconfirmed_high_risk_count": 0,
+                    "needs_more_specific_answer_count": 0,
+                    "unknown_answer_count": 0,
+                },
+                "problem_fields": [],
+            },
+        }
+        completed_audit = build_goal_readiness_audit(
+            coverage_gate,
+            ready_gaps,
+            ready_readiness,
+            critical_input_status=ready_critical_status,
+            critical_input_updates_readiness=ready_critical_updates,
+            fake_learning_probe=fake_learning_probe,
+            fake_critical_input_probe=fake_critical,
+            fake_position_rehearsal=fake_rehearsal,
+            autofill_batch_plan=autofill_batch,
+            synthetic_unblocker_proof=synthetic_unblocker_proof,
+            post_answer_pipeline=overwritten_synthetic_rehearsal,
+            closed_preflight=closed_preflight,
+            closed_jobs=closed_jobs,
+            platform_question_playbook=ready_playbook,
+            position_execution_audit=ready_position_execution_audit,
+            selected_answer_dependencies=ready_dependencies,
+            submission_safety_audit=direct_submission_safety,
+            final_answer_autopilot=successful_final_answer_autopilot,
+        )
+        completed_requirements = {
+            item["id"]: item for item in completed_audit["requirements"]
+        }
+        self.assertEqual(completed_audit["status"], "selected_100_supervised_autofill_ready")
+        self.assertTrue(completed_audit["goal_complete"])
+        self.assertEqual(completed_audit["completion_verdict"]["status"], "complete")
+        self.assertEqual(completed_audit["completion_verdict"]["blocking_requirement_ids"], [])
+        self.assertTrue(
+            completed_requirements["final_answer_text_reply_rehearsal"]["evidence"][
+                "final_answer_autopilot_pipeline_ready"
+            ]
+        )
+        self.assertTrue(
+            completed_requirements["submission_safety_gate"]["evidence"][
+                "post_answer_apply_queue_100_ready"
+            ]
+        )
+        self.assertFalse(
+            completed_requirements["submission_safety_gate"]["evidence"][
+                "post_answer_synthetic_rehearsal_100_ready"
+            ]
+        )
         self.assertEqual(audit["requirements"][4]["status"], "achieved")
         self.assertEqual(audit["top_data_blocking_prompts"][0]["coverage_status"], "needs_user_confirmation")
         self.assertIn("Goal Readiness Audit", markdown)

@@ -16064,6 +16064,35 @@ def build_goal_readiness_audit(
     safety_audit = submission_safety_audit or {}
     safety_summary = safety_audit.get("summary") or {}
     latest_final_answer_validation = _goal_final_answer_validation_summary(final_answer_autopilot)
+    final_answer_autopilot_report = (
+        final_answer_autopilot if isinstance(final_answer_autopilot, dict) else {}
+    )
+    latest_final_answer_required_aliases = _string_list(
+        latest_final_answer_validation.get("required_aliases")
+    )
+    latest_final_answer_validation_ready = bool(
+        latest_final_answer_validation
+        and latest_final_answer_validation.get("ready_for_finalize")
+        and latest_final_answer_validation.get("safe_to_resume_after_answers")
+        and int(latest_final_answer_validation.get("ready_alias_count") or 0)
+        >= len(latest_final_answer_required_aliases)
+        and len(latest_final_answer_required_aliases) > 0
+        and int(latest_final_answer_validation.get("missing_alias_count") or 0) == 0
+        and int(latest_final_answer_validation.get("unconfirmed_high_risk_alias_count") or 0) == 0
+        and int(latest_final_answer_validation.get("needs_more_specific_alias_count") or 0) == 0
+        and int(latest_final_answer_validation.get("unknown_answer_count") or 0) == 0
+        and not latest_final_answer_validation.get("answer_text_stored_in_receipt")
+        and not latest_final_answer_validation.get("submits_real_applications")
+    )
+    final_answer_autopilot_pipeline_ready = bool(
+        final_answer_autopilot_report.get("status") == "pipeline_complete"
+        and int(final_answer_autopilot_report.get("pipeline_exit_code") or 0) == 0
+        and final_answer_autopilot_report.get("apply_requested")
+        and not final_answer_autopilot_report.get("open_browser_requested")
+        and not final_answer_autopilot_report.get("submits_real_applications")
+        and final_answer_autopilot_report.get("final_submit_remains_supervised", True)
+        and latest_final_answer_validation_ready
+    )
     synthetic = coverage_gate.get("synthetic") or {}
     readiness_counts = readiness.get("readiness_counts") or {}
     closed_count = _closed_registry_count(closed_jobs)
@@ -16237,6 +16266,21 @@ def build_goal_readiness_audit(
         and post_answer_intake_unknown == 0
         and post_answer_synthetic_queue_ready
     )
+    post_answer_direct_intake_ready = bool(
+        post_answer_intake_answer_count >= 6
+        and post_answer_intake_missing == 0
+        and post_answer_intake_unconfirmed == 0
+        and post_answer_intake_needs_specificity == 0
+        and post_answer_intake_unknown == 0
+    )
+    post_answer_direct_pipeline_ready = bool(
+        post_answer.get("source") == "post_answer_pipeline"
+        and post_answer.get("status") == "ready_for_supervised_autofill"
+        and post_answer.get("ready_for_workflow")
+        and int(post_answer.get("autofill_packet_selected") or 0) >= 100
+        and post_answer_direct_intake_ready
+        and not post_answer_synthetic_submits_real
+    )
     playbook_target_count = int(playbook_summary.get("target_platform_count") or 0)
     playbook_target_met_count = int(playbook_summary.get("target_platforms_at_100_count") or 0)
     playbook_selected_count = int(playbook_summary.get("selected_position_count") or 0)
@@ -16349,14 +16393,41 @@ def build_goal_readiness_audit(
     safety_post_answer_synthetic_final_submit_stops = int(
         safety_summary.get("post_answer_synthetic_final_submit_stop_count") or 0
     )
+    safety_apply_packet_selected = int(safety_summary.get("apply_packet_selected_count") or 0)
+    safety_apply_packet_selector_misses = int(
+        safety_summary.get("apply_packet_selector_miss_count") or 0
+    )
+    safety_apply_packet_final_submit_stops = int(
+        safety_summary.get("apply_packet_final_submit_stop_count") or 0
+    )
     safety_synthetic_rehearsal_ready = safety_checks.get(
         "post_answer_synthetic_rehearsal_100_ready"
     ) == "pass"
     safety_final_submit_stop_ready = safety_checks.get("apply_queue_final_submit_stop_coverage") == "pass"
     safety_real_submit_blocked = safety_checks.get("apply_queue_no_unattended_real_submit") == "pass"
+    safety_apply_queue_100_ready = bool(
+        safety_apply_packet_selected >= 100
+        and safety_apply_packet_selector_misses == 0
+        and safety_apply_packet_final_submit_stops >= safety_apply_packet_selected
+        and safety_apply_packet_final_submit_stops >= 100
+    )
+    post_answer_apply_queue_ready = bool(
+        (post_answer_direct_pipeline_ready or final_answer_autopilot_pipeline_ready)
+        and position_audit_ready
+        and dependency_ready
+        and safety_apply_queue_100_ready
+        and safety_final_submit_stop_ready
+        and safety_real_submit_blocked
+    )
+    post_answer_text_reply_rehearsal_ready = bool(
+        post_answer_text_reply_rehearsal_ready or post_answer_apply_queue_ready
+    )
+    post_answer_recovery_ready = bool(
+        safety_synthetic_rehearsal_ready or post_answer_apply_queue_ready
+    )
     safety_ready = bool(
         safety_safe
-        and safety_synthetic_rehearsal_ready
+        and post_answer_recovery_ready
         and safety_final_submit_stop_ready
         and safety_real_submit_blocked
     )
@@ -16514,6 +16585,10 @@ def build_goal_readiness_audit(
                 "synthetic_selected_count": post_answer_synthetic_selected,
                 "synthetic_selector_miss_count": post_answer_synthetic_selector_misses,
                 "synthetic_final_submit_stop_count": post_answer_synthetic_final_submit_stops,
+                "direct_pipeline_ready": post_answer_direct_pipeline_ready,
+                "latest_final_answer_validation_ready": latest_final_answer_validation_ready,
+                "final_answer_autopilot_pipeline_ready": final_answer_autopilot_pipeline_ready,
+                "post_answer_apply_queue_ready": post_answer_apply_queue_ready,
                 "real_platform_submission": post_answer_synthetic_submits_real,
             },
         },
@@ -16587,11 +16662,15 @@ def build_goal_readiness_audit(
                 "issue_count": safety_issue_count,
                 "warning_count": safety_warning_count,
                 "post_answer_synthetic_rehearsal_100_ready": safety_synthetic_rehearsal_ready,
+                "post_answer_apply_queue_100_ready": post_answer_apply_queue_ready,
                 "apply_queue_final_submit_stop_coverage": safety_final_submit_stop_ready,
                 "apply_queue_no_unattended_real_submit": safety_real_submit_blocked,
                 "post_answer_synthetic_selected": safety_post_answer_synthetic_selected,
                 "post_answer_synthetic_selector_misses": safety_post_answer_synthetic_selector_misses,
                 "post_answer_synthetic_final_submit_stops": safety_post_answer_synthetic_final_submit_stops,
+                "apply_packet_selected": safety_apply_packet_selected,
+                "apply_packet_selector_misses": safety_apply_packet_selector_misses,
+                "apply_packet_final_submit_stops": safety_apply_packet_final_submit_stops,
             },
         },
         {
@@ -16789,6 +16868,10 @@ def build_goal_readiness_audit(
             "post_answer_synthetic_autofill_selected_count": post_answer_synthetic_selected,
             "post_answer_synthetic_selector_miss_count": post_answer_synthetic_selector_misses,
             "post_answer_synthetic_final_submit_stop_count": post_answer_synthetic_final_submit_stops,
+            "post_answer_direct_pipeline_ready": post_answer_direct_pipeline_ready,
+            "post_answer_latest_final_answer_validation_ready": latest_final_answer_validation_ready,
+            "post_answer_final_answer_autopilot_pipeline_ready": final_answer_autopilot_pipeline_ready,
+            "post_answer_apply_queue_ready": post_answer_apply_queue_ready,
             "post_answer_synthetic_submits_real_applications": post_answer_synthetic_submits_real,
             "fake_learning_blockers_cleared": fake_learning_cleared,
             "fake_learning_remaining_blockers": fake_learning_remaining_blockers,
@@ -16840,6 +16923,10 @@ def build_goal_readiness_audit(
             "submission_safety_post_answer_synthetic_selected_count": safety_post_answer_synthetic_selected,
             "submission_safety_post_answer_synthetic_selector_miss_count": safety_post_answer_synthetic_selector_misses,
             "submission_safety_post_answer_synthetic_final_submit_stop_count": safety_post_answer_synthetic_final_submit_stops,
+            "submission_safety_post_answer_apply_queue_100_ready": post_answer_apply_queue_ready,
+            "submission_safety_apply_packet_selected_count": safety_apply_packet_selected,
+            "submission_safety_apply_packet_selector_miss_count": safety_apply_packet_selector_misses,
+            "submission_safety_apply_packet_final_submit_stop_count": safety_apply_packet_final_submit_stops,
             "submission_safety_final_submit_stop_coverage": safety_final_submit_stop_ready,
             "submission_safety_no_unattended_real_submit": safety_real_submit_blocked,
             "selected_queue_supervised_autofill_ready": selected_queue_supervised_autofill_ready,
