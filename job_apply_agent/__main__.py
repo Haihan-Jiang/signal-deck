@@ -5023,8 +5023,8 @@ def _render_final_answer_revision_markdown(
         "",
         "This file intentionally redacts answer text. Revise only the rows below.",
         "",
-        "| Alias | Status | Reason | What to add | Expected shape |",
-        "| --- | --- | --- | --- | --- |",
+        "| Alias | Status | Reason | Missing claims | What to add | Expected shape |",
+        "| --- | --- | --- | --- | --- | --- |",
     ]
     for raw_field in problem_fields:
         if not isinstance(raw_field, dict):
@@ -5034,11 +5034,23 @@ def _render_final_answer_revision_markdown(
         reason = str(raw_field.get("specificity_reason") or "")
         hint = str(raw_field.get("hint") or "")
         expected_shape = str(raw_field.get("expected_shape") or "")
+        missing_claims = [
+            str(claim.get("label") or claim.get("id") or "").strip()
+            for claim in raw_field.get("missing_required_claims") or []
+            if isinstance(claim, dict) and str(claim.get("label") or claim.get("id") or "").strip()
+        ]
         lines.append(
             "| "
             + " | ".join(
                 _final_answer_markdown_cell(value)
-                for value in [alias, status, reason or "n/a", hint or "Use a specific reusable answer.", expected_shape or "n/a"]
+                for value in [
+                    alias,
+                    status,
+                    reason or "n/a",
+                    "; ".join(missing_claims) or "n/a",
+                    hint or "Use a specific reusable answer.",
+                    expected_shape or "n/a",
+                ]
             )
             + " |"
         )
@@ -5276,6 +5288,9 @@ def _final_answer_autopilot_validation_receipt(
                         or template_field.get("answer_example_shape")
                         or ""
                     ),
+                    "covered_claim_ids": field.get("covered_claim_ids") or [],
+                    "missing_required_claim_ids": field.get("missing_required_claim_ids") or [],
+                    "missing_required_claims": field.get("missing_required_claims") or [],
                     "observed_prompt": str(
                         (template_field.get("observed_prompt_examples") or [""])[0]
                         if isinstance(template_field.get("observed_prompt_examples"), list)

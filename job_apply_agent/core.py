@@ -5426,6 +5426,111 @@ FINAL_ANSWER_FAKE_VALUE_PATTERNS = [
 ]
 
 
+def _final_answer_claim_status(alias: str, answer_text: str) -> dict[str, Any]:
+    required_claims = FINAL_ANSWER_REQUIRED_CLAIMS.get(str(alias or ""), [])
+    if not required_claims:
+        return {
+            "covered_claim_ids": [],
+            "missing_required_claims": [],
+            "missing_required_claim_ids": [],
+        }
+    covered_ids = _final_answer_covered_required_claim_ids(alias, answer_text)
+    covered_set = set(covered_ids)
+    missing_claims = [
+        dict(claim)
+        for claim in required_claims
+        if str(claim.get("id") or "") not in covered_set
+    ]
+    return {
+        "covered_claim_ids": covered_ids,
+        "missing_required_claims": missing_claims,
+        "missing_required_claim_ids": [
+            str(claim.get("id") or "").strip()
+            for claim in missing_claims
+            if str(claim.get("id") or "").strip()
+        ],
+    }
+
+
+def _final_answer_covered_required_claim_ids(alias: str, answer_text: str) -> list[str]:
+    normalized = re.sub(r"\s+", " ", str(answer_text or "").strip().lower())
+    if not normalized:
+        return []
+    if alias == "citizenship_status":
+        return _final_answer_covered_citizenship_claim_ids(normalized)
+    if alias == "interview_recording_consent":
+        return _final_answer_covered_interview_claim_ids(normalized)
+    if alias == "background_or_export_control":
+        return _final_answer_covered_background_claim_ids(normalized)
+    if alias == "country_work_permit":
+        return _final_answer_covered_country_work_claim_ids(normalized)
+    if alias == "health_requirement":
+        return _final_answer_covered_health_claim_ids(normalized)
+    return []
+
+
+def _final_answer_covered_citizenship_claim_ids(normalized: str) -> list[str]:
+    checks = {
+        "citizenship": bool(re.search(r"\b(citizen|citizenship|nationality)\b|\u516c\u6c11|\u56fd\u7c4d", normalized)),
+        "us_citizen": bool(re.search(r"(?:u\.s\.|us|united states).{0,20}\bcitizen\b|\u7f8e\u56fd.{0,10}\u516c\u6c11", normalized)),
+        "permanent_resident": bool(re.search(r"\b(permanent resident|permanent residency|green card)\b|\u6c38\u4e45\u5c45\u6c11|\u7eff\u5361", normalized)),
+        "us_person": bool(re.search(r"\b(u\.s\. person|us person|u\.s\.-person|us-person)\b|\u7f8e\u56fd\u4eba", normalized)),
+        "restricted_country": bool(re.search(r"\b(restricted country|restricted countries|restricted-country)\b|\u53d7\u9650\u56fd\u5bb6|\u9650\u5236\u56fd\u5bb6", normalized)),
+        "visa_status": bool(re.search(r"\b(visa|status|h\s*[- ]?\s*1\s*b)\b|\u7b7e\u8bc1|\u8eab\u4efd", normalized)),
+        "h1b_status_rule": _h1b_answer_has_status_clause(normalized),
+        "h1b_transfer_rule": _h1b_answer_has_transfer_positive_clause(normalized),
+        "sponsorship_only_rule": _h1b_answer_has_sponsorship_only_negative_rule(normalized),
+    }
+    return [claim_id for claim_id, covered in checks.items() if covered]
+
+
+def _final_answer_covered_interview_claim_ids(normalized: str) -> list[str]:
+    checks = {
+        "recording": bool(re.search(r"\b(record|recording|audio|video)\b|\u5f55\u97f3|\u5f55\u50cf", normalized)),
+        "transcription": bool(re.search(r"\b(transcript|transcription|transcribe)\b|\u8f6c\u5f55|\u8f6c\u5199", normalized)),
+        "ai_notetaker": bool(re.search(r"\bai\b.{0,24}\b(note|notes|notetaker|note taker)\b|\b(note|notes|notetaker|note taker)\b.{0,24}\bai\b|ai.{0,12}(\u7b14\u8bb0|\u8bb0\u5f55)", normalized)),
+        "ai_analysis": bool(re.search(r"\bai\b.{0,24}\b(analysis|analy[sz]e|analytics)\b|\b(analysis|analy[sz]e|analytics)\b.{0,24}\bai\b|ai.{0,12}\u5206\u6790", normalized)),
+        "exceptions": _final_answer_mentions_exceptions(normalized),
+    }
+    return [claim_id for claim_id, covered in checks.items() if covered]
+
+
+def _final_answer_covered_background_claim_ids(normalized: str) -> list[str]:
+    checks = {
+        "background": bool(re.search(r"\b(background|background check|legal eligibility|debarment|indictment|felony|firearm|substance)\b|\u80cc\u666f|\u80cc\u8c03|\u6cd5\u5f8b|\u91cd\u7f6a", normalized)),
+        "export_control": bool(re.search(r"\b(export control|export-control)\b|\u51fa\u53e3\u7ba1\u5236", normalized)),
+        "exceptions": _final_answer_mentions_exceptions(normalized),
+    }
+    return [claim_id for claim_id, covered in checks.items() if covered]
+
+
+def _final_answer_covered_country_work_claim_ids(normalized: str) -> list[str]:
+    checks = {
+        "countries": bool(re.search(r"\b(country|countries|u\.s\.|us|united states|canada|uk|united kingdom|australia|singapore|china|taiwan)\b|\u56fd\u5bb6|\u7f8e\u56fd|\u52a0\u62ff\u5927|\u82f1\u56fd|\u6fb3\u5927\u5229\u4e9a|\u65b0\u52a0\u5761|\u4e2d\u56fd|\u53f0\u6e7e", normalized)),
+        "permit_scope": bool(re.search(r"\b(work authorization|right to work|work permit|permit|visa|sponsorship|sponsor)\b|\u5de5\u4f5c\u6388\u6743|\u5de5\u4f5c\u8bb8\u53ef|\u7b7e\u8bc1|\u62c5\u4fdd", normalized)),
+        "exceptions": _final_answer_mentions_exceptions(normalized),
+    }
+    return [claim_id for claim_id, covered in checks.items() if covered]
+
+
+def _final_answer_covered_health_claim_ids(normalized: str) -> list[str]:
+    checks = {
+        "health": bool(re.search(r"\b(health|vaccination|vaccine|client-site|client site|in-person|onsite)\b|\u5065\u5eb7|\u75ab\u82d7|\u63a5\u79cd|\u4f53\u68c0", normalized)),
+        "exceptions": _final_answer_mentions_exceptions(normalized),
+    }
+    return [claim_id for claim_id, covered in checks.items() if covered]
+
+
+def _final_answer_mentions_exceptions(normalized: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(exception|exceptions|no exception|no exceptions|none|n/a|without exception)\b"
+            r"|\u65e0\u4f8b\u5916|\u6ca1\u6709\u4f8b\u5916|\u4f8b\u5916",
+            normalized,
+        )
+    )
+
+
 def build_final_answer_intake_template(
     unblocker_packet: dict[str, Any],
     existing_intake_payload: dict[str, Any] | None = None,
@@ -5534,6 +5639,7 @@ def build_final_answer_intake_update(
         if answer_key:
             used_answer_keys.add(answer_key)
         answer_text, high_risk_confirmed = _final_answer_intake_answer_text(raw_value)
+        claim_status = _final_answer_claim_status(alias, answer_text)
         specific_enough, specificity_reason = _final_answer_intake_answer_specificity(
             alias,
             answer_text,
@@ -5547,6 +5653,7 @@ def build_final_answer_intake_update(
                     "input_id": input_id,
                     "status": "missing",
                     "high_risk": high_risk,
+                    **claim_status,
                 }
             )
             continue
@@ -5561,6 +5668,7 @@ def build_final_answer_intake_update(
                     "status": "needs_more_specific_answer",
                     "high_risk": high_risk,
                     "specificity_reason": specificity_reason,
+                    **claim_status,
                 }
             )
             continue
@@ -5586,6 +5694,7 @@ def build_final_answer_intake_update(
                 "status": status,
                 "high_risk": high_risk,
                 "specificity_reason": specificity_reason,
+                **claim_status,
             }
         )
 
@@ -5642,6 +5751,16 @@ def build_final_answer_intake_update(
         "safe_to_resume_after_answers": ready_for_finalize,
         "answer_text_stored_in_receipt": False,
         "submits_real_applications": False,
+        "covered_required_claim_ids_by_alias": {
+            str(row.get("alias") or ""): row.get("covered_claim_ids") or []
+            for row in fields
+            if str(row.get("alias") or "").strip() and row.get("covered_claim_ids")
+        },
+        "missing_required_claims_by_alias": {
+            str(row.get("alias") or ""): row.get("missing_required_claims") or []
+            for row in fields
+            if str(row.get("alias") or "").strip() and row.get("missing_required_claims")
+        },
     }
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -17603,6 +17722,18 @@ def _goal_final_answer_validation_summary(
                     "question": str(field.get("question") or "").strip(),
                     "hint": str(field.get("hint") or "").strip(),
                     "expected_shape": str(field.get("expected_shape") or "").strip(),
+                    "covered_claim_ids": _string_list(field.get("covered_claim_ids")),
+                    "missing_required_claim_ids": _string_list(
+                        field.get("missing_required_claim_ids")
+                    ),
+                    "missing_required_claims": [
+                        {
+                            "id": str(claim.get("id") or "").strip(),
+                            "label": str(claim.get("label") or "").strip(),
+                        }
+                        for claim in field.get("missing_required_claims") or []
+                        if isinstance(claim, dict)
+                    ],
                     "observed_prompt": str(field.get("observed_prompt") or "").strip(),
                 }
             )
@@ -25012,6 +25143,41 @@ def _final_answer_required_claims(alias: str) -> list[dict[str, str]]:
     return [dict(row) for row in FINAL_ANSWER_REQUIRED_CLAIMS.get(str(alias or ""), [])]
 
 
+def _final_answer_claim_status_for_report(
+    alias: str,
+    answer_text: str,
+    problem_field: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    status = _final_answer_claim_status(alias, answer_text)
+    if not isinstance(problem_field, dict):
+        return status
+    if "covered_claim_ids" in problem_field:
+        status["covered_claim_ids"] = _string_list(problem_field.get("covered_claim_ids"))
+    if "missing_required_claims" in problem_field:
+        status["missing_required_claims"] = [
+            {
+                "id": str(claim.get("id") or "").strip(),
+                "label": str(claim.get("label") or "").strip(),
+            }
+            for claim in problem_field.get("missing_required_claims") or []
+            if isinstance(claim, dict)
+        ]
+        status["missing_required_claim_ids"] = [
+            str(claim.get("id") or "").strip()
+            for claim in status["missing_required_claims"]
+            if str(claim.get("id") or "").strip()
+        ]
+    elif "missing_required_claim_ids" in problem_field:
+        missing_ids = _string_list(problem_field.get("missing_required_claim_ids"))
+        status["missing_required_claim_ids"] = missing_ids
+        status["missing_required_claims"] = [
+            claim
+            for claim in _final_answer_required_claims(alias)
+            if str(claim.get("id") or "") in set(missing_ids)
+        ]
+    return status
+
+
 def build_final_answer_blocker_report(
     template: dict[str, Any],
     goal_audit: dict[str, Any] | None = None,
@@ -25088,6 +25254,11 @@ def build_final_answer_blocker_report(
             observed_prompt = str(problem_field.get("observed_prompt") or "").strip()
             if observed_prompt and observed_prompt not in labels:
                 labels.append(observed_prompt)
+            claim_status = _final_answer_claim_status_for_report(
+                alias,
+                answer_text,
+                problem_field,
+            )
             blocker_rows.append(
                 {
                     "alias": alias,
@@ -25108,6 +25279,7 @@ def build_final_answer_blocker_report(
                     "required_user_response": field.get("required_user_response") or "",
                     "why_not_inferred": field.get("why_not_inferred") or "",
                     "required_claims": _final_answer_required_claims(alias),
+                    **claim_status,
                     "observed_prompt_count": len(labels),
                     "observed_prompt_examples": labels[:8],
                 }
@@ -25130,6 +25302,7 @@ def build_final_answer_blocker_report(
             else:
                 status = "needs_more_specific_answer"
         observed_prompt = str(problem_field.get("observed_prompt") or "").strip()
+        claim_status = _final_answer_claim_status_for_report(alias, "", problem_field)
         blocker_rows.append(
             {
                 "alias": alias,
@@ -25147,6 +25320,7 @@ def build_final_answer_blocker_report(
                 "required_user_response": "",
                 "why_not_inferred": "",
                 "required_claims": _final_answer_required_claims(alias),
+                **claim_status,
                 "observed_prompt_count": 1 if observed_prompt else 0,
                 "observed_prompt_examples": [observed_prompt] if observed_prompt else [],
             }
@@ -25375,6 +25549,12 @@ def build_final_answer_blocker_report(
             len(row.get("observed_prompt_examples") or []) for row in blocker_rows
         ),
         "required_claim_count": sum(len(row.get("required_claims") or []) for row in blocker_rows),
+        "covered_required_claim_count": sum(
+            len(row.get("covered_claim_ids") or []) for row in blocker_rows
+        ),
+        "missing_required_claim_count": sum(
+            len(row.get("missing_required_claims") or []) for row in blocker_rows
+        ),
     }
     automation_after_answers = {
         "status": (
@@ -26447,6 +26627,7 @@ def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
         f"Needs more specific answers: {summary.get('needs_more_specific_answer_count', 0)}",
         f"Position answers remaining: {summary.get('position_execution_remaining_user_answers', 0)}",
         f"Observed prompt examples: {summary.get('observed_prompt_example_count', 0)}",
+        f"Missing required claims: {summary.get('missing_required_claim_count', 0)}",
         "",
         "## Blocking Questions",
         "",
@@ -26486,6 +26667,8 @@ def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
     if blockers:
         for row in blockers:
             claims = row.get("required_claims") or []
+            missing_claim_ids = set(_string_list(row.get("missing_required_claim_ids")))
+            covered_claim_ids = set(_string_list(row.get("covered_claim_ids")))
             lines.append(f"- {row.get('alias')}")
             if claims:
                 for claim in claims:
@@ -26493,7 +26676,14 @@ def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
                         continue
                     claim_id = str(claim.get("id") or "").strip()
                     label = str(claim.get("label") or "").strip()
-                    lines.append(f"  - {claim_id}: {label}")
+                    claim_status = (
+                        "missing"
+                        if claim_id in missing_claim_ids
+                        else "covered"
+                        if claim_id in covered_claim_ids
+                        else "required"
+                    )
+                    lines.append(f"  - {claim_id}: {claim_status} - {label}")
             else:
                 lines.append("  - No structured claim checklist for this alias")
     else:
@@ -26674,12 +26864,24 @@ def render_final_answer_blocker_report_html(report: dict[str, Any]) -> str:
     claim_rows: list[list[Any]] = []
     for row in blockers:
         claims = row.get("required_claims") or []
+        missing_claim_ids = set(_string_list(row.get("missing_required_claim_ids")))
+        covered_claim_ids = set(_string_list(row.get("covered_claim_ids")))
         if claims:
             for claim in claims:
                 if isinstance(claim, dict):
-                    claim_rows.append([row.get("alias"), claim.get("id"), claim.get("label")])
+                    claim_id = str(claim.get("id") or "").strip()
+                    claim_status = (
+                        "missing"
+                        if claim_id in missing_claim_ids
+                        else "covered"
+                        if claim_id in covered_claim_ids
+                        else "required"
+                    )
+                    claim_rows.append(
+                        [row.get("alias"), claim_id, claim_status, claim.get("label")]
+                    )
         else:
-            claim_rows.append([row.get("alias"), "", "No structured claim checklist for this alias"])
+            claim_rows.append([row.get("alias"), "", "", "No structured claim checklist for this alias"])
         examples = row.get("observed_prompt_examples") or []
         platforms = ", ".join(str(platform) for platform in row.get("platforms") or [])
         if not examples:
@@ -26791,7 +26993,7 @@ def render_final_answer_blocker_report_html(report: dict[str, Any]) -> str:
             ),
             "</section>",
             "<section><h2>Required Claim Checklist</h2>",
-            _html_table(["Alias", "Claim ID", "Required claim"], claim_rows),
+            _html_table(["Alias", "Claim ID", "Status", "Required claim"], claim_rows),
             "</section>",
             "<section><h2>Observed Prompt Examples</h2>",
             _html_table(["Alias", "Platforms", "Example #", "Prompt"], observed_rows),
@@ -26891,13 +27093,19 @@ def build_telegram_final_answer_blocker_alert(
         example_shape = row.get("answer_example_shape")
         if example_shape:
             lines.append(f"   Shape: {example_shape}")
-        claims = [
+        missing_claims = [
+            str(claim.get("label") or "").strip()
+            for claim in row.get("missing_required_claims") or []
+            if isinstance(claim, dict) and str(claim.get("label") or "").strip()
+        ]
+        claims = missing_claims or [
             str(claim.get("label") or "").strip()
             for claim in row.get("required_claims") or []
             if isinstance(claim, dict) and str(claim.get("label") or "").strip()
         ]
         if claims:
-            lines.append(f"   Must cover: {'; '.join(claims[:5])}")
+            claim_label = "Missing" if missing_claims else "Must cover"
+            lines.append(f"   {claim_label}: {'; '.join(claims[:5])}")
             if len(claims) > 5:
                 lines.append("   More claim details in final_answer_blockers_latest.md")
     if len(blockers) > max_items:
@@ -33310,6 +33518,12 @@ def _final_answer_intake_export_rows(
                 "answer_example_shape": item.get("answer_example_shape")
                 or _final_answer_intake_example_shape(alias),
                 "specificity_reason": update_field.get("specificity_reason", ""),
+                "covered_claim_ids": ", ".join(_string_list(update_field.get("covered_claim_ids"))),
+                "missing_required_claims": "; ".join(
+                    str(claim.get("label") or claim.get("id") or "").strip()
+                    for claim in update_field.get("missing_required_claims") or []
+                    if isinstance(claim, dict)
+                ),
                 "platforms": ", ".join(_string_list(item.get("platforms"))),
                 "labels": "\n".join(_string_list(item.get("labels"))),
             }
@@ -33332,6 +33546,12 @@ def _final_answer_intake_export_rows(
                     "answer_specificity_hint": "",
                     "answer_example_shape": "",
                     "specificity_reason": item.get("specificity_reason", ""),
+                    "covered_claim_ids": ", ".join(_string_list(item.get("covered_claim_ids"))),
+                    "missing_required_claims": "; ".join(
+                        str(claim.get("label") or claim.get("id") or "").strip()
+                        for claim in item.get("missing_required_claims") or []
+                        if isinstance(claim, dict)
+                    ),
                     "platforms": "",
                     "labels": "",
                 }
@@ -34111,7 +34331,29 @@ def _write_question_export_xlsx(export: dict[str, Any], path: Path) -> None:
 def _write_final_answer_blocker_xlsx(report: dict[str, Any], path: Path) -> None:
     blockers = report.get("blockers") or []
     observed_rows: list[dict[str, Any]] = []
+    claim_rows: list[dict[str, Any]] = []
     for row in blockers:
+        missing_claim_ids = set(_string_list(row.get("missing_required_claim_ids")))
+        covered_claim_ids = set(_string_list(row.get("covered_claim_ids")))
+        for claim in row.get("required_claims") or []:
+            if not isinstance(claim, dict):
+                continue
+            claim_id = str(claim.get("id") or "").strip()
+            claim_status = (
+                "missing"
+                if claim_id in missing_claim_ids
+                else "covered"
+                if claim_id in covered_claim_ids
+                else "required"
+            )
+            claim_rows.append(
+                {
+                    "alias": row.get("alias"),
+                    "claim_id": claim_id,
+                    "status": claim_status,
+                    "required_claim": claim.get("label"),
+                }
+            )
         examples = row.get("observed_prompt_examples") or []
         platforms = ", ".join(str(platform) for platform in row.get("platforms") or [])
         if not examples:
@@ -34144,6 +34386,12 @@ def _write_final_answer_blocker_xlsx(report: dict[str, Any], path: Path) -> None
             "answer_format_hint": row.get("answer_format_hint"),
             "specificity_hint": row.get("answer_specificity_hint"),
             "example_shape": row.get("answer_example_shape"),
+            "missing_required_claims": "; ".join(
+                str(claim.get("label") or claim.get("id") or "").strip()
+                for claim in row.get("missing_required_claims") or []
+                if isinstance(claim, dict)
+            ),
+            "covered_claim_ids": ", ".join(_string_list(row.get("covered_claim_ids"))),
             "why_not_inferred": row.get("why_not_inferred"),
             "user_answer_placeholder": "<fill>",
             "confirmation_line": f"{row.get('alias')}_confirmed: yes" if row.get("high_risk") else "",
@@ -34165,6 +34413,7 @@ def _write_final_answer_blocker_xlsx(report: dict[str, Any], path: Path) -> None
     sheets = [
         ("Summary", _final_answer_blocker_summary_rows(report)),
         ("Answer Entry", _table_rows(answer_rows)),
+        ("Claim Checklist", _table_rows(claim_rows)),
         ("Observed Prompts", _table_rows(observed_rows)),
         ("Post Answer Runbook", _table_rows(report.get("post_answer_runbook") or [])),
         ("Minimal Reply", _table_rows(minimal_rows)),
@@ -34206,6 +34455,7 @@ def _write_final_answer_user_input_xlsx(
             "question_group",
             "hint",
             "expected_shape",
+            "missing_claims",
             "seen_prompt",
         ]
     ]
@@ -34227,6 +34477,11 @@ def _write_final_answer_user_input_xlsx(
                 row.get("question"),
                 row.get("answer_specificity_hint") or row.get("answer_format_hint"),
                 row.get("answer_example_shape"),
+                "; ".join(
+                    str(claim.get("label") or claim.get("id") or "").strip()
+                    for claim in row.get("missing_required_claims") or []
+                    if isinstance(claim, dict)
+                ),
                 observed_examples[0] if observed_examples else "",
             ]
         )

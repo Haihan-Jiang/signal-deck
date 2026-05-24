@@ -7849,6 +7849,12 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertFalse(h1b_conflict["ready_for_finalize"])
         self.assertEqual(h1b_conflict["fields"][1]["status"], "needs_more_specific_answer")
         self.assertIn("H-1B answer conflicts", h1b_conflict["fields"][1]["specificity_reason"])
+        self.assertIn("citizenship", h1b_conflict["fields"][1]["covered_claim_ids"])
+        self.assertIn("visa_status", h1b_conflict["fields"][1]["covered_claim_ids"])
+        self.assertIn(
+            "h1b_transfer_rule",
+            h1b_conflict["fields"][1]["missing_required_claim_ids"],
+        )
         self.assertNotIn(
             "answer_memory_citizenship_status_default_policy",
             h1b_conflict["compact_updates"],
@@ -7875,6 +7881,9 @@ class JobApplyAgentTests(unittest.TestCase):
             "restricted-country",
             h1b_missing_restricted_status["fields"][1]["specificity_reason"],
         )
+        self.assertIn("h1b_transfer_rule", h1b_missing_restricted_status["fields"][1]["covered_claim_ids"])
+        self.assertIn("sponsorship_only_rule", h1b_missing_restricted_status["fields"][1]["covered_claim_ids"])
+        self.assertIn("restricted_country", h1b_missing_restricted_status["fields"][1]["missing_required_claim_ids"])
 
         h1b_ready = build_final_answer_intake_update(
             unblockers,
@@ -7883,8 +7892,8 @@ class JobApplyAgentTests(unittest.TestCase):
                     "zip_or_postal_code": "98004",
                     "citizenship_status": {
                         "answer": (
-                            "I am a Chinese citizen on H-1B; I am not a U.S. person or permanent "
-                            "resident; I do not have citizenship or permanent residency in restricted "
+                            "I am a Chinese citizen on H-1B; I am not a U.S. citizen, U.S. person, "
+                            "or permanent resident; I do not have citizenship or permanent residency in restricted "
                             "countries; if asked about H-1B status, answer H-1B; if asked about "
                             "H-1B transfer, answer yes; if asked only about sponsorship, answer no."
                         ),
@@ -7895,6 +7904,7 @@ class JobApplyAgentTests(unittest.TestCase):
         )
         self.assertTrue(h1b_ready["ready_for_finalize"])
         self.assertEqual(h1b_ready["answer_receipt"]["ready_aliases"], ["zip_or_postal_code", "citizenship_status"])
+        self.assertEqual(h1b_ready["fields"][1]["missing_required_claim_ids"], [])
 
         ready = build_final_answer_intake_update(
             unblockers,
@@ -8110,6 +8120,20 @@ class JobApplyAgentTests(unittest.TestCase):
                     "specificity_reason": "citizenship answer must mention status explicitly",
                     "hint": "Mention citizenship, U.S. person, permanent resident, and restricted-country status.",
                     "expected_shape": "I am [citizenship]; I [am/am not] a U.S. person.",
+                    "covered_claim_ids": [
+                        "citizenship",
+                        "visa_status",
+                        "h1b_status_rule",
+                        "h1b_transfer_rule",
+                        "sponsorship_only_rule",
+                    ],
+                    "missing_required_claims": [
+                        {"id": "us_citizen", "label": "U.S. citizen status"},
+                        {
+                            "id": "restricted_country",
+                            "label": "restricted-country citizenship or permanent-residency status",
+                        },
+                    ],
                 },
                 {
                     "alias": "interview_recording_consent",
@@ -8118,6 +8142,14 @@ class JobApplyAgentTests(unittest.TestCase):
                     "specificity_reason": "too brief for reusable high-risk answer",
                     "hint": "Use an explicit consent sentence.",
                     "expected_shape": "Yes/no for recording, transcription, AI notetakers, and analysis.",
+                    "covered_claim_ids": [],
+                    "missing_required_claims": [
+                        {"id": "recording", "label": "interview recording consent"},
+                        {"id": "transcription", "label": "interview transcription consent"},
+                        {"id": "ai_notetaker", "label": "AI notetaker consent"},
+                        {"id": "ai_analysis", "label": "AI interview analysis consent"},
+                        {"id": "exceptions", "label": "exceptions, or none"},
+                    ],
                 },
             ],
             "reply_file": "job_apply_agent/outbox/final_answer_revision_user_input_needed.xlsx",
@@ -8164,6 +8196,21 @@ class JobApplyAgentTests(unittest.TestCase):
                 "sponsorship_only_rule",
             ],
         )
+        self.assertEqual(
+            report["blockers"][0]["covered_claim_ids"],
+            [
+                "citizenship",
+                "visa_status",
+                "h1b_status_rule",
+                "h1b_transfer_rule",
+                "sponsorship_only_rule",
+            ],
+        )
+        self.assertEqual(
+            [claim["id"] for claim in report["blockers"][0]["missing_required_claims"]],
+            ["us_citizen", "restricted_country"],
+        )
+        self.assertEqual(report["summary"]["missing_required_claim_count"], 7)
         self.assertIn(
             "AI interview analysis consent",
             [claim["label"] for claim in report["blockers"][1]["required_claims"]],
@@ -8406,7 +8453,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Live preflight: 100 checked / 100 open", alert)
         self.assertIn("citizenship_status", alert)
         self.assertIn("Shape:", alert)
-        self.assertIn("Must cover:", alert)
+        self.assertIn("Missing:", alert)
         self.assertIn("U.S. person status", alert)
         self.assertIn("Shortest reply shape:", alert)
         self.assertIn("Write fill-in file:", alert)
@@ -9509,11 +9556,16 @@ class JobApplyAgentTests(unittest.TestCase):
             problem = report["validation_receipt"]["problem_fields"][0]
             self.assertEqual(problem["alias"], "citizenship_status")
             self.assertIn("H-1B answer conflicts", problem["specificity_reason"])
+            self.assertIn("citizenship", problem["covered_claim_ids"])
+            self.assertIn("visa_status", problem["covered_claim_ids"])
+            self.assertIn("h1b_transfer_rule", problem["missing_required_claim_ids"])
             self.assertIn("sponsorship-only vs transfer", problem["hint"])
             self.assertIn("for H-1B/transfer questions answer", problem["expected_shape"])
             self.assertNotIn("old citizenship hint", report_text)
             self.assertNotIn("old citizenship shape", report_text)
             revision_text = revision_path.read_text(encoding="utf-8")
+            self.assertIn("Missing claims", revision_text)
+            self.assertIn("what to answer when the form asks H-1B transfer", revision_text)
             self.assertIn("sponsorship-only vs transfer", revision_text)
             self.assertIn("for H-1B/transfer questions answer", revision_text)
             self.assertNotIn("\u6211\u662f\u4e2d\u56fd\u516c\u6c11", revision_text)
