@@ -149,6 +149,7 @@ from job_apply_agent.core import (
     render_final_answer_blocker_report_markdown,
     render_final_answer_reply_intake_markdown,
     render_final_answer_reply_template_text,
+    render_final_answer_user_input_text,
     render_goal_readiness_audit_markdown,
     render_learning_approval_pack_markdown,
     render_learning_task_template_markdown,
@@ -211,6 +212,7 @@ from job_apply_agent.core import (
     write_final_answer_intake_template,
     write_final_answer_intake_update,
     write_final_answer_blocker_report,
+    write_final_answer_user_input_file,
     write_final_answer_reply_intake,
     write_goal_readiness_audit,
     write_learning_approval_pack,
@@ -7928,6 +7930,10 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertFalse(report["action_pack"]["submits_real_applications"])
         self.assertTrue(report["action_pack"]["final_submit_remains_supervised"])
         reply_template_text = render_final_answer_reply_template_text(report)
+        user_input_text = render_final_answer_user_input_text(
+            report,
+            reply_file_path="path with spaces/final_answer_user_input_needed.txt",
+        )
         self.assertIn("rehearse-after-answers", report["next_commands"][0])
         self.assertIn("resume-after-answers --reply-stdin", report["next_commands"][1])
         self.assertIn("--validate-only", report["next_commands"][1])
@@ -7977,6 +7983,11 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("citizenship_status why not inferred:", reply_template_text)
         self.assertIn("citizenship_status seen prompt:", reply_template_text)
         self.assertIn("Final answer reply template", reply_template_text)
+        self.assertIn("Final answers needed", user_input_text)
+        self.assertIn("citizenship_status\uff1a<fill>", user_input_text)
+        self.assertIn("citizenship_status_confirmed\uff1a\u786e\u8ba4", user_input_text)
+        self.assertIn("final-answer-autopilot --reply-file", user_input_text)
+        self.assertIn("'path with spaces/final_answer_user_input_needed.txt'", user_input_text)
         self.assertIn("Job automation needs final answers", alert)
         self.assertIn("After-answer path ready: yes", alert)
         self.assertIn("Live preflight: 100 checked / 100 open", alert)
@@ -7997,17 +8008,20 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertNotIn("98004", html)
         self.assertNotIn("98004", alert)
         self.assertNotIn("98004", reply_template_text)
+        self.assertNotIn("98004", user_input_text)
         self.assertNotIn("Sensitive citizenship answer phrase 12345", json.dumps(report))
         self.assertNotIn("Sensitive citizenship answer phrase 12345", markdown)
         self.assertNotIn("Sensitive citizenship answer phrase 12345", html)
         self.assertNotIn("Sensitive citizenship answer phrase 12345", alert)
         self.assertNotIn("Sensitive citizenship answer phrase 12345", reply_template_text)
+        self.assertNotIn("Sensitive citizenship answer phrase 12345", user_input_text)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             json_output = root / "blockers.json"
             markdown_output = root / "blockers.md"
             reply_template_output = root / "reply_template.txt"
+            user_input_output = root / "user_input.txt"
             html_output = root / "blockers.html"
             xlsx_output = root / "blockers.xlsx"
             env_path = root / "telegram.env"
@@ -8025,6 +8039,11 @@ class JobApplyAgentTests(unittest.TestCase):
                 html_output,
                 xlsx_output,
             )
+            written_user_input = write_final_answer_user_input_file(
+                template,
+                goal_audit,
+                user_input_output,
+            )
             notify_result = notify_telegram_for_final_answer_blockers(
                 written,
                 env_path=env_path,
@@ -8035,8 +8054,11 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(json_output.exists())
             self.assertTrue(markdown_output.exists())
             self.assertTrue(reply_template_output.exists())
+            self.assertTrue(user_input_output.exists())
             self.assertTrue(html_output.exists())
             self.assertTrue(xlsx_output.exists())
+            self.assertEqual(written_user_input["placeholder_aliases"], ["citizenship_status"])
+            self.assertFalse(written_user_input["policy"]["stores_existing_answer_text"])
             self.assertEqual(written["outputs"]["html"], str(html_output))
             self.assertEqual(written["outputs"]["xlsx"], str(xlsx_output))
             self.assertIn("Blocking Questions", html_output.read_text(encoding="utf-8"))
@@ -8044,6 +8066,11 @@ class JobApplyAgentTests(unittest.TestCase):
                 "citizenship_status_confirmed\uff1a\u786e\u8ba4",
                 reply_template_output.read_text(encoding="utf-8"),
             )
+            self.assertIn(
+                "citizenship_status_confirmed\uff1a\u786e\u8ba4",
+                user_input_output.read_text(encoding="utf-8"),
+            )
+            self.assertNotIn("Sensitive citizenship answer phrase 12345", user_input_output.read_text(encoding="utf-8"))
             with zipfile.ZipFile(xlsx_output) as archive:
                 workbook_xml = archive.read("xl/workbook.xml").decode("utf-8")
                 sheet_text = "\n".join(
@@ -8077,6 +8104,7 @@ class JobApplyAgentTests(unittest.TestCase):
             cli_json_output = root / "cli_blockers.json"
             cli_markdown_output = root / "cli_blockers.md"
             cli_reply_template_output = root / "cli_reply.txt"
+            cli_user_input_output = root / "cli_user_input.txt"
             cli_html_output = root / "cli_blockers.html"
             cli_xlsx_output = root / "cli_blockers.xlsx"
             template_path.write_text(json.dumps(template, ensure_ascii=True, indent=2), encoding="utf-8")
@@ -8120,6 +8148,35 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(cli_json_output.exists())
             self.assertTrue(cli_markdown_output.exists())
             self.assertTrue(cli_reply_template_output.exists())
+            cli_user_input_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "job_apply_agent",
+                    "final-answer-user-input",
+                    "--template",
+                    str(template_path),
+                    "--goal-audit",
+                    str(goal_path),
+                    "--output",
+                    str(cli_user_input_output),
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(cli_user_input_result.returncode, 0, cli_user_input_result.stderr)
+            self.assertTrue(cli_user_input_output.exists())
+            self.assertIn("Wrote final answer user input file", cli_user_input_result.stdout)
+            self.assertIn("Placeholder aliases: citizenship_status", cli_user_input_result.stdout)
+            self.assertIn("final-answer-autopilot", cli_user_input_result.stdout)
+            self.assertIn("citizenship_status\uff1a<fill>", cli_user_input_output.read_text(encoding="utf-8"))
+            self.assertNotIn("Sensitive citizenship answer phrase 12345", cli_user_input_result.stdout)
+            self.assertNotIn(
+                "Sensitive citizenship answer phrase 12345",
+                cli_user_input_output.read_text(encoding="utf-8"),
+            )
 
     def test_final_answer_blocker_report_separates_current_blockers_from_after_reply_readiness(self) -> None:
         unblockers = {

@@ -79,6 +79,7 @@ from .core import (
     write_final_answer_intake_template,
     write_final_answer_intake_update,
     write_final_answer_blocker_report,
+    write_final_answer_user_input_file,
     write_final_answer_reply_intake,
     build_synthetic_final_answer_reply_text,
     build_synthetic_unblocker_compact_updates,
@@ -237,6 +238,9 @@ DEFAULT_FINAL_ANSWER_BLOCKERS_XLSX = (
 )
 DEFAULT_FINAL_ANSWER_REPLY_TEMPLATE_TEXT = (
     Path(__file__).with_name("outbox") / "final_answer_reply_template_latest.txt"
+)
+DEFAULT_FINAL_ANSWER_USER_INPUT_TEXT = (
+    Path(__file__).with_name("outbox") / "final_answer_user_input_needed.txt"
 )
 DEFAULT_FINAL_ANSWER_AUTOPILOT_JSON = (
     Path(__file__).with_name("outbox") / "final_answer_autopilot_latest.json"
@@ -1200,6 +1204,23 @@ def main() -> int:
         "--print-minimal-reply",
         action="store_true",
         help="print only the shortest fill-in reply shape to stdout after writing reports",
+    )
+
+    final_answer_user_input_parser = subparsers.add_parser(
+        "final-answer-user-input",
+        help="write the shortest local fill-in file for the final truthful answers still blocking the 100-job queue",
+    )
+    final_answer_user_input_parser.add_argument(
+        "--template",
+        default=str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON),
+    )
+    final_answer_user_input_parser.add_argument(
+        "--goal-audit",
+        default=str(DEFAULT_GOAL_AUDIT_JSON),
+    )
+    final_answer_user_input_parser.add_argument(
+        "--output",
+        default=str(DEFAULT_FINAL_ANSWER_USER_INPUT_TEXT),
     )
 
     final_answer_reply_parser = subparsers.add_parser(
@@ -3385,6 +3406,24 @@ def main() -> int:
                 print(f"Sent Telegram notification to {result.get('chat_count', 0)} chat(s)")
             if args.telegram_dry_run:
                 print(result["message"])
+        return 0
+
+    if args.command == "final-answer-user-input":
+        template_path = Path(args.template)
+        if not template_path.exists():
+            raise FileNotFoundError(f"final answer intake template not found: {args.template}")
+        report = write_final_answer_user_input_file(
+            json.loads(template_path.read_text(encoding="utf-8")),
+            _load_optional_json(args.goal_audit),
+            args.output,
+        )
+        print(f"Wrote final answer user input file to {report['output']}")
+        print(f"Placeholders: {report.get('placeholder_count', 0)}")
+        aliases = report.get("placeholder_aliases") if isinstance(report.get("placeholder_aliases"), list) else []
+        if aliases:
+            print("Placeholder aliases: " + ", ".join(str(alias) for alias in aliases))
+        print("Validate after filling:")
+        print(report.get("validate_command", ""))
         return 0
 
     if args.command == "resume-after-answers":

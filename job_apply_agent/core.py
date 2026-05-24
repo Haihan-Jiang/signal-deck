@@ -5384,6 +5384,7 @@ FINAL_ANSWER_INTAKE_EXAMPLE_SHAPES = {
 
 
 FINAL_ANSWER_REPLY_TEMPLATE_PATH = "job_apply_agent/outbox/final_answer_reply_template_latest.txt"
+FINAL_ANSWER_USER_INPUT_PATH = "job_apply_agent/outbox/final_answer_user_input_needed.txt"
 
 
 FINAL_ANSWER_INTAKE_PLACEHOLDER_ANSWERS = {
@@ -23734,6 +23735,129 @@ def write_final_answer_blocker_report(
     if xlsx_path:
         _write_final_answer_blocker_xlsx(report, xlsx_path)
     return report
+
+
+def render_final_answer_user_input_text(
+    report: dict[str, Any],
+    *,
+    reply_file_path: str | Path = FINAL_ANSWER_USER_INPUT_PATH,
+) -> str:
+    validate_command = shlex.join(
+        [
+            "python3",
+            "-m",
+            "job_apply_agent",
+            "final-answer-autopilot",
+            "--reply-file",
+            str(reply_file_path),
+            "--dry-run",
+            "--fail-on-not-ready",
+        ]
+    )
+    lines = [
+        "# Final answers needed",
+        "# Replace every <fill> with your truthful reusable answer.",
+        "# Keep each *_confirmed line as \u786e\u8ba4 only if the answer above is exact and truthful.",
+        "# This file intentionally contains no existing answer text.",
+        "# Validate after filling:",
+        f"# {validate_command}",
+    ]
+    blockers = [row for row in report.get("blockers") or [] if isinstance(row, dict)]
+    if not blockers:
+        lines.extend(["", "# No final-answer blockers remain."])
+        return "\n".join(lines).rstrip() + "\n"
+
+    for index, row in enumerate(blockers, start=1):
+        alias = str(row.get("alias") or "").strip()
+        if not alias:
+            continue
+        question = str(row.get("question") or "").strip()
+        hint = str(row.get("answer_specificity_hint") or row.get("answer_format_hint") or "").strip()
+        shape = str(row.get("answer_example_shape") or "").strip()
+        observed_examples = [
+            str(item).strip()
+            for item in row.get("observed_prompt_examples") or []
+            if str(item).strip()
+        ]
+        lines.extend(["", f"# {index}. {alias}"])
+        if question:
+            lines.append(f"# Question group: {question}")
+        if hint:
+            lines.append(f"# Hint: {hint}")
+        if shape:
+            lines.append(f"# Expected shape: {shape}")
+        if observed_examples:
+            lines.append(f"# Seen prompt: {observed_examples[0]}")
+        lines.append(f"{alias}\uff1a<fill>")
+        if row.get("high_risk"):
+            lines.append(f"{alias}_confirmed\uff1a\u786e\u8ba4")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def write_final_answer_user_input_file(
+    template: dict[str, Any],
+    goal_audit: dict[str, Any] | None,
+    output: str | Path,
+) -> dict[str, Any]:
+    report = build_final_answer_blocker_report(template, goal_audit=goal_audit)
+    output_path = Path(output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        render_final_answer_user_input_text(report, reply_file_path=output_path),
+        encoding="utf-8",
+    )
+    blockers = [row for row in report.get("blockers") or [] if isinstance(row, dict)]
+    aliases = [
+        str(row.get("alias") or "").strip()
+        for row in blockers
+        if str(row.get("alias") or "").strip()
+    ]
+    high_risk_aliases = [
+        str(row.get("alias") or "").strip()
+        for row in blockers
+        if row.get("high_risk") and str(row.get("alias") or "").strip()
+    ]
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "final_answer_user_input_file",
+        "output": str(output_path),
+        "blocker_count": len(blockers),
+        "placeholder_count": len(aliases),
+        "placeholder_aliases": aliases,
+        "high_risk_aliases": high_risk_aliases,
+        "validate_command": shlex.join(
+            [
+                "python3",
+                "-m",
+                "job_apply_agent",
+                "final-answer-autopilot",
+                "--reply-file",
+                str(output_path),
+                "--dry-run",
+                "--fail-on-not-ready",
+            ]
+        ),
+        "run_command_after_filling": shlex.join(
+            [
+                "python3",
+                "-m",
+                "job_apply_agent",
+                "final-answer-autopilot",
+                "--reply-file",
+                str(output_path),
+                "--apply",
+                "--live-check",
+                "--include-values",
+                "--fail-on-not-ready",
+            ]
+        ),
+        "policy": {
+            "stores_existing_answer_text": False,
+            "writes_profile_or_memory": False,
+            "submits_real_applications": False,
+            "high_risk_requires_user_confirmation": True,
+        },
+    }
 
 
 def _final_answer_blocker_action_pack(
