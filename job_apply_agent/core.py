@@ -6889,23 +6889,73 @@ def _citizenship_h1b_sponsorship_specificity_reason(normalized_answer: str) -> s
 
 def _h1b_answer_has_transfer_positive_rule(normalized_answer: str) -> bool:
     normalized = str(normalized_answer or "").strip().lower()
-    transfer_positive = re.search(
-        r"\b(transfer|visa transfer|h-1b transfer|h1b transfer)\b.{0,40}\b(yes|require|need|needs|needed|required)\b"
-        r"|\b(yes|require|need|needs|needed|required)\b.{0,40}\b(transfer|visa transfer|h-1b transfer|h1b transfer)\b"
-        r"|transfer.{0,20}(yes|\u662f|\u8981|\u9700\u8981)"
-        r"|(yes|\u662f|\u8981|\u9700\u8981).{0,20}transfer"
-        r"|\u8f6c\u7b7e.{0,20}(\u662f|\u8981|\u9700\u8981)"
-        r"|(\u662f|\u8981|\u9700\u8981).{0,20}\u8f6c\u7b7e",
-        normalized,
+    return bool(
+        _h1b_answer_has_transfer_positive_clause(normalized)
+        or _h1b_answer_has_sponsorship_only_negative_rule(normalized)
     )
-    sponsor_only_negative = re.search(
-        r"\b(sponsor|sponsorship|visa sponsorship)\b.{0,20}\b(only|alone)\b.{0,40}\b(no|not|without|do not|don't)\b"
-        r"|\b(only|alone)\b.{0,20}\b(sponsor|sponsorship|visa sponsorship)\b.{0,40}\b(no|not|without|do not|don't)\b"
-        r"|\u53ea\u95ee.{0,20}(sponsor|sponsorship|\u62c5\u4fdd|\u8d5e\u52a9).{0,20}(\u4e0d|\u5426|no)"
-        r"|(sponsor|sponsorship|\u62c5\u4fdd|\u8d5e\u52a9).{0,20}\u5c31\u8bf4.{0,10}(\u4e0d|\u5426|no)",
-        normalized,
+
+
+def _h1b_answer_has_transfer_positive_clause(normalized_answer: str) -> bool:
+    normalized = str(normalized_answer or "").strip().lower()
+    return bool(
+        re.search(
+            r"\b(transfer|visa transfer|h-1b transfer|h1b transfer)\b.{0,40}\b(yes|require|need|needs|needed|required)\b"
+            r"|\b(yes|require|need|needs|needed|required)\b.{0,40}\b(transfer|visa transfer|h-1b transfer|h1b transfer)\b"
+            r"|transfer.{0,20}(yes|\u662f|\u8981|\u9700\u8981)"
+            r"|(yes|\u662f|\u8981|\u9700\u8981).{0,20}transfer"
+            r"|\u8f6c\u7b7e.{0,20}(\u662f|\u8981|\u9700\u8981)"
+            r"|(\u662f|\u8981|\u9700\u8981).{0,20}\u8f6c\u7b7e",
+            normalized,
+        )
     )
-    return bool(transfer_positive or sponsor_only_negative)
+
+
+def _h1b_answer_has_sponsorship_only_negative_rule(normalized_answer: str) -> bool:
+    normalized = str(normalized_answer or "").strip().lower()
+    return bool(
+        re.search(
+            r"\b(sponsor|sponsorship|visa sponsorship)\b.{0,20}\b(only|alone)\b.{0,40}\b(no|not|without|do not|don't)\b"
+            r"|\b(only|alone)\b.{0,20}\b(sponsor|sponsorship|visa sponsorship)\b.{0,40}\b(no|not|without|do not|don't)\b"
+            r"|\u53ea\u95ee.{0,20}(sponsor|sponsorship|\u62c5\u4fdd|\u8d5e\u52a9).{0,20}(\u4e0d|\u5426|no)"
+            r"|(sponsor|sponsorship|\u62c5\u4fdd|\u8d5e\u52a9).{0,20}\u5c31\u8bf4.{0,10}(\u4e0d|\u5426|no)",
+            normalized,
+        )
+    )
+
+
+def _h1b_answer_has_status_clause(normalized_answer: str) -> bool:
+    normalized = str(normalized_answer or "").strip().lower()
+    h1b = r"h\s*[- ]?\s*1\s*b"
+    if not re.search(h1b, normalized):
+        return False
+    return bool(
+        re.search(
+            rf"\b(current|currently|am|is|on|in)\b.{{0,30}}{h1b}"
+            rf"|{h1b}.{{0,30}}\b(status|visa status)\b"
+            rf"|\b(status|visa status)\b.{{0,30}}{h1b}"
+            rf"|\b(answer|say|select|choose|use|fill)\b.{{0,30}}{h1b}"
+            rf"|{h1b}.{{0,30}}\b(answer|say|select|choose|use|fill)\b"
+            rf"|\u95ee.{{0,20}}{h1b}.{{0,20}}(\u8bf4|\u586b|\u9009|\u56de\u7b54).{{0,20}}{h1b}"
+            rf"|{h1b}.{{0,20}}(\u5c31\u8bf4|\u8bf4|\u586b|\u9009|\u56de\u7b54).{{0,20}}{h1b}",
+            normalized,
+        )
+    )
+
+
+def _derived_profile_answers_from_category_policy(category: str, answer: str) -> dict[str, str]:
+    if category != "citizenship_status":
+        return {}
+    normalized = str(answer or "").strip().lower()
+    if not re.search(r"h\s*[- ]?\s*1\s*b", normalized):
+        return {}
+    updates: dict[str, str] = {}
+    if _h1b_answer_has_status_clause(normalized):
+        updates["h1b_status"] = "H-1B"
+    if _h1b_answer_has_transfer_positive_clause(normalized):
+        updates["h1b_transfer"] = "Yes, I require H-1B transfer."
+    if _h1b_answer_has_sponsorship_only_negative_rule(normalized):
+        updates["sponsorship"] = "No, I do not require visa sponsorship."
+    return updates
 
 
 def _final_answer_intake_raw_answer(
@@ -10028,6 +10078,9 @@ def _apply_learning_task_payload(
             category = _category_default_policy_from_group_key(group_key)
             if category:
                 category_policy_updates[category] = answer
+                profile_updates.update(
+                    _derived_profile_answers_from_category_policy(category, answer)
+                )
         else:
             skipped.append(
                 {

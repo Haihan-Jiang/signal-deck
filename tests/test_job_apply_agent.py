@@ -6190,6 +6190,82 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertIsNotNone(find_learned_answer(memory, "Are you a U.S. citizen?"))
             self.assertEqual(result["category_policy_updates"], ["citizenship_status"])
 
+    def test_apply_critical_input_answers_derives_h1b_profile_answers_from_confirmed_policy(self) -> None:
+        learning_tasks = {
+            "tasks": [
+                {
+                    "group_key": "answer_memory:citizenship_status:default_policy",
+                    "question": "What citizenship answers should automation use?",
+                    "recommended_storage": "answer_memory",
+                    "answer_scope": "category_default_policy",
+                    "suggested_answer_source": "requires_exact_user_confirmation",
+                    "approval_risk": "high",
+                    "labels": ["Are you a U.S. citizen?"],
+                    "platforms": ["Greenhouse"],
+                    "related_prompt_count": 1,
+                    "observed_count": 2,
+                    "required_count": 2,
+                    "persist_allowed": True,
+                },
+            ],
+        }
+        pack = build_learning_approval_pack(learning_tasks, {})
+        answer = (
+            "I am a Chinese citizen; I am currently in H-1B status; I am not a U.S. "
+            "person or permanent resident; I do not have citizenship or permanent "
+            "residency in restricted countries; "
+            "\u5982\u679c\u95ee H-1B \u5c31\u8bf4 H-1B; "
+            "\u5982\u679c\u95ee H-1B transfer \u5c31\u8bf4\u9700\u8981; "
+            "\u5982\u679c\u53ea\u95ee sponsor/sponsorship \u5c31\u8bf4\u4e0d\u9700\u8981."
+        )
+        for item in pack["critical_inputs"]:
+            item["user_answer"] = answer
+            item["approval_decision"] = "approved"
+            item["high_risk_user_confirmed"] = True
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pack_path = Path(temp_dir) / "approval_pack.json"
+            profile_path = Path(temp_dir) / "profile.json"
+            memory_path = Path(temp_dir) / "memory.json"
+            pack_path.write_text(json.dumps(pack), encoding="utf-8")
+            profile_path.write_text(
+                json.dumps(
+                    {
+                        "candidate": {"name": "Test User"},
+                        "preferences": {},
+                        "resume_facts": {},
+                        "question_answers": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            dry_run = apply_critical_input_answers(pack_path, profile_path, memory_path, dry_run=True)
+            self.assertEqual(
+                dry_run["profile_updates"],
+                ["h1b_status", "h1b_transfer", "sponsorship"],
+            )
+            self.assertFalse(memory_path.exists())
+
+            result = apply_critical_input_answers(pack_path, profile_path, memory_path)
+
+            self.assertEqual(result["approved_input_count"], 1)
+            self.assertEqual(result["category_policy_updates"], ["citizenship_status"])
+            self.assertEqual(
+                result["profile_updates"],
+                ["h1b_status", "h1b_transfer", "sponsorship"],
+            )
+            profile = json.loads(profile_path.read_text(encoding="utf-8"))
+            self.assertEqual(profile["question_answers"]["h1b_status"], "H-1B")
+            self.assertEqual(
+                profile["question_answers"]["h1b_transfer"],
+                "Yes, I require H-1B transfer.",
+            )
+            self.assertEqual(
+                profile["question_answers"]["sponsorship"],
+                "No, I do not require visa sponsorship.",
+            )
+
     def test_apply_critical_input_answers_skips_unconfirmed_high_risk_values(self) -> None:
         learning_tasks = {
             "tasks": [
