@@ -3710,7 +3710,7 @@ def main() -> int:
             revision_placeholder_count = _final_answer_reply_placeholder_count(
                 placeholder_reply_text
             )
-            if revision_placeholder_count:
+            if revision_placeholder_count and not resume_base_reply_file:
                 placeholder_aliases = _final_answer_reply_placeholder_aliases(
                     placeholder_reply_text
                 )
@@ -4864,6 +4864,16 @@ def _final_answer_reply_placeholder_alias(line: str) -> str:
     return prefix.strip("`* ")
 
 
+def _final_answer_reply_payload_value_has_placeholder(value: object) -> bool:
+    if isinstance(value, dict):
+        answer_text = str(
+            value.get("answer") or value.get("user_answer") or value.get("value") or ""
+        )
+    else:
+        answer_text = str(value or "")
+    return "<fill>" in answer_text
+
+
 def _final_answer_autopilot_validate_command(
     args: argparse.Namespace,
     reply_file: str | Path | None = None,
@@ -5041,6 +5051,20 @@ def _final_answer_reply_parser_error_count(report: dict[str, object]) -> int:
     )
 
 
+def _final_answer_reply_revision_parser_error_count(
+    report: dict[str, object],
+    skipped_placeholder_aliases: list[str],
+) -> int:
+    return (
+        int(report.get("unknown_key_count") or 0)
+        + int(report.get("duplicate_key_count") or 0)
+        + max(
+            int(report.get("fake_marker_count") or 0) - len(skipped_placeholder_aliases),
+            0,
+        )
+    )
+
+
 def _final_answer_reply_text_from_answer_payload(
     template_payload: dict[str, object],
     answers: dict[str, object],
@@ -5116,8 +5140,12 @@ def _final_answer_autopilot_reply_context(
         json.dumps(base_payload.get("answers") or {}, ensure_ascii=True)
     )
     revision_answers = revision_payload.get("answers") if isinstance(revision_payload.get("answers"), dict) else {}
+    skipped_placeholder_aliases: list[str] = []
     for alias in revision_report.get("parsed_aliases") or []:
         if alias in revision_answers:
+            if _final_answer_reply_payload_value_has_placeholder(revision_answers[alias]):
+                skipped_placeholder_aliases.append(str(alias))
+                continue
             merged_answers[str(alias)] = revision_answers[alias]
     merged_text = _final_answer_reply_text_from_answer_payload(template_payload, merged_answers)
     return {
@@ -5138,9 +5166,13 @@ def _final_answer_autopilot_reply_context(
             "duplicate_key_count": int(revision_report.get("duplicate_key_count") or 0),
             "fake_marker_count": int(revision_report.get("fake_marker_count") or 0),
             "parsed_aliases": revision_report.get("parsed_aliases") or [],
+            "skipped_placeholder_aliases": skipped_placeholder_aliases,
         },
         "parser_error_count": _final_answer_reply_parser_error_count(base_report)
-        + _final_answer_reply_parser_error_count(revision_report),
+        + _final_answer_reply_revision_parser_error_count(
+            revision_report,
+            skipped_placeholder_aliases,
+        ),
     }
 
 
@@ -5258,6 +5290,13 @@ def _final_answer_autopilot_validation_receipt(
                     (reply_context.get("revision_reply_summary") or {}).get("answer_count")
                     if isinstance(reply_context.get("revision_reply_summary"), dict)
                     else 0
+                ),
+                "revision_skipped_placeholder_aliases": (
+                    (reply_context.get("revision_reply_summary") or {}).get(
+                        "skipped_placeholder_aliases"
+                    )
+                    if isinstance(reply_context.get("revision_reply_summary"), dict)
+                    else []
                 ),
             },
             "intake_summary": intake_report.get("summary") or {},

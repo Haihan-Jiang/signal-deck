@@ -8858,10 +8858,13 @@ class JobApplyAgentTests(unittest.TestCase):
             template_path = root / "template.json"
             unblockers_path = root / "unblockers.json"
             base_reply_path = root / "base_reply.txt"
+            specific_base_reply_path = root / "base_reply_specific.txt"
             autopilot_path = root / "autopilot.json"
             autopilot_markdown_path = root / "autopilot.md"
             revision_path = root / "revision.txt"
             revision_xlsx_path = root / "revision.xlsx"
+            revision_unfilled_merged_report_path = root / "revision_unfilled_merged.json"
+            revision_unfilled_merged_markdown_path = root / "revision_unfilled_merged.md"
             revision_filled_xlsx_path = root / "revision_filled.xlsx"
             merged_report_path = root / "merged_autopilot.json"
             merged_markdown_path = root / "merged_autopilot.md"
@@ -8870,6 +8873,16 @@ class JobApplyAgentTests(unittest.TestCase):
             base_reply_path.write_text(
                 "zip_or_postal_code\uff1a98004\n"
                 "health_requirement\uff1ayes\n"
+                "health_requirement_confirmed\uff1a\u786e\u8ba4\n",
+                encoding="utf-8",
+            )
+            specific_answer = (
+                "I can comply with standard health, vaccination, and client-site "
+                "requirements; exceptions: none."
+            )
+            specific_base_reply_path.write_text(
+                "zip_or_postal_code\uff1a98004\n"
+                f"health_requirement\uff1a{specific_answer}\n"
                 "health_requirement_confirmed\uff1a\u786e\u8ba4\n",
                 encoding="utf-8",
             )
@@ -8943,16 +8956,62 @@ class JobApplyAgentTests(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(unfilled_resume_result.returncode, 2)
-            self.assertIn(
-                "Resume after answers: waiting_for_filled_reply",
-                unfilled_resume_result.stdout,
-            )
-            self.assertIn("Placeholder aliases: health_requirement", unfilled_resume_result.stdout)
+            self.assertNotIn("Resume after answers: waiting_for_filled_reply", unfilled_resume_result.stdout)
+            self.assertIn("Needs specificity aliases: health_requirement", unfilled_resume_result.stdout)
 
-            specific_answer = (
-                "I can comply with standard health, vaccination, and client-site "
-                "requirements; exceptions: none."
+            unfilled_revision_merged_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "job_apply_agent",
+                    "final-answer-autopilot",
+                    "--template",
+                    str(template_path),
+                    "--unblockers",
+                    str(unblockers_path),
+                    "--base-reply-file",
+                    str(specific_base_reply_path),
+                    "--reply-file",
+                    str(revision_xlsx_path),
+                    "--json-output",
+                    str(revision_unfilled_merged_report_path),
+                    "--markdown-output",
+                    str(revision_unfilled_merged_markdown_path),
+                    "--dry-run",
+                    "--fail-on-not-ready",
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
             )
+            self.assertEqual(
+                unfilled_revision_merged_result.returncode,
+                0,
+                unfilled_revision_merged_result.stderr + unfilled_revision_merged_result.stdout,
+            )
+            unfilled_revision_merged_text = revision_unfilled_merged_report_path.read_text(
+                encoding="utf-8"
+            )
+            unfilled_revision_merged_report = json.loads(unfilled_revision_merged_text)
+            self.assertEqual(unfilled_revision_merged_report["status"], "validated_ready")
+            self.assertTrue(
+                unfilled_revision_merged_report["validation_receipt"][
+                    "merged_with_base_reply"
+                ]
+            )
+            self.assertEqual(
+                unfilled_revision_merged_report["validation_receipt"]["reply_summary"][
+                    "revision_skipped_placeholder_aliases"
+                ],
+                ["health_requirement"],
+            )
+            self.assertNotIn(specific_answer, unfilled_revision_merged_text)
+            self.assertNotIn(
+                specific_answer,
+                revision_unfilled_merged_markdown_path.read_text(encoding="utf-8"),
+            )
+
             with zipfile.ZipFile(revision_xlsx_path) as source, zipfile.ZipFile(
                 revision_filled_xlsx_path,
                 "w",
