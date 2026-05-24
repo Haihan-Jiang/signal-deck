@@ -14,6 +14,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from .core import (
+    FINAL_ANSWER_INTAKE_EXAMPLE_SHAPES,
+    FINAL_ANSWER_INTAKE_FORMAT_HINTS,
+    FINAL_ANSWER_INTAKE_SPECIFICITY_HINTS,
     add_synthetic_answers_for_blockers,
     attach_final_answer_blocker_notification_result,
     apply_critical_input_answers,
@@ -1199,7 +1202,7 @@ def main() -> int:
     )
     final_answer_blockers_parser.add_argument(
         "--final-answer-autopilot-json",
-        default=str(DEFAULT_FINAL_ANSWER_AUTOPILOT_JSON),
+        default=None,
     )
     final_answer_blockers_parser.add_argument("--json-output", default=str(DEFAULT_FINAL_ANSWER_BLOCKERS_JSON))
     final_answer_blockers_parser.add_argument(
@@ -3574,6 +3577,13 @@ def main() -> int:
         template_path = Path(args.template)
         if not template_path.exists():
             raise FileNotFoundError(f"final answer intake template not found: {args.template}")
+        final_answer_autopilot_json = args.final_answer_autopilot_json
+        if (
+            final_answer_autopilot_json is None
+            and str(Path(args.template)) == str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON)
+            and str(Path(args.goal_audit)) == str(DEFAULT_GOAL_AUDIT_JSON)
+        ):
+            final_answer_autopilot_json = str(DEFAULT_FINAL_ANSWER_AUTOPILOT_JSON)
         report = write_final_answer_blocker_report(
             json.loads(template_path.read_text(encoding="utf-8")),
             _load_optional_json(args.goal_audit),
@@ -3584,7 +3594,7 @@ def main() -> int:
             args.xlsx_output,
             args.user_input_output,
             args.user_input_xlsx_output,
-            final_answer_autopilot=_load_optional_json(args.final_answer_autopilot_json),
+            final_answer_autopilot=_load_optional_json(final_answer_autopilot_json),
         )
         summary = report.get("summary") or {}
         print(f"Wrote final answer blockers JSON to {args.json_output}")
@@ -5251,11 +5261,17 @@ def _final_answer_autopilot_validation_receipt(
                     "specificity_reason": str(field.get("specificity_reason") or ""),
                     "question": str(template_field.get("question") or ""),
                     "hint": str(
-                        template_field.get("answer_specificity_hint")
+                        FINAL_ANSWER_INTAKE_SPECIFICITY_HINTS.get(alias)
+                        or template_field.get("answer_specificity_hint")
+                        or FINAL_ANSWER_INTAKE_FORMAT_HINTS.get(alias)
                         or template_field.get("answer_format_hint")
                         or ""
                     ),
-                    "expected_shape": str(template_field.get("answer_example_shape") or ""),
+                    "expected_shape": str(
+                        FINAL_ANSWER_INTAKE_EXAMPLE_SHAPES.get(alias)
+                        or template_field.get("answer_example_shape")
+                        or ""
+                    ),
                     "observed_prompt": str(
                         (template_field.get("observed_prompt_examples") or [""])[0]
                         if isinstance(template_field.get("observed_prompt_examples"), list)

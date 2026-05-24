@@ -5331,7 +5331,8 @@ FINAL_ANSWER_INTAKE_FORMAT_HINTS = {
     "citizenship_status": (
         "Use explicit yes/no clauses for U.S. citizen, U.S. person or permanent resident, and restricted-country "
         "citizenship or permanent residency. If you are on H-1B or another visa, explicitly state whether a new "
-        "employer must provide visa sponsorship or transfer."
+        "employer must provide visa sponsorship or transfer; if sponsorship-only and transfer questions should be "
+        "answered differently, state that rule."
     ),
     "background_or_export_control": (
         "State the truthful default for legal eligibility, background check, export-control, debarment, indictment, "
@@ -5352,7 +5353,7 @@ FINAL_ANSWER_INTAKE_FORMAT_HINTS = {
 
 FINAL_ANSWER_INTAKE_SPECIFICITY_HINTS = {
     "zip_or_postal_code": "Use an exact ZIP/postal code, not a city name or placeholder.",
-    "citizenship_status": "Do not use a bare yes/no; mention citizenship, U.S. person/permanent resident, restricted-country status, and visa sponsorship/transfer needs explicitly.",
+    "citizenship_status": "Do not use a bare yes/no; mention citizenship, U.S. person/permanent resident, restricted-country status, H-1B/visa status, and the sponsorship-only vs transfer answer rule explicitly.",
     "background_or_export_control": "Do not use a bare yes/no; state the default for the listed legal/background/export-control prompts and any exceptions.",
     "country_work_permit": "Do not use a bare yes/no; name the countries or regions where the answer applies and list exceptions.",
     "interview_recording_consent": "Use an explicit consent sentence, such as yes/no for recording, transcription, AI notetakers, and analysis.",
@@ -5365,7 +5366,8 @@ FINAL_ANSWER_INTAKE_EXAMPLE_SHAPES = {
     "citizenship_status": (
         "Example shape: I am [citizenship]; I [am/am not] a U.S. person or permanent "
         "resident; I [do/do not] have citizenship or permanent residency in restricted countries; "
-        "I [do/do not] require employer visa sponsorship or transfer."
+        "I am on [visa/status if applicable]; for H-1B/transfer questions answer [answer]; "
+        "for sponsorship-only questions answer [answer]."
     ),
     "background_or_export_control": (
         "Example shape: [No/describe] disqualifying background, export-control, indictment, "
@@ -6403,15 +6405,27 @@ function clientSpecificityReason(alias, text, highRisk) {
   if (alias === "citizenship_status") {
     const h1b = /h\s*[- ]?\s*1\s*b/.test(normalized);
     const noSponsor = /\b(no|not|without)\b.{0,40}\b(sponsor|sponsorship|visa sponsorship|visa transfer)\b|\b(do not|don't|does not|doesn't)\b.{0,40}\b(require|need)\b.{0,40}\b(sponsor|sponsorship)\b|\bno sponsorship\b|\bno visa sponsorship\b|不需要.{0,30}(sponsorship|sponsor|签证|转签|transfer|担保)|无需.{0,30}(sponsorship|sponsor|签证|转签|transfer|担保)|不用.{0,30}(sponsorship|sponsor|签证|转签|transfer|担保)/.test(normalized);
-    if (h1b && noSponsor) {
+    const transferPositive = /\b(transfer|visa transfer|h-1b transfer|h1b transfer)\b.{0,40}\b(yes|require|need|needs|needed|required)\b|\b(yes|require|need|needs|needed|required)\b.{0,40}\b(transfer|visa transfer|h-1b transfer|h1b transfer)\b|transfer.{0,20}(yes|是|要|需要)|(yes|是|要|需要).{0,20}transfer|转签.{0,20}(是|要|需要)|(是|要|需要).{0,20}转签/.test(normalized);
+    const sponsorOnlyNegative = /\b(sponsor|sponsorship|visa sponsorship)\b.{0,20}\b(only|alone)\b.{0,40}\b(no|not|without|do not|don't)\b|\b(only|alone)\b.{0,20}\b(sponsor|sponsorship|visa sponsorship)\b.{0,40}\b(no|not|without|do not|don't)\b|只问.{0,20}(sponsor|sponsorship|担保|赞助).{0,20}(不|否|no)|(sponsor|sponsorship|担保|赞助).{0,20}就说.{0,10}(不|否|no)/.test(normalized);
+    if (h1b && noSponsor && !transferPositive && !sponsorOnlyNegative) {
       return "H-1B answer conflicts with no-sponsorship wording; clarify whether a new employer must provide H-1B transfer or visa sponsorship";
     }
     if (h1b && !/\b(sponsor|sponsorship|visa sponsorship|visa transfer|transfer)\b|签证|转签|担保/.test(normalized)) {
       return "H-1B answer must state whether employer sponsorship or transfer is required";
     }
-    return answer.length >= 12 && /\\b(citizen|citizenship|permanent|resident|green card|u\\.s\\.|us person|restricted|country|countries)\\b/.test(normalized)
-      ? ""
-      : "citizenship answer must mention citizenship/residency/restricted-country status";
+    if (answer.length < 12) {
+      return "citizenship answer must mention citizenship/residency/restricted-country status";
+    }
+    if (!/\\b(citizen|citizenship|nationality)\\b|公民|国籍/.test(normalized)) {
+      return "citizenship answer must mention citizenship";
+    }
+    if (!/\\b(u\\.s\\. person|us person|permanent resident|permanent residency|green card|u\\.s\\. citizen|us citizen)\\b|美国公民|美国永久居民|永久居民|绿卡|美国人/.test(normalized)) {
+      return "citizenship answer must mention U.S. person or permanent-resident status";
+    }
+    if (!/\\b(restricted country|restricted countries|restricted-country)\\b|受限国家|限制国家/.test(normalized)) {
+      return "citizenship answer must mention restricted-country citizenship or permanent-residency status";
+    }
+    return "";
   }
   if (alias === "background_or_export_control") {
     return answer.length >= 20 ? "" : "answer must include default and exceptions";
@@ -6808,12 +6822,9 @@ def _final_answer_intake_answer_specificity(
         h1b_reason = _citizenship_h1b_sponsorship_specificity_reason(normalized)
         if h1b_reason:
             return False, h1b_reason
-        if len(answer) < 12 or not re.search(
-            r"\b(citizen|citizenship|permanent|resident|green card|u\.s\.|us person|restricted|country|countries)\b"
-            r"|公民|国籍|永久居民|绿卡|美国人|受限国家|限制国家",
-            normalized,
-        ):
-            return False, "citizenship answer must mention citizenship/residency/restricted-country status"
+        citizenship_reason = _citizenship_specificity_reason(answer, normalized)
+        if citizenship_reason:
+            return False, citizenship_reason
     elif alias in {"background_or_export_control", "country_work_permit"}:
         if len(answer) < 20:
             return False, "answer must include default and exceptions"
@@ -6831,6 +6842,27 @@ def _final_answer_intake_answer_specificity(
     return True, ""
 
 
+def _citizenship_specificity_reason(answer: str, normalized_answer: str) -> str:
+    normalized = str(normalized_answer or "").strip().lower()
+    if len(str(answer or "").strip()) < 12:
+        return "citizenship answer must mention citizenship/residency/restricted-country status"
+    if not re.search(r"\b(citizen|citizenship|nationality)\b|公民|国籍", normalized):
+        return "citizenship answer must mention citizenship"
+    if not re.search(
+        r"\b(u\.s\. person|us person|permanent resident|permanent residency|green card|u\.s\. citizen|us citizen)\b"
+        r"|美国公民|美国永久居民|永久居民|绿卡|美国人",
+        normalized,
+    ):
+        return "citizenship answer must mention U.S. person or permanent-resident status"
+    if not re.search(
+        r"\b(restricted country|restricted countries|restricted-country)\b"
+        r"|受限国家|限制国家",
+        normalized,
+    ):
+        return "citizenship answer must mention restricted-country citizenship or permanent-residency status"
+    return ""
+
+
 def _citizenship_h1b_sponsorship_specificity_reason(normalized_answer: str) -> str:
     normalized = str(normalized_answer or "").strip().lower()
     if not re.search(r"h\s*[- ]?\s*1\s*b", normalized):
@@ -6844,7 +6876,7 @@ def _citizenship_h1b_sponsorship_specificity_reason(normalized_answer: str) -> s
         r"|不用.{0,30}(sponsorship|sponsor|签证|转签|transfer|担保)",
         normalized,
     )
-    if no_sponsorship:
+    if no_sponsorship and not _h1b_answer_has_transfer_positive_rule(normalized):
         return "H-1B answer conflicts with no-sponsorship wording; clarify whether a new employer must provide H-1B transfer or visa sponsorship"
     if not re.search(
         r"\b(sponsor|sponsorship|visa sponsorship|visa transfer|transfer)\b"
@@ -6853,6 +6885,27 @@ def _citizenship_h1b_sponsorship_specificity_reason(normalized_answer: str) -> s
     ):
         return "H-1B answer must state whether employer sponsorship or transfer is required"
     return ""
+
+
+def _h1b_answer_has_transfer_positive_rule(normalized_answer: str) -> bool:
+    normalized = str(normalized_answer or "").strip().lower()
+    transfer_positive = re.search(
+        r"\b(transfer|visa transfer|h-1b transfer|h1b transfer)\b.{0,40}\b(yes|require|need|needs|needed|required)\b"
+        r"|\b(yes|require|need|needs|needed|required)\b.{0,40}\b(transfer|visa transfer|h-1b transfer|h1b transfer)\b"
+        r"|transfer.{0,20}(yes|\u662f|\u8981|\u9700\u8981)"
+        r"|(yes|\u662f|\u8981|\u9700\u8981).{0,20}transfer"
+        r"|\u8f6c\u7b7e.{0,20}(\u662f|\u8981|\u9700\u8981)"
+        r"|(\u662f|\u8981|\u9700\u8981).{0,20}\u8f6c\u7b7e",
+        normalized,
+    )
+    sponsor_only_negative = re.search(
+        r"\b(sponsor|sponsorship|visa sponsorship)\b.{0,20}\b(only|alone)\b.{0,40}\b(no|not|without|do not|don't)\b"
+        r"|\b(only|alone)\b.{0,20}\b(sponsor|sponsorship|visa sponsorship)\b.{0,40}\b(no|not|without|do not|don't)\b"
+        r"|\u53ea\u95ee.{0,20}(sponsor|sponsorship|\u62c5\u4fdd|\u8d5e\u52a9).{0,20}(\u4e0d|\u5426|no)"
+        r"|(sponsor|sponsorship|\u62c5\u4fdd|\u8d5e\u52a9).{0,20}\u5c31\u8bf4.{0,10}(\u4e0d|\u5426|no)",
+        normalized,
+    )
+    return bool(transfer_positive or sponsor_only_negative)
 
 
 def _final_answer_intake_raw_answer(
@@ -25983,13 +26036,16 @@ def build_final_answer_revision_user_input_report(
                 "question": str(problem_field.get("question") or template_field.get("question") or ""),
                 "answer_format_hint": template_field.get("answer_format_hint") or "",
                 "answer_specificity_hint": str(
-                    problem_field.get("hint")
+                    FINAL_ANSWER_INTAKE_SPECIFICITY_HINTS.get(alias)
+                    or problem_field.get("hint")
                     or template_field.get("answer_specificity_hint")
+                    or FINAL_ANSWER_INTAKE_FORMAT_HINTS.get(alias)
                     or template_field.get("answer_format_hint")
                     or ""
                 ),
                 "answer_example_shape": str(
-                    problem_field.get("expected_shape")
+                    FINAL_ANSWER_INTAKE_EXAMPLE_SHAPES.get(alias)
+                    or problem_field.get("expected_shape")
                     or template_field.get("answer_example_shape")
                     or _final_answer_intake_example_shape(alias)
                 ),
@@ -32157,6 +32213,10 @@ def _truncate_telegram_text(text: str, limit: int = 3900) -> str:
 
 
 def _direct_answer(profile: CandidateProfile, normalized_question: str) -> str | None:
+    visa_status_answer = _direct_visa_status_answer(profile, normalized_question)
+    if visa_status_answer:
+        return visa_status_answer
+
     for key, answer in profile.question_answers.items():
         key_text = _normalize(key)
         if key_text and key_text in normalized_question:
@@ -32300,6 +32360,60 @@ def _direct_answer(profile: CandidateProfile, normalized_question: str) -> str |
             continue
         answer = profile.question_answers.get(answer_key)
         if answer and any(_direct_answer_hint_matches(normalized_question, hint) for hint in hints):
+            return answer
+    return None
+
+
+def _direct_visa_status_answer(profile: CandidateProfile, normalized_question: str) -> str | None:
+    if any(term in normalized_question for term in ["security clearance", "clearance", "scif"]):
+        return None
+    sponsorship_question = any(
+        term in normalized_question
+        for term in [
+            "visa sponsorship",
+            "sponsorship",
+            "sponsor",
+            "immigration assistance",
+            "immigration support",
+            "need visa",
+            "require visa",
+            "\u7b7e\u8bc1\u62c5\u4fdd",
+            "\u7b7e\u8bc1\u8d5e\u52a9",
+        ]
+    )
+    h1b_question = bool(re.search(r"h\s*[- ]?\s*1\s*b", normalized_question))
+    raw_transfer_question = any(
+        term in normalized_question
+        for term in [
+            "transfer",
+            "visa transfer",
+            "h1b transfer",
+            "h 1b transfer",
+            "h-1b transfer",
+            "\u8f6c\u7b7e",
+        ]
+    )
+    immigration_context = bool(
+        sponsorship_question
+        or h1b_question
+        or any(term in normalized_question for term in ["visa", "immigration", "\u7b7e\u8bc1"])
+    )
+    transfer_question = raw_transfer_question and immigration_context
+    if not (h1b_question or transfer_question or sponsorship_question):
+        return None
+    if transfer_question:
+        for key in ["h1b_transfer", "visa_transfer", "sponsorship_transfer"]:
+            answer = str(profile.question_answers.get(key) or "").strip()
+            if answer:
+                return answer
+    if h1b_question:
+        for key in ["h1b_status", "visa_status"]:
+            answer = str(profile.question_answers.get(key) or "").strip()
+            if answer:
+                return answer
+    if sponsorship_question:
+        answer = str(profile.question_answers.get("sponsorship") or "").strip()
+        if answer:
             return answer
     return None
 

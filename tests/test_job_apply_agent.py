@@ -376,6 +376,9 @@ class JobApplyAgentTests(unittest.TestCase):
                 "compensation_currency": "USD",
                 "policy_acknowledgement": "Yes, I acknowledge.",
                 "referral_contact": "N/A - no specific employee referral.",
+                "h1b_status": "H-1B",
+                "h1b_transfer": "Yes, I require H-1B transfer.",
+                "sponsorship": "No, I do not require visa sponsorship.",
             },
         )
         job = {
@@ -390,6 +393,11 @@ class JobApplyAgentTests(unittest.TestCase):
                 "If someone referred you, please add note their name below",
                 "I acknowledge SEON's Recruitment Privacy Notice and understand how my data will be used for recruitment.",
                 "This role does not require active security clearance at the time of hiring, but candidates must be eligible and willing to obtain company-sponsored security clearance after starting. Are you willing and able to meet this requirement?",
+                "What is your current H-1B status?",
+                "Will you require H-1B transfer?",
+                "Will you require visa sponsorship?",
+                "Will you require visa sponsorship or transfer?",
+                "How do you approach safe production data transfer?",
                 "What aspects of startup culture resonate with you, and how do you believe they align with your working style?",
                 "What aspects of the cryptocurrency industry appeal to you, and how do they align with your career goals?",
             ],
@@ -434,6 +442,23 @@ class JobApplyAgentTests(unittest.TestCase):
                 "This role does not require active security clearance at the time of hiring, but candidates must be eligible and willing to obtain company-sponsored security clearance after starting. Are you willing and able to meet this requirement?"
             ],
             "Yes, I will now or in the future require visa sponsorship or a visa transfer.",
+        )
+        self.assertEqual(draft.answers["What is your current H-1B status?"], "H-1B")
+        self.assertEqual(
+            draft.answers["Will you require H-1B transfer?"],
+            "Yes, I require H-1B transfer.",
+        )
+        self.assertEqual(
+            draft.answers["Will you require visa sponsorship?"],
+            "No, I do not require visa sponsorship.",
+        )
+        self.assertEqual(
+            draft.answers["Will you require visa sponsorship or transfer?"],
+            "Yes, I require H-1B transfer.",
+        )
+        self.assertNotEqual(
+            draft.answers["How do you approach safe production data transfer?"],
+            "Yes, I require H-1B transfer.",
         )
         self.assertNotEqual(
             draft.answers[
@@ -7753,6 +7778,28 @@ class JobApplyAgentTests(unittest.TestCase):
             h1b_conflict["compact_updates"],
         )
 
+        h1b_missing_restricted_status = build_final_answer_intake_update(
+            unblockers,
+            {
+                "answers": {
+                    "zip_or_postal_code": "98004",
+                    "citizenship_status": {
+                        "answer": (
+                            "I am a Chinese citizen on H-1B; I am not a U.S. person "
+                            "or permanent resident; if asked about H-1B transfer, answer yes; "
+                            "if asked only about sponsorship, answer no."
+                        ),
+                        "high_risk_user_confirmed": True,
+                    },
+                }
+            },
+        )
+        self.assertFalse(h1b_missing_restricted_status["ready_for_finalize"])
+        self.assertIn(
+            "restricted-country",
+            h1b_missing_restricted_status["fields"][1]["specificity_reason"],
+        )
+
         h1b_ready = build_final_answer_intake_update(
             unblockers,
             {
@@ -7762,7 +7809,8 @@ class JobApplyAgentTests(unittest.TestCase):
                         "answer": (
                             "I am a Chinese citizen on H-1B; I am not a U.S. person or permanent "
                             "resident; I do not have citizenship or permanent residency in restricted "
-                            "countries; I require employer H-1B transfer or visa sponsorship."
+                            "countries; if asked about H-1B status, answer H-1B; if asked about "
+                            "H-1B transfer, answer yes; if asked only about sponsorship, answer no."
                         ),
                         "high_risk_user_confirmed": True,
                     },
@@ -7834,7 +7882,15 @@ class JobApplyAgentTests(unittest.TestCase):
             )
             written_report = write_final_answer_intake_update(
                 unblockers,
-                {"answers": {"zip_or_postal_code": "98004", "citizenship_status": "U.S. citizen."}},
+                {
+                    "answers": {
+                        "zip_or_postal_code": "98004",
+                        "citizenship_status": (
+                            "U.S. citizen and U.S. person; no restricted-country citizenship "
+                            "or permanent residency."
+                        ),
+                    }
+                },
                 updates_json,
                 report_json,
                 report_md,
@@ -7863,7 +7919,10 @@ class JobApplyAgentTests(unittest.TestCase):
                     "answers": {
                         "zip_or_postal_code": "98004",
                         "citizenship_status": {
-                            "answer": "U.S. citizen.",
+                            "answer": (
+                                "U.S. citizen and U.S. person; no restricted-country "
+                                "citizenship or permanent residency."
+                            ),
                             "high_risk_user_confirmed": True,
                         },
                     },
@@ -9279,6 +9338,78 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertIn("Ready for finalize: true", resume_result.stdout)
             self.assertNotIn("98004", resume_result.stdout)
             self.assertNotIn(specific_answer, resume_result.stdout)
+
+    def test_final_answer_autopilot_revision_prompt_uses_current_h1b_shape(self) -> None:
+        unblockers = {
+            "unblockers": [
+                {
+                    "input_id": "answer_memory_citizenship_status_default_policy",
+                    "question": "What citizenship answer should automation use?",
+                    "high_risk": True,
+                    "required_count": 1,
+                }
+            ]
+        }
+        template = build_final_answer_intake_template(unblockers)
+        template["fields"][0]["answer_specificity_hint"] = "old citizenship hint"
+        template["fields"][0]["answer_example_shape"] = "old citizenship shape"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            reply_path = root / "reply.txt"
+            template_path = root / "template.json"
+            unblockers_path = root / "unblockers.json"
+            report_path = root / "autopilot.json"
+            markdown_path = root / "autopilot.md"
+            revision_path = root / "revision.md"
+            reply_path.write_text(
+                "citizenship_status\uff1a\u6211\u662f\u4e2d\u56fd\u516c\u6c11 / \u4e0d\u9700\u8981\u7b7e\u8bc1 sponsorship / \u662fh1b\n"
+                "citizenship_status_confirmed\uff1a\u786e\u8ba4\n",
+                encoding="utf-8",
+            )
+            template_path.write_text(json.dumps(template, ensure_ascii=True, indent=2), encoding="utf-8")
+            unblockers_path.write_text(json.dumps(unblockers, ensure_ascii=True, indent=2), encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "job_apply_agent",
+                    "final-answer-autopilot",
+                    "--reply-file",
+                    str(reply_path),
+                    "--template",
+                    str(template_path),
+                    "--unblockers",
+                    str(unblockers_path),
+                    "--json-output",
+                    str(report_path),
+                    "--markdown-output",
+                    str(markdown_path),
+                    "--revision-markdown-output",
+                    str(revision_path),
+                    "--dry-run",
+                    "--fail-on-not-ready",
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 2)
+            report_text = report_path.read_text(encoding="utf-8")
+            report = json.loads(report_text)
+            problem = report["validation_receipt"]["problem_fields"][0]
+            self.assertEqual(problem["alias"], "citizenship_status")
+            self.assertIn("H-1B answer conflicts", problem["specificity_reason"])
+            self.assertIn("sponsorship-only vs transfer", problem["hint"])
+            self.assertIn("for H-1B/transfer questions answer", problem["expected_shape"])
+            self.assertNotIn("old citizenship hint", report_text)
+            self.assertNotIn("old citizenship shape", report_text)
+            revision_text = revision_path.read_text(encoding="utf-8")
+            self.assertIn("sponsorship-only vs transfer", revision_text)
+            self.assertIn("for H-1B/transfer questions answer", revision_text)
+            self.assertNotIn("\u6211\u662f\u4e2d\u56fd\u516c\u6c11", revision_text)
 
     def test_final_answer_autopilot_validates_filled_reply_without_storing_answer_text(self) -> None:
         unblockers = {
