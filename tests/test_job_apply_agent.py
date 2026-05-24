@@ -8150,6 +8150,24 @@ class JobApplyAgentTests(unittest.TestCase):
             [row["alias"] for row in report["blockers"]],
             ["citizenship_status", "interview_recording_consent"],
         )
+        self.assertEqual(
+            [claim["id"] for claim in report["blockers"][0]["required_claims"]],
+            [
+                "citizenship",
+                "us_citizen",
+                "permanent_resident",
+                "us_person",
+                "restricted_country",
+                "visa_status",
+                "h1b_status_rule",
+                "h1b_transfer_rule",
+                "sponsorship_only_rule",
+            ],
+        )
+        self.assertIn(
+            "AI interview analysis consent",
+            [claim["label"] for claim in report["blockers"][1]["required_claims"]],
+        )
         self.assertEqual(report["summary"]["blocker_count"], 2)
         self.assertEqual(report["summary"]["ready_count"], 4)
         self.assertEqual(report["summary"]["missing_answer_count"], 0)
@@ -8263,6 +8281,10 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("--open-browser --open-limit 100", report["post_answer_runbook"][3]["command"])
         self.assertIn("unattended real employer submit remains disabled", report["post_answer_runbook"][4]["safety_gate"])
         self.assertEqual(report["blockers"][0]["alias"], "citizenship_status")
+        self.assertIn(
+            "restricted-country citizenship or permanent-residency status",
+            [claim["label"] for claim in report["blockers"][0]["required_claims"]],
+        )
         self.assertIn("answer_example_shape", report["blockers"][0])
         self.assertEqual(report["blockers"][0]["observed_prompt_count"], 2)
         self.assertIn("Are you a U.S. Citizen?", report["blockers"][0]["observed_prompt_examples"])
@@ -8323,6 +8345,9 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("citizenship_status", markdown)
         self.assertIn("Example Shape", markdown)
         self.assertIn("Why Not Inferred", markdown)
+        self.assertIn("Required Claim Checklist", markdown)
+        self.assertIn("restricted_country", markdown)
+        self.assertIn("U.S. person status", markdown)
         self.assertIn("Observed Prompt Examples", markdown)
         self.assertIn("Are you a U.S. Citizen?", markdown)
         self.assertIn("Ready after truthful answer reply: true", markdown)
@@ -8360,6 +8385,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Preflight checked", html)
         self.assertIn("Answer Capture Boundary", html)
         self.assertIn("Blocking Questions", html)
+        self.assertIn("Required Claim Checklist", html)
         self.assertIn("Observed Prompt Examples", html)
         self.assertIn("Post-Answer Runbook", html)
         self.assertIn("citizenship_status", html)
@@ -8380,6 +8406,8 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("Live preflight: 100 checked / 100 open", alert)
         self.assertIn("citizenship_status", alert)
         self.assertIn("Shape:", alert)
+        self.assertIn("Must cover:", alert)
+        self.assertIn("U.S. person status", alert)
         self.assertIn("Shortest reply shape:", alert)
         self.assertIn("Write fill-in file:", alert)
         self.assertIn("final-answer-user-input", alert)

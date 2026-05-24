@@ -24954,6 +24954,52 @@ def _final_answer_validation_problem_fields_by_alias(
     return by_alias
 
 
+FINAL_ANSWER_REQUIRED_CLAIMS = {
+    "citizenship_status": [
+        {"id": "citizenship", "label": "citizenship or nationality"},
+        {"id": "us_citizen", "label": "U.S. citizen status"},
+        {"id": "permanent_resident", "label": "U.S. permanent resident or green-card status"},
+        {"id": "us_person", "label": "U.S. person status"},
+        {
+            "id": "restricted_country",
+            "label": "restricted-country citizenship or permanent-residency status",
+        },
+        {"id": "visa_status", "label": "current visa/status if applicable"},
+        {"id": "h1b_status_rule", "label": "what to answer when the form asks H-1B"},
+        {"id": "h1b_transfer_rule", "label": "what to answer when the form asks H-1B transfer"},
+        {
+            "id": "sponsorship_only_rule",
+            "label": "what to answer when the form only asks sponsorship/sponsor",
+        },
+    ],
+    "interview_recording_consent": [
+        {"id": "recording", "label": "interview recording consent"},
+        {"id": "transcription", "label": "interview transcription consent"},
+        {"id": "ai_notetaker", "label": "AI notetaker consent"},
+        {"id": "ai_analysis", "label": "AI interview analysis consent"},
+        {"id": "exceptions", "label": "exceptions, or none"},
+    ],
+    "background_or_export_control": [
+        {"id": "background", "label": "background check/legal eligibility default"},
+        {"id": "export_control", "label": "export-control eligibility default"},
+        {"id": "exceptions", "label": "exceptions, or none"},
+    ],
+    "country_work_permit": [
+        {"id": "countries", "label": "countries/regions where work is authorized"},
+        {"id": "permit_scope", "label": "whether extra sponsorship or permits are needed"},
+        {"id": "exceptions", "label": "exceptions, or none"},
+    ],
+    "health_requirement": [
+        {"id": "health", "label": "health/vaccination/client-site requirement default"},
+        {"id": "exceptions", "label": "exceptions, or none"},
+    ],
+}
+
+
+def _final_answer_required_claims(alias: str) -> list[dict[str, str]]:
+    return [dict(row) for row in FINAL_ANSWER_REQUIRED_CLAIMS.get(str(alias or ""), [])]
+
+
 def build_final_answer_blocker_report(
     template: dict[str, Any],
     goal_audit: dict[str, Any] | None = None,
@@ -25049,6 +25095,7 @@ def build_final_answer_blocker_report(
                     or _final_answer_intake_example_shape(alias),
                     "required_user_response": field.get("required_user_response") or "",
                     "why_not_inferred": field.get("why_not_inferred") or "",
+                    "required_claims": _final_answer_required_claims(alias),
                     "observed_prompt_count": len(labels),
                     "observed_prompt_examples": labels[:8],
                 }
@@ -25087,6 +25134,7 @@ def build_final_answer_blocker_report(
                 or _final_answer_intake_example_shape(alias),
                 "required_user_response": "",
                 "why_not_inferred": "",
+                "required_claims": _final_answer_required_claims(alias),
                 "observed_prompt_count": 1 if observed_prompt else 0,
                 "observed_prompt_examples": [observed_prompt] if observed_prompt else [],
             }
@@ -25314,6 +25362,7 @@ def build_final_answer_blocker_report(
         "observed_prompt_example_count": sum(
             len(row.get("observed_prompt_examples") or []) for row in blocker_rows
         ),
+        "required_claim_count": sum(len(row.get("required_claims") or []) for row in blocker_rows),
     }
     automation_after_answers = {
         "status": (
@@ -26421,6 +26470,22 @@ def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
         )
     else:
         lines.append("- None")
+    lines.extend(["", "## Required Claim Checklist", ""])
+    if blockers:
+        for row in blockers:
+            claims = row.get("required_claims") or []
+            lines.append(f"- {row.get('alias')}")
+            if claims:
+                for claim in claims:
+                    if not isinstance(claim, dict):
+                        continue
+                    claim_id = str(claim.get("id") or "").strip()
+                    label = str(claim.get("label") or "").strip()
+                    lines.append(f"  - {claim_id}: {label}")
+            else:
+                lines.append("  - No structured claim checklist for this alias")
+    else:
+        lines.append("- None")
     lines.extend(["", "## Observed Prompt Examples", ""])
     if blockers:
         for row in blockers:
@@ -26594,7 +26659,15 @@ def render_final_answer_blocker_report_html(report: dict[str, Any]) -> str:
     summary = report.get("summary") or {}
     blockers = report.get("blockers") or []
     observed_rows: list[list[Any]] = []
+    claim_rows: list[list[Any]] = []
     for row in blockers:
+        claims = row.get("required_claims") or []
+        if claims:
+            for claim in claims:
+                if isinstance(claim, dict):
+                    claim_rows.append([row.get("alias"), claim.get("id"), claim.get("label")])
+        else:
+            claim_rows.append([row.get("alias"), "", "No structured claim checklist for this alias"])
         examples = row.get("observed_prompt_examples") or []
         platforms = ", ".join(str(platform) for platform in row.get("platforms") or [])
         if not examples:
@@ -26705,6 +26778,9 @@ def render_final_answer_blocker_report_html(report: dict[str, Any]) -> str:
                 ],
             ),
             "</section>",
+            "<section><h2>Required Claim Checklist</h2>",
+            _html_table(["Alias", "Claim ID", "Required claim"], claim_rows),
+            "</section>",
             "<section><h2>Observed Prompt Examples</h2>",
             _html_table(["Alias", "Platforms", "Example #", "Prompt"], observed_rows),
             "</section>",
@@ -26803,6 +26879,15 @@ def build_telegram_final_answer_blocker_alert(
         example_shape = row.get("answer_example_shape")
         if example_shape:
             lines.append(f"   Shape: {example_shape}")
+        claims = [
+            str(claim.get("label") or "").strip()
+            for claim in row.get("required_claims") or []
+            if isinstance(claim, dict) and str(claim.get("label") or "").strip()
+        ]
+        if claims:
+            lines.append(f"   Must cover: {'; '.join(claims[:5])}")
+            if len(claims) > 5:
+                lines.append("   More claim details in final_answer_blockers_latest.md")
     if len(blockers) > max_items:
         lines.append(f"... {len(blockers) - max_items} more in job_apply_agent/outbox")
     lines.append("")
