@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import urllib.error
 import zipfile
 import xml.etree.ElementTree as ET
@@ -8780,6 +8781,18 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(filled_report["validation_receipt"]["ready_for_finalize"])
             self.assertNotIn("98004", filled_report_text)
             self.assertNotIn("98004", filled_markdown_path.read_text(encoding="utf-8"))
+
+            numbers_path = root / "reply.numbers"
+            numbers_path.write_bytes(b"fake iWork package; exporter is mocked")
+            with mock.patch("job_apply_agent.core._export_numbers_to_xlsx") as exporter:
+                exporter.side_effect = lambda _source, output: Path(output).write_bytes(
+                    filled_xlsx_path.read_bytes()
+                )
+                self.assertIn(
+                    "zip_or_postal_code\uff1a98004",
+                    final_answer_reply_text_from_file(numbers_path),
+                )
+                exporter.assert_called_once()
 
     def test_final_answer_autopilot_validates_filled_reply_without_storing_answer_text(self) -> None:
         unblockers = {

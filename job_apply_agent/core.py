@@ -24029,7 +24029,57 @@ def final_answer_reply_text_from_file(path: str | Path) -> str:
     reply_path = Path(path)
     if reply_path.suffix.lower() == ".xlsx":
         return final_answer_reply_text_from_xlsx(reply_path)
+    if reply_path.suffix.lower() == ".numbers":
+        return final_answer_reply_text_from_numbers(reply_path)
     return reply_path.read_text(encoding="utf-8")
+
+
+def final_answer_reply_text_from_numbers(path: str | Path) -> str:
+    reply_path = Path(path)
+    with tempfile.TemporaryDirectory(prefix="job_apply_numbers_") as temp_dir:
+        exported_path = Path(temp_dir) / f"{reply_path.stem}.xlsx"
+        _export_numbers_to_xlsx(reply_path, exported_path)
+        return final_answer_reply_text_from_xlsx(exported_path)
+
+
+def _export_numbers_to_xlsx(numbers_path: Path, xlsx_path: Path) -> None:
+    source_path = numbers_path.expanduser().resolve()
+    output_path = xlsx_path.expanduser().resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    script = "\n".join(
+        [
+            f"set inputPath to POSIX file {_applescript_string(str(source_path))}",
+            f"set outputPath to POSIX file {_applescript_string(str(output_path))}",
+            'tell application "Numbers"',
+            "    set theDocument to open inputPath",
+            "    export theDocument to outputPath as Microsoft Excel",
+            "    close theDocument saving no",
+            "end tell",
+            "",
+        ]
+    )
+    try:
+        result = subprocess.run(
+            ["osascript"],
+            input=script,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=60,
+        )
+    except FileNotFoundError as exc:
+        raise ValueError("Apple Numbers export requires osascript on macOS") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError("Apple Numbers export timed out") from exc
+    if result.returncode != 0:
+        reason = (result.stderr or result.stdout or "unknown osascript error").strip()
+        raise ValueError(f"Apple Numbers export failed: {reason}") from None
+    if not output_path.exists():
+        raise ValueError("Apple Numbers export failed: xlsx output was not created")
+
+
+def _applescript_string(value: str) -> str:
+    return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def final_answer_reply_text_from_xlsx(path: str | Path) -> str:
