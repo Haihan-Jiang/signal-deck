@@ -18453,8 +18453,11 @@ def _automation_handoff_next_commands(summary: dict[str, Any]) -> list[str]:
     commands = [
         _automation_handoff_one_command_resume(summary),
         "python3 -m job_apply_agent final-answer-blockers --print-minimal-reply",
+        "python3 -m job_apply_agent final-answer-user-input",
         "python3 -m job_apply_agent rehearse-after-answers",
         "python3 -m job_apply_agent resume-after-answers --reply-stdin --validate-only",
+        f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_USER_INPUT_PATH} --dry-run --fail-on-not-ready",
+        f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_USER_INPUT_PATH} --apply --live-check --include-values --fail-on-not-ready",
         f"python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --run-post-answer-pipeline --fail-on-not-ready",
         "python3 -m job_apply_agent final-answer-autopilot --reply-stdin --apply --live-check --include-values --fail-on-not-ready",
         "python3 -m job_apply_agent resume-after-answers --reply-stdin",
@@ -23675,13 +23678,18 @@ def build_final_answer_blocker_report(
         "minimal_reply_prompt_lines": minimal_reply_prompt_lines,
         "next_commands": [
             "python3 -m job_apply_agent rehearse-after-answers",
+            "python3 -m job_apply_agent final-answer-user-input",
             "python3 -m job_apply_agent resume-after-answers --reply-stdin --validate-only",
             "python3 -m job_apply_agent final-answer-autopilot --reply-stdin --dry-run --fail-on-not-ready",
+            f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_USER_INPUT_PATH} --dry-run --fail-on-not-ready",
             f"python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --validate-only --fail-on-not-ready",
             "python3 -m job_apply_agent resume-after-answers",
+            f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_USER_INPUT_PATH} --apply --live-check --include-values --fail-on-not-ready",
             f"python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --run-post-answer-pipeline --fail-on-not-ready",
             "python3 -m job_apply_agent final-answer-autopilot --reply-stdin --apply --live-check --include-values --fail-on-not-ready",
+            f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_USER_INPUT_PATH} --watch --fail-on-not-ready",
             f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --watch --fail-on-not-ready",
+            f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_USER_INPUT_PATH} --watch --apply --live-check --include-values --fail-on-not-ready",
             f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --watch --apply --live-check --include-values --fail-on-not-ready",
             "python3 -m job_apply_agent final-answer-intake-server --open-browser --once --run-post-answer-pipeline --post-answer-apply --post-answer-live-check --post-answer-include-values",
         ],
@@ -23695,6 +23703,71 @@ def build_final_answer_blocker_report(
     }
 
 
+def _final_answer_user_input_action_commands(
+    reply_file_path: str | Path = FINAL_ANSWER_USER_INPUT_PATH,
+) -> dict[str, str]:
+    reply_file = str(reply_file_path)
+    return {
+        "user_input_file": reply_file,
+        "user_input_generate_command": "python3 -m job_apply_agent final-answer-user-input",
+        "user_input_validate_command": shlex.join(
+            [
+                "python3",
+                "-m",
+                "job_apply_agent",
+                "final-answer-autopilot",
+                "--reply-file",
+                reply_file,
+                "--dry-run",
+                "--fail-on-not-ready",
+            ]
+        ),
+        "user_input_run_command": shlex.join(
+            [
+                "python3",
+                "-m",
+                "job_apply_agent",
+                "final-answer-autopilot",
+                "--reply-file",
+                reply_file,
+                "--apply",
+                "--live-check",
+                "--include-values",
+                "--fail-on-not-ready",
+            ]
+        ),
+        "user_input_open_command": shlex.join(
+            [
+                "python3",
+                "-m",
+                "job_apply_agent",
+                "final-answer-autopilot",
+                "--reply-file",
+                reply_file,
+                "--apply",
+                "--live-check",
+                "--include-values",
+                "--open-browser",
+                "--open-limit",
+                "100",
+                "--fail-on-not-ready",
+            ]
+        ),
+        "user_input_watch_command": shlex.join(
+            [
+                "python3",
+                "-m",
+                "job_apply_agent",
+                "final-answer-autopilot",
+                "--reply-file",
+                reply_file,
+                "--watch",
+                "--fail-on-not-ready",
+            ]
+        ),
+    }
+
+
 def write_final_answer_blocker_report(
     template: dict[str, Any],
     goal_audit: dict[str, Any] | None,
@@ -23703,6 +23776,7 @@ def write_final_answer_blocker_report(
     reply_template_output: str | Path | None = None,
     html_output: str | Path | None = None,
     xlsx_output: str | Path | None = None,
+    user_input_output: str | Path | None = None,
 ) -> dict[str, Any]:
     report = build_final_answer_blocker_report(template, goal_audit=goal_audit)
     json_path = Path(json_output)
@@ -23710,7 +23784,12 @@ def write_final_answer_blocker_report(
     reply_template_path = Path(reply_template_output) if reply_template_output else None
     html_path = Path(html_output) if html_output else None
     xlsx_path = Path(xlsx_output) if xlsx_output else None
-    for output_path in [path for path in [json_path, markdown_path, reply_template_path, html_path, xlsx_path] if path]:
+    user_input_path = Path(user_input_output) if user_input_output else None
+    for output_path in [
+        path
+        for path in [json_path, markdown_path, reply_template_path, html_path, xlsx_path, user_input_path]
+        if path
+    ]:
         output_path.parent.mkdir(parents=True, exist_ok=True)
     report["outputs"] = {
         "json": str(json_path),
@@ -23723,11 +23802,22 @@ def write_final_answer_blocker_report(
         report["outputs"]["html"] = str(html_path)
     if xlsx_path:
         report["outputs"]["xlsx"] = str(xlsx_path)
+    if user_input_path:
+        report["outputs"]["user_input"] = str(user_input_path)
+        report["user_input_output"] = str(user_input_path)
+        action_pack = report.get("action_pack") if isinstance(report.get("action_pack"), dict) else {}
+        if action_pack:
+            action_pack.update(_final_answer_user_input_action_commands(user_input_path))
     _atomic_write_json(json_path, report)
     markdown_path.write_text(render_final_answer_blocker_report_markdown(report), encoding="utf-8")
     if reply_template_path:
         reply_template_path.write_text(
             render_final_answer_reply_template_text(report),
+            encoding="utf-8",
+        )
+    if user_input_path:
+        user_input_path.write_text(
+            render_final_answer_user_input_text(report, reply_file_path=user_input_path),
             encoding="utf-8",
         )
     if html_path:
@@ -23873,6 +23963,7 @@ def _final_answer_blocker_action_pack(
         "manual_answer_count": blocker_count,
         "high_risk_confirmation_count": high_risk_count,
         "reply_file": str(FINAL_ANSWER_REPLY_TEMPLATE_PATH),
+        **_final_answer_user_input_action_commands(),
         "edit_instruction": "replace each <fill> with a truthful reusable answer; keep confirmation lines only when exact and truthful",
         "safe_validate_command": (
             f"python3 -m job_apply_agent final-answer-reply --reply-file "
@@ -24166,12 +24257,18 @@ def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
                 f"- manual answers: {action_pack.get('manual_answer_count', 0)}",
                 f"- high-risk confirmations: {action_pack.get('high_risk_confirmation_count', 0)}",
                 f"- reply file: `{action_pack.get('reply_file', '')}`",
+                f"- user input file: `{action_pack.get('user_input_file', '')}`",
                 f"- edit instruction: {action_pack.get('edit_instruction', '')}",
+                f"- write user input file: `{action_pack.get('user_input_generate_command', '')}`",
+                f"- validate user input file: `{action_pack.get('user_input_validate_command', '')}`",
+                f"- run user input file: `{action_pack.get('user_input_run_command', '')}`",
                 f"- validate without writing: `{action_pack.get('safe_validate_command', '')}`",
                 f"- run post-answer pipeline: `{action_pack.get('safe_run_command', '')}`",
                 f"- direct reply autopilot: `{action_pack.get('autopilot_reply_text_command', '')}`",
                 f"- watch and auto-run when filled: `{action_pack.get('autopilot_command', '')}`",
+                f"- watch user input file: `{action_pack.get('user_input_watch_command', '')}`",
                 f"- watch, apply, live-check, and rebuild packet: `{action_pack.get('autopilot_apply_command', '')}`",
+                f"- run user input and open verified pages: `{action_pack.get('user_input_open_command', '')}`",
                 f"- watch, apply, live-check, rebuild, and open verified pages: `{action_pack.get('autopilot_open_command', '')}`",
                 f"- open after answers: `{action_pack.get('open_after_answers_command', '')}`",
                 f"- stores answer text in report: {str(bool(action_pack.get('stores_answer_text_in_report'))).lower()}",
@@ -24455,6 +24552,12 @@ def build_telegram_final_answer_blocker_alert(
             lines.append(line)
         if len(minimal_reply_prompt_lines) > max_items + 1:
             lines.append("... full minimal prompt in job_apply_agent/outbox/final_answer_blockers_latest.md")
+        lines.append("")
+    action_pack = report.get("action_pack") if isinstance(report.get("action_pack"), dict) else {}
+    if action_pack:
+        lines.append(f"Write fill-in file: {action_pack.get('user_input_generate_command', '')}")
+        lines.append(f"User input file: {action_pack.get('user_input_file', '')}")
+        lines.append(f"Validate filled file: {action_pack.get('user_input_validate_command', '')}")
         lines.append("")
     reply_template_lines = report.get("reply_template_lines") or []
     if reply_template_lines:

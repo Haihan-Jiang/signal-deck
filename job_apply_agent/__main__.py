@@ -1196,6 +1196,10 @@ def main() -> int:
         "--reply-template-output",
         default=str(DEFAULT_FINAL_ANSWER_REPLY_TEMPLATE_TEXT),
     )
+    final_answer_blockers_parser.add_argument(
+        "--user-input-output",
+        default=str(DEFAULT_FINAL_ANSWER_USER_INPUT_TEXT),
+    )
     final_answer_blockers_parser.add_argument("--notify-telegram", action="store_true")
     final_answer_blockers_parser.add_argument("--telegram-env", default=None)
     final_answer_blockers_parser.add_argument("--telegram-dry-run", action="store_true")
@@ -3366,6 +3370,7 @@ def main() -> int:
             args.reply_template_output,
             args.html_output,
             args.xlsx_output,
+            args.user_input_output,
         )
         summary = report.get("summary") or {}
         print(f"Wrote final answer blockers JSON to {args.json_output}")
@@ -3373,6 +3378,7 @@ def main() -> int:
         print(f"Wrote final answer blockers HTML to {args.html_output}")
         print(f"Wrote final answer blockers XLSX to {args.xlsx_output}")
         print(f"Wrote final answer reply template to {args.reply_template_output}")
+        print(f"Wrote final answer user input file to {args.user_input_output}")
         print(f"Blockers: {summary.get('blocker_count', 0)}")
         print(f"Missing answers: {summary.get('missing_answer_count', 0)}")
         print(f"Unconfirmed high-risk: {summary.get('unconfirmed_high_risk_count', 0)}")
