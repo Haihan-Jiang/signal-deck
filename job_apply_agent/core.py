@@ -23740,6 +23740,8 @@ def build_final_answer_blocker_report(
             f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_USER_INPUT_PATH} --apply --live-check --include-values --fail-on-not-ready",
             f"python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --run-post-answer-pipeline --fail-on-not-ready",
             "python3 -m job_apply_agent final-answer-autopilot --reply-stdin --apply --live-check --include-values --fail-on-not-ready",
+            f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_USER_INPUT_XLSX_PATH} --watch --fail-on-not-ready",
+            f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_USER_INPUT_XLSX_PATH} --watch --apply --live-check --include-values --fail-on-not-ready",
             f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_USER_INPUT_PATH} --watch --fail-on-not-ready",
             f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --watch --fail-on-not-ready",
             f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_USER_INPUT_PATH} --watch --apply --live-check --include-values --fail-on-not-ready",
@@ -23849,6 +23851,35 @@ def _final_answer_user_input_action_commands(
                         "--apply",
                         "--live-check",
                         "--include-values",
+                        "--fail-on-not-ready",
+                    ]
+                ),
+                "user_input_xlsx_open_command": shlex.join(
+                    [
+                        "python3",
+                        "-m",
+                        "job_apply_agent",
+                        "final-answer-autopilot",
+                        "--reply-file",
+                        xlsx_reply_file,
+                        "--apply",
+                        "--live-check",
+                        "--include-values",
+                        "--open-browser",
+                        "--open-limit",
+                        "100",
+                        "--fail-on-not-ready",
+                    ]
+                ),
+                "user_input_xlsx_watch_command": shlex.join(
+                    [
+                        "python3",
+                        "-m",
+                        "job_apply_agent",
+                        "final-answer-autopilot",
+                        "--reply-file",
+                        xlsx_reply_file,
+                        "--watch",
                         "--fail-on-not-ready",
                     ]
                 ),
@@ -24563,13 +24594,18 @@ def render_final_answer_blocker_report_markdown(report: dict[str, Any]) -> str:
                 f"- high-risk confirmations: {action_pack.get('high_risk_confirmation_count', 0)}",
                 f"- reply file: `{action_pack.get('reply_file', '')}`",
                 f"- user input file: `{action_pack.get('user_input_file', '')}`",
+                f"- user input Excel: `{action_pack.get('user_input_xlsx_file', '')}`",
                 f"- edit instruction: {action_pack.get('edit_instruction', '')}",
                 f"- write user input file: `{action_pack.get('user_input_generate_command', '')}`",
+                f"- validate user input Excel: `{action_pack.get('user_input_xlsx_validate_command', '')}`",
+                f"- run user input Excel: `{action_pack.get('user_input_xlsx_run_command', '')}`",
                 f"- validate user input file: `{action_pack.get('user_input_validate_command', '')}`",
                 f"- run user input file: `{action_pack.get('user_input_run_command', '')}`",
                 f"- validate without writing: `{action_pack.get('safe_validate_command', '')}`",
                 f"- run post-answer pipeline: `{action_pack.get('safe_run_command', '')}`",
                 f"- direct reply autopilot: `{action_pack.get('autopilot_reply_text_command', '')}`",
+                f"- watch user input Excel: `{action_pack.get('user_input_xlsx_watch_command', '')}`",
+                f"- run user input Excel and open verified pages: `{action_pack.get('user_input_xlsx_open_command', '')}`",
                 f"- watch and auto-run when filled: `{action_pack.get('autopilot_command', '')}`",
                 f"- watch user input file: `{action_pack.get('user_input_watch_command', '')}`",
                 f"- watch, apply, live-check, and rebuild packet: `{action_pack.get('autopilot_apply_command', '')}`",
@@ -24861,6 +24897,10 @@ def build_telegram_final_answer_blocker_alert(
     action_pack = report.get("action_pack") if isinstance(report.get("action_pack"), dict) else {}
     if action_pack:
         lines.append(f"Write fill-in file: {action_pack.get('user_input_generate_command', '')}")
+        if action_pack.get("user_input_xlsx_file"):
+            lines.append(f"User input Excel: {action_pack.get('user_input_xlsx_file', '')}")
+        if action_pack.get("user_input_xlsx_validate_command"):
+            lines.append(f"Validate filled Excel: {action_pack.get('user_input_xlsx_validate_command', '')}")
         lines.append(f"User input file: {action_pack.get('user_input_file', '')}")
         lines.append(f"Validate filled file: {action_pack.get('user_input_validate_command', '')}")
         lines.append("")
