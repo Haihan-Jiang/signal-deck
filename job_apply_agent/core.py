@@ -16847,6 +16847,20 @@ def build_goal_proof_report(
     proved_count = sum(1 for row in requirements if row.get("status") in complete_statuses)
     blocking_rows = [row for row in requirements if row.get("status") == "blocked_on_user_answers"]
     missing_rows = [row for row in requirements if row.get("status") not in complete_statuses and row.get("status") != "blocked_on_user_answers"]
+    synthetic_required_ids = {
+        "closed_posting_filter",
+        "research_100_per_target_platform",
+        "selected_100_position_execution",
+        "local_synthetic_submit_100",
+        "question_and_answer_dependency_map",
+        "submission_safety_boundary",
+        "resume_and_open_runbook",
+    }
+    synthetic_100_path_complete = all(
+        row.get("status") in complete_statuses
+        for row in requirements
+        if row.get("id") in synthetic_required_ids
+    )
     goal_complete = bool(goal.get("goal_complete"))
     status = (
         "complete"
@@ -16866,6 +16880,14 @@ def build_goal_proof_report(
             "proved_count": proved_count,
             "blocking_count": len(blocking_rows),
             "missing_count": len(missing_rows),
+            "synthetic_100_path_complete": synthetic_100_path_complete,
+            "synthetic_100_required_count": len(synthetic_required_ids),
+            "synthetic_100_proved_count": sum(
+                1
+                for row in requirements
+                if row.get("id") in synthetic_required_ids
+                and row.get("status") in complete_statuses
+            ),
             "blocking_requirement_ids": [row.get("id") for row in blocking_rows],
             "missing_requirement_ids": [row.get("id") for row in missing_rows],
             "blocking_final_answer_aliases": blocking_aliases,
@@ -16944,6 +16966,8 @@ def render_goal_proof_markdown(report: dict[str, Any]) -> str:
         f"Status: {report.get('status')}",
         f"Goal complete: {str(bool(summary.get('goal_complete'))).lower()}",
         f"Proved items: {summary.get('proved_count', 0)} / {summary.get('requirement_count', 0)}",
+        f"Synthetic 100-position path complete: {str(bool(summary.get('synthetic_100_path_complete'))).lower()}",
+        f"Synthetic 100-position proof: {summary.get('synthetic_100_proved_count', 0)} / {summary.get('synthetic_100_required_count', 0)}",
         f"Blocking items: {summary.get('blocking_count', 0)}",
         "- blocking final-answer aliases: "
         + (", ".join(summary.get("blocking_final_answer_aliases") or []) or "none"),
@@ -17016,6 +17040,14 @@ def render_goal_proof_html(report: dict[str, Any]) -> str:
                 [
                     ("Status", report.get("status")),
                     ("Goal complete", str(bool(summary.get("goal_complete"))).lower()),
+                    (
+                        "Synthetic 100 path",
+                        str(bool(summary.get("synthetic_100_path_complete"))).lower(),
+                    ),
+                    (
+                        "Synthetic proof",
+                        f"{summary.get('synthetic_100_proved_count', 0)} / {summary.get('synthetic_100_required_count', 0)}",
+                    ),
                     ("Proved", f"{summary.get('proved_count', 0)} / {summary.get('requirement_count', 0)}"),
                     ("Blocking", summary.get("blocking_count", 0)),
                     ("Selected positions", summary.get("selected_positions", 0)),

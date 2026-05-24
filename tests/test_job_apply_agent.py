@@ -11942,6 +11942,9 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["status"], "waiting_for_truthful_user_answers")
         self.assertEqual(report["summary"]["requirement_count"], 8)
         self.assertEqual(report["summary"]["blocking_count"], 1)
+        self.assertTrue(report["summary"]["synthetic_100_path_complete"])
+        self.assertEqual(report["summary"]["synthetic_100_proved_count"], 7)
+        self.assertEqual(report["summary"]["synthetic_100_required_count"], 7)
         self.assertEqual(
             report["summary"]["blocking_final_answer_aliases"],
             ["citizenship_status", "interview_recording_consent"],
@@ -11952,6 +11955,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(statuses["truthful_answer_gate"], "blocked_on_user_answers")
         self.assertEqual(statuses["submission_safety_boundary"], "proved")
         self.assertIn("Goal Completion Proof", markdown)
+        self.assertIn("Synthetic 100-position path complete: true", markdown)
         self.assertIn("blocking final-answer aliases: citizenship_status, interview_recording_consent", markdown)
         self.assertIn("resume-after-answers", markdown)
 
