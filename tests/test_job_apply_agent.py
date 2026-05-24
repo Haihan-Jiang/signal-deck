@@ -80,6 +80,7 @@ from job_apply_agent.core import (
     extract_application_prompts_from_html,
     extract_live_job_page_metadata,
     extract_linkedin_job_id,
+    final_answer_reply_text_from_file,
     find_learned_answer,
     import_candidate_observations,
     job_registry_key,
@@ -8036,6 +8037,7 @@ class JobApplyAgentTests(unittest.TestCase):
             markdown_output = root / "blockers.md"
             reply_template_output = root / "reply_template.txt"
             user_input_output = root / "user_input.txt"
+            user_input_xlsx_output = root / "user_input.xlsx"
             html_output = root / "blockers.html"
             xlsx_output = root / "blockers.xlsx"
             env_path = root / "telegram.env"
@@ -8053,6 +8055,7 @@ class JobApplyAgentTests(unittest.TestCase):
                 html_output,
                 xlsx_output,
                 user_input_output,
+                user_input_xlsx_output,
             )
             notify_result = notify_telegram_for_final_answer_blockers(
                 written,
@@ -8065,10 +8068,13 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertTrue(markdown_output.exists())
             self.assertTrue(reply_template_output.exists())
             self.assertTrue(user_input_output.exists())
+            self.assertTrue(user_input_xlsx_output.exists())
             self.assertTrue(html_output.exists())
             self.assertTrue(xlsx_output.exists())
             self.assertEqual(written["outputs"]["user_input"], str(user_input_output))
+            self.assertEqual(written["outputs"]["user_input_xlsx"], str(user_input_xlsx_output))
             self.assertEqual(written["action_pack"]["user_input_file"], str(user_input_output))
+            self.assertEqual(written["action_pack"]["user_input_xlsx_file"], str(user_input_xlsx_output))
             self.assertEqual(written["outputs"]["html"], str(html_output))
             self.assertEqual(written["outputs"]["xlsx"], str(xlsx_output))
             self.assertIn("Blocking Questions", html_output.read_text(encoding="utf-8"))
@@ -8095,6 +8101,18 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertIn("&lt;fill&gt;", sheet_text)
             self.assertNotIn("98004", sheet_text)
             self.assertNotIn("Sensitive citizenship answer phrase 12345", sheet_text)
+            with zipfile.ZipFile(user_input_xlsx_output) as archive:
+                user_input_workbook_xml = archive.read("xl/workbook.xml").decode("utf-8")
+                user_input_sheet_text = "\n".join(
+                    archive.read(name).decode("utf-8")
+                    for name in archive.namelist()
+                    if name.startswith("xl/worksheets/")
+                )
+            self.assertIn("Answer Entry", user_input_workbook_xml)
+            self.assertIn("alias", user_input_sheet_text)
+            self.assertIn("answer", user_input_sheet_text)
+            self.assertIn("citizenship_status", user_input_sheet_text)
+            self.assertIn("&lt;fill&gt;", user_input_sheet_text)
             self.assertTrue(notify_result["ok"])
             self.assertTrue(notify_result["skipped"])
             self.assertNotIn("Sensitive citizenship answer phrase 12345", notify_result["message"])
@@ -8115,6 +8133,7 @@ class JobApplyAgentTests(unittest.TestCase):
             cli_markdown_output = root / "cli_blockers.md"
             cli_reply_template_output = root / "cli_reply.txt"
             cli_user_input_output = root / "cli_user_input.txt"
+            cli_user_input_xlsx_output = root / "cli_user_input.xlsx"
             cli_html_output = root / "cli_blockers.html"
             cli_xlsx_output = root / "cli_blockers.xlsx"
             template_path.write_text(json.dumps(template, ensure_ascii=True, indent=2), encoding="utf-8")
@@ -8137,6 +8156,8 @@ class JobApplyAgentTests(unittest.TestCase):
                     str(cli_reply_template_output),
                     "--user-input-output",
                     str(cli_user_input_output),
+                    "--user-input-xlsx-output",
+                    str(cli_user_input_xlsx_output),
                     "--html-output",
                     str(cli_html_output),
                     "--xlsx-output",
@@ -8151,8 +8172,10 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertEqual(cli_result.returncode, 0, cli_result.stderr)
             self.assertTrue(cli_html_output.exists())
             self.assertTrue(cli_xlsx_output.exists())
+            self.assertTrue(cli_user_input_xlsx_output.exists())
             self.assertIn("Wrote final answer blockers HTML", cli_result.stdout)
             self.assertIn("Wrote final answer blockers XLSX", cli_result.stdout)
+            self.assertIn("Wrote final answer user input Excel", cli_result.stdout)
             self.assertIn("Minimal final-answer reply:", cli_result.stdout)
             self.assertIn("\u6211\u7684\u516c\u6c11\u8eab\u4efd\u662f<fill>", cli_result.stdout)
             self.assertIn("\u4ee5\u4e0a\u786e\u8ba4", cli_result.stdout)
@@ -8164,6 +8187,7 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertIn("Wrote final answer user input file", cli_result.stdout)
             self.assertIn("citizenship_status\uff1a<fill>", cli_user_input_output.read_text(encoding="utf-8"))
             cli_user_input_direct_output = root / "cli_user_input_direct.txt"
+            cli_user_input_direct_xlsx_output = root / "cli_user_input_direct.xlsx"
             cli_user_input_result = subprocess.run(
                 [
                     sys.executable,
@@ -8176,6 +8200,8 @@ class JobApplyAgentTests(unittest.TestCase):
                     str(goal_path),
                     "--output",
                     str(cli_user_input_direct_output),
+                    "--xlsx-output",
+                    str(cli_user_input_direct_xlsx_output),
                 ],
                 cwd=ROOT,
                 check=False,
@@ -8184,7 +8210,9 @@ class JobApplyAgentTests(unittest.TestCase):
             )
             self.assertEqual(cli_user_input_result.returncode, 0, cli_user_input_result.stderr)
             self.assertTrue(cli_user_input_direct_output.exists())
+            self.assertTrue(cli_user_input_direct_xlsx_output.exists())
             self.assertIn("Wrote final answer user input file", cli_user_input_result.stdout)
+            self.assertIn("Wrote final answer user input Excel", cli_user_input_result.stdout)
             self.assertIn("Placeholder aliases: citizenship_status", cli_user_input_result.stdout)
             self.assertIn("final-answer-autopilot", cli_user_input_result.stdout)
             self.assertIn("citizenship_status\uff1a<fill>", cli_user_input_direct_output.read_text(encoding="utf-8"))
@@ -8627,6 +8655,117 @@ class JobApplyAgentTests(unittest.TestCase):
             self.assertIn("Validation Receipt", markdown_text)
             self.assertIn("Placeholder aliases remaining: 1", markdown_text)
             self.assertIn("zip_or_postal_code", markdown_text)
+
+    def test_final_answer_user_input_excel_round_trips_to_autopilot(self) -> None:
+        unblockers = {
+            "unblockers": [
+                {
+                    "input_id": "profile_zip_or_postal_code",
+                    "question": "What ZIP/postal code should automation use?",
+                    "high_risk": False,
+                    "required_count": 1,
+                }
+            ]
+        }
+        template = build_final_answer_intake_template(unblockers)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            reply_txt_path = root / "reply.txt"
+            reply_xlsx_path = root / "reply.xlsx"
+            filled_xlsx_path = root / "reply_filled.xlsx"
+            template_path = root / "template.json"
+            unblockers_path = root / "unblockers.json"
+            report_path = root / "autopilot.json"
+            markdown_path = root / "autopilot.md"
+            filled_report_path = root / "autopilot_filled.json"
+            filled_markdown_path = root / "autopilot_filled.md"
+            template_path.write_text(json.dumps(template, ensure_ascii=True, indent=2), encoding="utf-8")
+            unblockers_path.write_text(json.dumps(unblockers, ensure_ascii=True, indent=2), encoding="utf-8")
+
+            written = write_final_answer_user_input_file(
+                template,
+                None,
+                reply_txt_path,
+                reply_xlsx_path,
+            )
+
+            self.assertEqual(written["xlsx_output"], str(reply_xlsx_path))
+            self.assertTrue(reply_xlsx_path.exists())
+            self.assertIn("zip_or_postal_code\uff1a<fill>", final_answer_reply_text_from_file(reply_xlsx_path))
+
+            waiting_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "job_apply_agent",
+                    "final-answer-autopilot",
+                    "--reply-file",
+                    str(reply_xlsx_path),
+                    "--template",
+                    str(template_path),
+                    "--unblockers",
+                    str(unblockers_path),
+                    "--json-output",
+                    str(report_path),
+                    "--markdown-output",
+                    str(markdown_path),
+                    "--dry-run",
+                    "--fail-on-not-ready",
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(waiting_result.returncode, 2)
+            self.assertIn("Placeholder aliases: zip_or_postal_code", waiting_result.stdout)
+            waiting_report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(waiting_report["status"], "waiting_for_filled_reply")
+            self.assertEqual(waiting_report["placeholder_aliases"], ["zip_or_postal_code"])
+
+            with zipfile.ZipFile(reply_xlsx_path) as source, zipfile.ZipFile(
+                filled_xlsx_path,
+                "w",
+                compression=zipfile.ZIP_DEFLATED,
+            ) as target:
+                for item in source.infolist():
+                    data = source.read(item.filename)
+                    if item.filename == "xl/worksheets/sheet1.xml":
+                        data = data.replace(b"&lt;fill&gt;", b"98004")
+                    target.writestr(item, data)
+
+            self.assertIn("zip_or_postal_code\uff1a98004", final_answer_reply_text_from_file(filled_xlsx_path))
+            filled_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "job_apply_agent",
+                    "final-answer-autopilot",
+                    "--reply-file",
+                    str(filled_xlsx_path),
+                    "--template",
+                    str(template_path),
+                    "--unblockers",
+                    str(unblockers_path),
+                    "--json-output",
+                    str(filled_report_path),
+                    "--markdown-output",
+                    str(filled_markdown_path),
+                    "--dry-run",
+                    "--fail-on-not-ready",
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(filled_result.returncode, 0, filled_result.stderr)
+            filled_report_text = filled_report_path.read_text(encoding="utf-8")
+            filled_report = json.loads(filled_report_text)
+            self.assertEqual(filled_report["status"], "validated_ready")
+            self.assertTrue(filled_report["validation_receipt"]["ready_for_finalize"])
+            self.assertNotIn("98004", filled_report_text)
+            self.assertNotIn("98004", filled_markdown_path.read_text(encoding="utf-8"))
 
     def test_final_answer_autopilot_validates_filled_reply_without_storing_answer_text(self) -> None:
         unblockers = {
@@ -9447,8 +9586,9 @@ class JobApplyAgentTests(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(resume_validate_result.returncode, 2)
-            self.assertIn("Validated final answer reply without writing files.", resume_validate_result.stdout)
-            self.assertIn("Needs specificity aliases", resume_validate_result.stdout)
+            self.assertIn("Resume after answers: waiting_for_filled_reply", resume_validate_result.stdout)
+            self.assertIn("Placeholder aliases: zip_or_postal_code, health_requirement", resume_validate_result.stdout)
+            self.assertNotIn("Fake/test markers", resume_validate_result.stdout)
 
     def test_final_answer_intake_server_post_answer_flags_are_guarded(self) -> None:
         base_args = {
@@ -10955,7 +11095,15 @@ class JobApplyAgentTests(unittest.TestCase):
             audit["completion_verdict"]["final_answer_user_input_file"],
         )
         self.assertIn(
+            "final_answer_user_input_needed.xlsx",
+            audit["completion_verdict"]["final_answer_user_input_xlsx_file"],
+        )
+        self.assertIn(
             "final-answer-autopilot --reply-file",
+            audit["completion_verdict"]["file_autopilot_validate_command"],
+        )
+        self.assertIn(
+            "final_answer_user_input_needed.xlsx",
             audit["completion_verdict"]["file_autopilot_validate_command"],
         )
         self.assertIn("--dry-run", audit["completion_verdict"]["file_autopilot_validate_command"])
@@ -11189,6 +11337,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("final-answer user input file", markdown)
         self.assertIn("file validate command", markdown)
         self.assertIn("final_answer_user_input_needed.txt", markdown)
+        self.assertIn("final_answer_user_input_needed.xlsx", markdown)
         self.assertIn("Completion Checklist", markdown)
         self.assertIn("needs_user_answers", markdown)
         self.assertIn("real platform coverage achieved: true", markdown)
@@ -11288,14 +11437,15 @@ class JobApplyAgentTests(unittest.TestCase):
                     "citizenship_status",
                 ],
                 "final_answer_user_input_file": "job_apply_agent/outbox/final_answer_user_input_needed.txt",
+                "final_answer_user_input_xlsx_file": "job_apply_agent/outbox/final_answer_user_input_needed.xlsx",
                 "file_autopilot_validate_command": (
                     "python3 -m job_apply_agent final-answer-autopilot "
-                    "--reply-file job_apply_agent/outbox/final_answer_user_input_needed.txt "
+                    "--reply-file job_apply_agent/outbox/final_answer_user_input_needed.xlsx "
                     "--dry-run --fail-on-not-ready"
                 ),
                 "file_autopilot_run_command": (
                     "python3 -m job_apply_agent final-answer-autopilot "
-                    "--reply-file job_apply_agent/outbox/final_answer_user_input_needed.txt "
+                    "--reply-file job_apply_agent/outbox/final_answer_user_input_needed.xlsx "
                     "--apply --live-check --include-values --fail-on-not-ready"
                 ),
                 "direct_autopilot_command": (
@@ -11703,6 +11853,10 @@ class JobApplyAgentTests(unittest.TestCase):
             report["summary"]["goal_completion_final_answer_user_input_file"],
         )
         self.assertIn(
+            "final_answer_user_input_needed.xlsx",
+            report["summary"]["goal_completion_final_answer_user_input_xlsx_file"],
+        )
+        self.assertIn(
             "final-answer-autopilot --reply-file",
             report["summary"]["goal_completion_file_autopilot_validate_command"],
         )
@@ -11746,14 +11900,14 @@ class JobApplyAgentTests(unittest.TestCase):
         )
         self.assertEqual(report["confirmed_answer_runbook"][0]["status"], "waiting_for_user")
         self.assertIn("final-answer-autopilot --reply-file", report["confirmed_answer_runbook"][2]["action"])
-        self.assertIn("final_answer_user_input_needed.txt", report["confirmed_answer_runbook"][2]["action"])
+        self.assertIn("final_answer_user_input_needed.xlsx", report["confirmed_answer_runbook"][2]["action"])
         self.assertIn("--dry-run", report["confirmed_answer_runbook"][2]["action"])
-        self.assertIn("final_answer_user_input_needed.txt", report["confirmed_answer_runbook"][3]["action"])
+        self.assertIn("final_answer_user_input_needed.xlsx", report["confirmed_answer_runbook"][3]["action"])
         self.assertIn("--apply --live-check --include-values", report["confirmed_answer_runbook"][3]["action"])
         self.assertIn("refresh-apply-queue", report["confirmed_answer_runbook"][5]["action"])
         self.assertIn("--include-values", report["confirmed_answer_runbook"][5]["action"])
         self.assertIn("resume-after-answers", report["one_command_resume"])
-        self.assertIn("final_answer_user_input_needed.txt", report["one_command_resume"])
+        self.assertIn("final_answer_user_input_needed.xlsx", report["one_command_resume"])
         self.assertIn("--live-check-limit", report["one_command_resume"])
         self.assertIn("--open-browser", report["one_command_resume_and_open"])
         self.assertEqual(
@@ -11765,6 +11919,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("resume-after-answers", next_commands)
         self.assertIn("final-answer-blockers", next_commands)
         self.assertIn("final-answer-user-input", next_commands)
+        self.assertIn("final_answer_user_input_needed.xlsx", next_commands)
         self.assertIn("final_answer_user_input_needed.txt", next_commands)
         self.assertIn("rehearse-after-answers", next_commands)
         self.assertIn("resume-after-answers --reply-stdin", next_commands)

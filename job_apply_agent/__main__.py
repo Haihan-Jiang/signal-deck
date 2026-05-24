@@ -27,6 +27,7 @@ from .core import (
     build_position_readiness_report,
     build_synthetic_learning_state,
     final_answer_fake_marker_rows_from_updates,
+    final_answer_reply_text_from_file,
     import_candidate_observations,
     load_candidate_rows,
     learn_answers,
@@ -241,6 +242,9 @@ DEFAULT_FINAL_ANSWER_REPLY_TEMPLATE_TEXT = (
 )
 DEFAULT_FINAL_ANSWER_USER_INPUT_TEXT = (
     Path(__file__).with_name("outbox") / "final_answer_user_input_needed.txt"
+)
+DEFAULT_FINAL_ANSWER_USER_INPUT_XLSX = (
+    Path(__file__).with_name("outbox") / "final_answer_user_input_needed.xlsx"
 )
 DEFAULT_FINAL_ANSWER_AUTOPILOT_JSON = (
     Path(__file__).with_name("outbox") / "final_answer_autopilot_latest.json"
@@ -1200,6 +1204,10 @@ def main() -> int:
         "--user-input-output",
         default=str(DEFAULT_FINAL_ANSWER_USER_INPUT_TEXT),
     )
+    final_answer_blockers_parser.add_argument(
+        "--user-input-xlsx-output",
+        default=str(DEFAULT_FINAL_ANSWER_USER_INPUT_XLSX),
+    )
     final_answer_blockers_parser.add_argument("--notify-telegram", action="store_true")
     final_answer_blockers_parser.add_argument("--telegram-env", default=None)
     final_answer_blockers_parser.add_argument("--telegram-dry-run", action="store_true")
@@ -1225,6 +1233,10 @@ def main() -> int:
     final_answer_user_input_parser.add_argument(
         "--output",
         default=str(DEFAULT_FINAL_ANSWER_USER_INPUT_TEXT),
+    )
+    final_answer_user_input_parser.add_argument(
+        "--xlsx-output",
+        default=str(DEFAULT_FINAL_ANSWER_USER_INPUT_XLSX),
     )
 
     final_answer_reply_parser = subparsers.add_parser(
@@ -1312,7 +1324,7 @@ def main() -> int:
     )
     final_answer_autopilot_parser.add_argument(
         "--reply-file",
-        default=str(DEFAULT_FINAL_ANSWER_USER_INPUT_TEXT),
+        default=str(DEFAULT_FINAL_ANSWER_USER_INPUT_XLSX),
     )
     final_answer_autopilot_parser.add_argument(
         "--reply-text",
@@ -1376,7 +1388,7 @@ def main() -> int:
     )
     resume_after_answers_parser.add_argument(
         "--reply-file",
-        default=str(DEFAULT_FINAL_ANSWER_USER_INPUT_TEXT),
+        default=str(DEFAULT_FINAL_ANSWER_USER_INPUT_XLSX),
     )
     resume_after_answers_parser.add_argument(
         "--reply-text",
@@ -3371,6 +3383,7 @@ def main() -> int:
             args.html_output,
             args.xlsx_output,
             args.user_input_output,
+            args.user_input_xlsx_output,
         )
         summary = report.get("summary") or {}
         print(f"Wrote final answer blockers JSON to {args.json_output}")
@@ -3379,6 +3392,7 @@ def main() -> int:
         print(f"Wrote final answer blockers XLSX to {args.xlsx_output}")
         print(f"Wrote final answer reply template to {args.reply_template_output}")
         print(f"Wrote final answer user input file to {args.user_input_output}")
+        print(f"Wrote final answer user input Excel to {args.user_input_xlsx_output}")
         print(f"Blockers: {summary.get('blocker_count', 0)}")
         print(f"Missing answers: {summary.get('missing_answer_count', 0)}")
         print(f"Unconfirmed high-risk: {summary.get('unconfirmed_high_risk_count', 0)}")
@@ -3422,14 +3436,17 @@ def main() -> int:
             json.loads(template_path.read_text(encoding="utf-8")),
             _load_optional_json(args.goal_audit),
             args.output,
+            args.xlsx_output,
         )
         print(f"Wrote final answer user input file to {report['output']}")
+        if report.get("xlsx_output"):
+            print(f"Wrote final answer user input Excel to {report['xlsx_output']}")
         print(f"Placeholders: {report.get('placeholder_count', 0)}")
         aliases = report.get("placeholder_aliases") if isinstance(report.get("placeholder_aliases"), list) else []
         if aliases:
             print("Placeholder aliases: " + ", ".join(str(alias) for alias in aliases))
         print("Validate after filling:")
-        print(report.get("validate_command", ""))
+        print(report.get("xlsx_validate_command") or report.get("validate_command", ""))
         return 0
 
     if args.command == "resume-after-answers":
@@ -3441,6 +3458,37 @@ def main() -> int:
             resume_reply_text = sys.stdin.read()
         resume_reply_file = None if (resume_reply_text is not None or resume_reply_from_stdin) else args.reply_file
         resume_validate_only = bool(getattr(args, "validate_only", False))
+        placeholder_source = (
+            "<inline reply text redacted>"
+            if resume_reply_text is not None and not resume_reply_from_stdin
+            else "<stdin reply text redacted>"
+            if resume_reply_from_stdin
+            else str(resume_reply_file)
+        )
+        if resume_reply_text is not None:
+            placeholder_reply_text = str(resume_reply_text)
+        else:
+            placeholder_path = Path(str(resume_reply_file))
+            if not placeholder_path.exists():
+                print("Resume after answers: waiting_for_reply_file")
+                print(f"Reply file: {placeholder_path}")
+                return 2
+            try:
+                placeholder_reply_text = final_answer_reply_text_from_file(placeholder_path)
+            except Exception as exc:
+                print("Resume after answers: invalid_reply_file")
+                print(f"Reply file: {placeholder_path}")
+                print(f"Reason: {exc}")
+                return 2
+        placeholder_count = _final_answer_reply_placeholder_count(placeholder_reply_text)
+        if placeholder_count:
+            placeholder_aliases = _final_answer_reply_placeholder_aliases(placeholder_reply_text)
+            print("Resume after answers: waiting_for_filled_reply")
+            print(f"Reply source: {placeholder_source}")
+            print(f"Placeholder lines remaining: {placeholder_count}")
+            if placeholder_aliases:
+                print("Placeholder aliases: " + ", ".join(placeholder_aliases))
+            return 2
         args.command = "final-answer-reply"
         args.template = str(DEFAULT_FINAL_ANSWER_INTAKE_TEMPLATE_JSON)
         args.unblockers = str(DEFAULT_CRITICAL_INPUT_UNBLOCKERS_JSON)
@@ -3591,7 +3639,7 @@ def main() -> int:
             reply_path = Path(args.reply_file)
             if not reply_path.exists():
                 raise FileNotFoundError(f"final answer reply file not found: {args.reply_file}")
-            reply_text = reply_path.read_text(encoding="utf-8")
+            reply_text = final_answer_reply_text_from_file(reply_path)
         unblockers_path = Path(args.unblockers)
         if not unblockers_path.exists():
             raise FileNotFoundError(f"critical input unblockers not found: {args.unblockers}")
@@ -4648,9 +4696,10 @@ def _final_answer_autopilot_validation_receipt(
             }
         template_payload = json.loads(template_path.read_text(encoding="utf-8"))
         unblockers_payload = json.loads(unblockers_path.read_text(encoding="utf-8"))
+        reply_text = final_answer_reply_text_from_file(reply_path)
         reply_report = build_final_answer_reply_intake(
             template_payload,
-            reply_path.read_text(encoding="utf-8"),
+            reply_text,
             confirm_high_risk=False,
             allow_synthetic_values=False,
         )
@@ -4991,7 +5040,7 @@ def _run_final_answer_autopilot_for_reply_path(
                 print(f"Final answer autopilot: {report['status']}")
                 return 2 if args.fail_on_not_ready else 0
         else:
-            reply_text = reply_path.read_text(encoding="utf-8")
+            reply_text = final_answer_reply_text_from_file(reply_path)
             placeholder_count = _final_answer_reply_placeholder_count(reply_text)
             placeholder_aliases = _final_answer_reply_placeholder_aliases(reply_text)
             if placeholder_count:

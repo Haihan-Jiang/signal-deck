@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
+from xml.etree import ElementTree as ET
 
 
 DEFAULT_QUESTIONS = [
@@ -5385,6 +5386,7 @@ FINAL_ANSWER_INTAKE_EXAMPLE_SHAPES = {
 
 FINAL_ANSWER_REPLY_TEMPLATE_PATH = "job_apply_agent/outbox/final_answer_reply_template_latest.txt"
 FINAL_ANSWER_USER_INPUT_PATH = "job_apply_agent/outbox/final_answer_user_input_needed.txt"
+FINAL_ANSWER_USER_INPUT_XLSX_PATH = "job_apply_agent/outbox/final_answer_user_input_needed.xlsx"
 
 
 FINAL_ANSWER_INTAKE_PLACEHOLDER_ANSWERS = {
@@ -16574,6 +16576,7 @@ def render_goal_readiness_audit_markdown(audit: dict[str, Any]) -> str:
         f"- ready after truthful answers: {str(bool(verdict.get('supervised_autofill_ready_after_user_answers'))).lower()}",
         f"- real employer final submit supervised: {str(bool(verdict.get('real_employer_final_submit_supervised'))).lower()}",
         f"- final-answer user input file: `{verdict.get('final_answer_user_input_file', '')}`",
+        f"- final-answer user input Excel: `{verdict.get('final_answer_user_input_xlsx_file', '')}`",
         f"- file validate command: `{verdict.get('file_autopilot_validate_command', '')}`",
         f"- file run command after answers: `{verdict.get('file_autopilot_run_command', '')}`",
         f"- next command after answers: `{verdict.get('direct_autopilot_command', '')}`",
@@ -16963,11 +16966,20 @@ def _goal_completion_verdict(
         "real_employer_final_submit_supervised": True,
         "real_employer_unattended_submit_allowed": False,
         "final_answer_user_input_file": FINAL_ANSWER_USER_INPUT_PATH,
+        "final_answer_user_input_xlsx_file": FINAL_ANSWER_USER_INPUT_XLSX_PATH,
         "file_autopilot_validate_command": (
+            f"python3 -m job_apply_agent final-answer-autopilot --reply-file "
+            f"{FINAL_ANSWER_USER_INPUT_XLSX_PATH} --dry-run --fail-on-not-ready"
+        ),
+        "file_autopilot_run_command": (
+            f"python3 -m job_apply_agent final-answer-autopilot --reply-file "
+            f"{FINAL_ANSWER_USER_INPUT_XLSX_PATH} --apply --live-check --include-values --fail-on-not-ready"
+        ),
+        "text_file_autopilot_validate_command": (
             f"python3 -m job_apply_agent final-answer-autopilot --reply-file "
             f"{FINAL_ANSWER_USER_INPUT_PATH} --dry-run --fail-on-not-ready"
         ),
-        "file_autopilot_run_command": (
+        "text_file_autopilot_run_command": (
             f"python3 -m job_apply_agent final-answer-autopilot --reply-file "
             f"{FINAL_ANSWER_USER_INPUT_PATH} --apply --live-check --include-values --fail-on-not-ready"
         ),
@@ -16998,7 +17010,7 @@ def _goal_next_actions(
         if unblocker_proof_complete:
             blank_count = final_answer_waiting_count or critical_waiting_count
             actions.append(
-                f"Fill the {blank_count} final-answer lines in {FINAL_ANSWER_USER_INPUT_PATH}, then run `python3 -m job_apply_agent resume-after-answers`."
+                f"Fill the {blank_count} rows in {FINAL_ANSWER_USER_INPUT_XLSX_PATH}, then run `python3 -m job_apply_agent resume-after-answers`."
             )
             actions.append(
                 "Or paste those lines into Codex and run the direct path: "
@@ -17124,6 +17136,9 @@ def build_automation_handoff_report(
         ),
         "goal_completion_final_answer_user_input_file": goal_completion_verdict.get(
             "final_answer_user_input_file", ""
+        ),
+        "goal_completion_final_answer_user_input_xlsx_file": goal_completion_verdict.get(
+            "final_answer_user_input_xlsx_file", ""
         ),
         "goal_completion_file_autopilot_validate_command": goal_completion_verdict.get(
             "file_autopilot_validate_command", ""
@@ -17654,6 +17669,7 @@ def render_automation_handoff_markdown(report: dict[str, Any]) -> str:
         "- blocking final-answer aliases: "
         + (", ".join(summary.get("goal_completion_blocking_final_answer_aliases") or []) or "none"),
         f"- final-answer user input file: `{summary.get('goal_completion_final_answer_user_input_file', '')}`",
+        f"- final-answer user input Excel: `{summary.get('goal_completion_final_answer_user_input_xlsx_file', '')}`",
         f"- file autopilot validate command: `{summary.get('goal_completion_file_autopilot_validate_command', '')}`",
         f"- file autopilot run command: `{summary.get('goal_completion_file_autopilot_run_command', '')}`",
         f"- direct autopilot command: `{summary.get('goal_completion_direct_autopilot_command', '')}`",
@@ -18403,8 +18419,8 @@ def _automation_handoff_confirmed_answer_runbook(summary: dict[str, Any]) -> lis
             "step": 1,
             "name": "Confirm final answer blanks",
             "status": "waiting_for_user" if final_blanks else "ready",
-            "action": "python3 -m job_apply_agent final-answer-blockers --print-minimal-reply, fill job_apply_agent/outbox/final_answer_user_input_needed.txt, then validate it.",
-            "expected_result": f"{final_blanks} final blanks are captured in stdin/reply-file format without sending answer text; blocker HTML/XLSX are refreshed.",
+            "action": "python3 -m job_apply_agent final-answer-user-input, fill job_apply_agent/outbox/final_answer_user_input_needed.xlsx, then validate it.",
+            "expected_result": f"{final_blanks} final blanks are captured in the Excel reply-file format without sending answer text; blocker HTML/XLSX are refreshed.",
         },
         {
             "step": 2,
@@ -18417,7 +18433,7 @@ def _automation_handoff_confirmed_answer_runbook(summary: dict[str, Any]) -> lis
             "step": 3,
             "name": "Run safe post-answer preflight",
             "status": "ready_after_confirmation" if final_blanks else "ready",
-            "action": f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_USER_INPUT_PATH} --dry-run --fail-on-not-ready",
+            "action": f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_USER_INPUT_XLSX_PATH} --dry-run --fail-on-not-ready",
             "alternate_action": "python3 -m job_apply_agent resume-after-answers --reply-stdin --validate-only",
             "expected_result": "The reply is parsed and verified without writing outbox updates, profile, or answer memory.",
         },
@@ -18425,7 +18441,7 @@ def _automation_handoff_confirmed_answer_runbook(summary: dict[str, Any]) -> lis
             "step": 4,
             "name": "Apply approved answers and live-check",
             "status": "ready_after_confirmation" if final_blanks else "ready",
-            "action": f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_USER_INPUT_PATH} --apply --live-check --include-values --fail-on-not-ready",
+            "action": f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_USER_INPUT_XLSX_PATH} --apply --live-check --include-values --fail-on-not-ready",
             "expected_result": "Approved answers are written to profile/memory, live closed-posting preflight runs, and the supervised autofill packet is rebuilt.",
         },
         {
@@ -18480,8 +18496,9 @@ def _automation_handoff_next_commands(summary: dict[str, Any]) -> list[str]:
         "python3 -m job_apply_agent final-answer-user-input",
         "python3 -m job_apply_agent rehearse-after-answers",
         "python3 -m job_apply_agent resume-after-answers --reply-stdin --validate-only",
+        f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_USER_INPUT_XLSX_PATH} --dry-run --fail-on-not-ready",
+        f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_USER_INPUT_XLSX_PATH} --apply --live-check --include-values --fail-on-not-ready",
         f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_USER_INPUT_PATH} --dry-run --fail-on-not-ready",
-        f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_USER_INPUT_PATH} --apply --live-check --include-values --fail-on-not-ready",
         f"python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --run-post-answer-pipeline --fail-on-not-ready",
         "python3 -m job_apply_agent final-answer-autopilot --reply-stdin --apply --live-check --include-values --fail-on-not-ready",
         "python3 -m job_apply_agent resume-after-answers --reply-stdin",
@@ -18514,7 +18531,7 @@ def _automation_handoff_one_command_resume(
     command = [
         "python3 -m job_apply_agent resume-after-answers",
         "--reply-file",
-        FINAL_ANSWER_USER_INPUT_PATH,
+        FINAL_ANSWER_USER_INPUT_XLSX_PATH,
         "--live-check-limit",
         str(max(100, int(summary.get("apply_queue_open_after_answers_count") or 0))),
         "--live-check-timeout",
@@ -23667,6 +23684,14 @@ def build_final_answer_blocker_report(
         },
         "next_validate_command": "python3 -m job_apply_agent resume-after-answers --reply-stdin --validate-only",
         "next_run_command": "python3 -m job_apply_agent resume-after-answers --reply-stdin",
+        "next_excel_validate_command": (
+            f"python3 -m job_apply_agent final-answer-autopilot --reply-file "
+            f"{FINAL_ANSWER_USER_INPUT_XLSX_PATH} --dry-run --fail-on-not-ready"
+        ),
+        "next_excel_run_command": (
+            f"python3 -m job_apply_agent final-answer-autopilot --reply-file "
+            f"{FINAL_ANSWER_USER_INPUT_XLSX_PATH} --apply --live-check --include-values --fail-on-not-ready"
+        ),
         "next_autopilot_reply_text_command": (
             "python3 -m job_apply_agent final-answer-autopilot "
             "--reply-stdin --apply --live-check "
@@ -23707,9 +23732,11 @@ def build_final_answer_blocker_report(
             "python3 -m job_apply_agent final-answer-user-input",
             "python3 -m job_apply_agent resume-after-answers --reply-stdin --validate-only",
             "python3 -m job_apply_agent final-answer-autopilot --reply-stdin --dry-run --fail-on-not-ready",
+            f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_USER_INPUT_XLSX_PATH} --dry-run --fail-on-not-ready",
             f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_USER_INPUT_PATH} --dry-run --fail-on-not-ready",
             f"python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --validate-only --fail-on-not-ready",
             "python3 -m job_apply_agent resume-after-answers",
+            f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_USER_INPUT_XLSX_PATH} --apply --live-check --include-values --fail-on-not-ready",
             f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_USER_INPUT_PATH} --apply --live-check --include-values --fail-on-not-ready",
             f"python3 -m job_apply_agent final-answer-reply --reply-file {FINAL_ANSWER_REPLY_TEMPLATE_PATH} --run-post-answer-pipeline --fail-on-not-ready",
             "python3 -m job_apply_agent final-answer-autopilot --reply-stdin --apply --live-check --include-values --fail-on-not-ready",
@@ -23731,9 +23758,11 @@ def build_final_answer_blocker_report(
 
 def _final_answer_user_input_action_commands(
     reply_file_path: str | Path = FINAL_ANSWER_USER_INPUT_PATH,
+    *,
+    xlsx_reply_file_path: str | Path | None = FINAL_ANSWER_USER_INPUT_XLSX_PATH,
 ) -> dict[str, str]:
     reply_file = str(reply_file_path)
-    return {
+    commands = {
         "user_input_file": reply_file,
         "user_input_generate_command": "python3 -m job_apply_agent final-answer-user-input",
         "user_input_validate_command": shlex.join(
@@ -23792,6 +23821,40 @@ def _final_answer_user_input_action_commands(
             ]
         ),
     }
+    if xlsx_reply_file_path:
+        xlsx_reply_file = str(xlsx_reply_file_path)
+        commands.update(
+            {
+                "user_input_xlsx_file": xlsx_reply_file,
+                "user_input_xlsx_validate_command": shlex.join(
+                    [
+                        "python3",
+                        "-m",
+                        "job_apply_agent",
+                        "final-answer-autopilot",
+                        "--reply-file",
+                        xlsx_reply_file,
+                        "--dry-run",
+                        "--fail-on-not-ready",
+                    ]
+                ),
+                "user_input_xlsx_run_command": shlex.join(
+                    [
+                        "python3",
+                        "-m",
+                        "job_apply_agent",
+                        "final-answer-autopilot",
+                        "--reply-file",
+                        xlsx_reply_file,
+                        "--apply",
+                        "--live-check",
+                        "--include-values",
+                        "--fail-on-not-ready",
+                    ]
+                ),
+            }
+        )
+    return commands
 
 
 def write_final_answer_blocker_report(
@@ -23803,6 +23866,7 @@ def write_final_answer_blocker_report(
     html_output: str | Path | None = None,
     xlsx_output: str | Path | None = None,
     user_input_output: str | Path | None = None,
+    user_input_xlsx_output: str | Path | None = None,
 ) -> dict[str, Any]:
     report = build_final_answer_blocker_report(template, goal_audit=goal_audit)
     json_path = Path(json_output)
@@ -23811,9 +23875,18 @@ def write_final_answer_blocker_report(
     html_path = Path(html_output) if html_output else None
     xlsx_path = Path(xlsx_output) if xlsx_output else None
     user_input_path = Path(user_input_output) if user_input_output else None
+    user_input_xlsx_path = Path(user_input_xlsx_output) if user_input_xlsx_output else None
     for output_path in [
         path
-        for path in [json_path, markdown_path, reply_template_path, html_path, xlsx_path, user_input_path]
+        for path in [
+            json_path,
+            markdown_path,
+            reply_template_path,
+            html_path,
+            xlsx_path,
+            user_input_path,
+            user_input_xlsx_path,
+        ]
         if path
     ]:
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -23831,9 +23904,18 @@ def write_final_answer_blocker_report(
     if user_input_path:
         report["outputs"]["user_input"] = str(user_input_path)
         report["user_input_output"] = str(user_input_path)
+    if user_input_xlsx_path:
+        report["outputs"]["user_input_xlsx"] = str(user_input_xlsx_path)
+        report["user_input_xlsx_output"] = str(user_input_xlsx_path)
+    if user_input_path or user_input_xlsx_path:
         action_pack = report.get("action_pack") if isinstance(report.get("action_pack"), dict) else {}
         if action_pack:
-            action_pack.update(_final_answer_user_input_action_commands(user_input_path))
+            action_pack.update(
+                _final_answer_user_input_action_commands(
+                    user_input_path or FINAL_ANSWER_USER_INPUT_PATH,
+                    xlsx_reply_file_path=user_input_xlsx_path,
+                )
+            )
     _atomic_write_json(json_path, report)
     markdown_path.write_text(render_final_answer_blocker_report_markdown(report), encoding="utf-8")
     if reply_template_path:
@@ -23846,6 +23928,8 @@ def write_final_answer_blocker_report(
             render_final_answer_user_input_text(report, reply_file_path=user_input_path),
             encoding="utf-8",
         )
+    if user_input_xlsx_path:
+        _write_final_answer_user_input_xlsx(report, user_input_xlsx_path)
     if html_path:
         html_path.write_text(render_final_answer_blocker_report_html(report), encoding="utf-8")
     if xlsx_path:
@@ -23910,10 +23994,170 @@ def render_final_answer_user_input_text(
     return "\n".join(lines).rstrip() + "\n"
 
 
+def final_answer_reply_text_from_file(path: str | Path) -> str:
+    reply_path = Path(path)
+    if reply_path.suffix.lower() == ".xlsx":
+        return final_answer_reply_text_from_xlsx(reply_path)
+    return reply_path.read_text(encoding="utf-8")
+
+
+def final_answer_reply_text_from_xlsx(path: str | Path) -> str:
+    rows_by_sheet = _read_xlsx_text_rows(Path(path))
+    for _sheet_name, rows in rows_by_sheet:
+        reply_lines = _final_answer_reply_lines_from_xlsx_rows(rows)
+        if reply_lines:
+            return "\n".join(reply_lines).rstrip() + "\n"
+    raise ValueError(
+        "final answer Excel file must contain a table with alias and answer columns"
+    )
+
+
+def _final_answer_reply_lines_from_xlsx_rows(rows: list[list[str]]) -> list[str]:
+    for header_index, raw_header in enumerate(rows):
+        normalized_header = [_final_answer_xlsx_header_key(cell) for cell in raw_header]
+        alias_index = _first_header_index(normalized_header, {"alias", "answer_alias", "key"})
+        answer_index = _first_header_index(normalized_header, {"answer", "user_answer", "your_answer"})
+        confirmed_index = _first_header_index(
+            normalized_header,
+            {
+                "confirmed",
+                "confirm",
+                "confirmation",
+                "high_risk_user_confirmed",
+                "\u786e\u8ba4",
+            },
+        )
+        if alias_index is None or answer_index is None:
+            continue
+        reply_lines: list[str] = []
+        for row in rows[header_index + 1 :]:
+            alias = _xlsx_row_cell(row, alias_index).strip()
+            if not alias or alias.startswith("#"):
+                continue
+            answer = _xlsx_row_cell(row, answer_index).strip()
+            if answer:
+                reply_lines.append(f"{alias}\uff1a{answer}")
+            if confirmed_index is not None:
+                confirmed = _xlsx_row_cell(row, confirmed_index).strip()
+                if confirmed:
+                    reply_lines.append(f"{alias}_confirmed\uff1a{confirmed}")
+        return reply_lines
+    return []
+
+
+def _first_header_index(headers: list[str], candidates: set[str]) -> int | None:
+    for index, header in enumerate(headers):
+        if header in candidates:
+            return index
+    return None
+
+
+def _xlsx_row_cell(row: list[str], index: int) -> str:
+    if index < 0 or index >= len(row):
+        return ""
+    return str(row[index] or "")
+
+
+def _final_answer_xlsx_header_key(value: Any) -> str:
+    text = re.sub(r"[`\"']", "", str(value or "").strip().lower())
+    text = re.sub(r"[^\w\u4e00-\u9fff]+", "_", text)
+    return text.strip("_")
+
+
+def _read_xlsx_text_rows(path: Path) -> list[tuple[str, list[list[str]]]]:
+    namespaces = {"main": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    with zipfile.ZipFile(path) as archive:
+        shared_strings = _read_xlsx_shared_strings(archive, namespaces)
+        workbook_root = ET.fromstring(archive.read("xl/workbook.xml"))
+        sheet_names = [
+            str(sheet.attrib.get("name") or f"Sheet{index}")
+            for index, sheet in enumerate(
+                workbook_root.findall(".//main:sheets/main:sheet", namespaces),
+                start=1,
+            )
+        ]
+        worksheet_names = sorted(
+            (
+                name
+                for name in archive.namelist()
+                if re.fullmatch(r"xl/worksheets/sheet\d+\.xml", name)
+            ),
+            key=_xlsx_worksheet_sort_key,
+        )
+        sheets: list[tuple[str, list[list[str]]]] = []
+        for index, worksheet_name in enumerate(worksheet_names):
+            sheet_name = sheet_names[index] if index < len(sheet_names) else Path(worksheet_name).stem
+            worksheet_root = ET.fromstring(archive.read(worksheet_name))
+            rows: list[list[str]] = []
+            for row_node in worksheet_root.findall(".//main:sheetData/main:row", namespaces):
+                row_values: dict[int, str] = {}
+                for cell in row_node.findall("main:c", namespaces):
+                    col_index = _xlsx_cell_ref_col_index(str(cell.attrib.get("r") or ""))
+                    if col_index < 0:
+                        continue
+                    row_values[col_index] = _xlsx_cell_text(cell, shared_strings, namespaces)
+                if row_values:
+                    max_col = max(row_values)
+                    rows.append([row_values.get(col, "") for col in range(max_col + 1)])
+                else:
+                    rows.append([])
+            sheets.append((sheet_name, rows))
+        return sheets
+
+
+def _xlsx_worksheet_sort_key(name: str) -> int:
+    match = re.search(r"sheet(\d+)\.xml", name)
+    return int(match.group(1)) if match else 0
+
+
+def _read_xlsx_shared_strings(
+    archive: zipfile.ZipFile,
+    namespaces: dict[str, str],
+) -> list[str]:
+    if "xl/sharedStrings.xml" not in archive.namelist():
+        return []
+    root = ET.fromstring(archive.read("xl/sharedStrings.xml"))
+    strings: list[str] = []
+    for item in root.findall("main:si", namespaces):
+        strings.append("".join(text_node.text or "" for text_node in item.findall(".//main:t", namespaces)))
+    return strings
+
+
+def _xlsx_cell_text(
+    cell: ET.Element,
+    shared_strings: list[str],
+    namespaces: dict[str, str],
+) -> str:
+    cell_type = str(cell.attrib.get("t") or "")
+    if cell_type == "inlineStr":
+        return "".join(text_node.text or "" for text_node in cell.findall(".//main:is/main:t", namespaces))
+    value_node = cell.find("main:v", namespaces)
+    value = value_node.text if value_node is not None and value_node.text is not None else ""
+    if cell_type == "s":
+        try:
+            return shared_strings[int(value)]
+        except (ValueError, IndexError):
+            return ""
+    if cell_type == "b":
+        return "TRUE" if value == "1" else "FALSE"
+    return value
+
+
+def _xlsx_cell_ref_col_index(ref: str) -> int:
+    letters = re.match(r"([A-Z]+)", str(ref or "").upper())
+    if not letters:
+        return -1
+    index = 0
+    for char in letters.group(1):
+        index = index * 26 + (ord(char) - ord("A") + 1)
+    return index - 1
+
+
 def write_final_answer_user_input_file(
     template: dict[str, Any],
     goal_audit: dict[str, Any] | None,
     output: str | Path,
+    xlsx_output: str | Path | None = None,
 ) -> dict[str, Any]:
     report = build_final_answer_blocker_report(template, goal_audit=goal_audit)
     output_path = Path(output)
@@ -23922,6 +24166,10 @@ def write_final_answer_user_input_file(
         render_final_answer_user_input_text(report, reply_file_path=output_path),
         encoding="utf-8",
     )
+    xlsx_path = Path(xlsx_output) if xlsx_output else None
+    if xlsx_path:
+        xlsx_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_final_answer_user_input_xlsx(report, xlsx_path)
     blockers = [row for row in report.get("blockers") or [] if isinstance(row, dict)]
     aliases = [
         str(row.get("alias") or "").strip()
@@ -23937,6 +24185,7 @@ def write_final_answer_user_input_file(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source": "final_answer_user_input_file",
         "output": str(output_path),
+        "xlsx_output": str(xlsx_path) if xlsx_path else "",
         "blocker_count": len(blockers),
         "placeholder_count": len(aliases),
         "placeholder_aliases": aliases,
@@ -23967,6 +24216,36 @@ def write_final_answer_user_input_file(
                 "--fail-on-not-ready",
             ]
         ),
+        "xlsx_validate_command": shlex.join(
+            [
+                "python3",
+                "-m",
+                "job_apply_agent",
+                "final-answer-autopilot",
+                "--reply-file",
+                str(xlsx_path),
+                "--dry-run",
+                "--fail-on-not-ready",
+            ]
+        )
+        if xlsx_path
+        else "",
+        "xlsx_run_command_after_filling": shlex.join(
+            [
+                "python3",
+                "-m",
+                "job_apply_agent",
+                "final-answer-autopilot",
+                "--reply-file",
+                str(xlsx_path),
+                "--apply",
+                "--live-check",
+                "--include-values",
+                "--fail-on-not-ready",
+            ]
+        )
+        if xlsx_path
+        else "",
         "policy": {
             "stores_existing_answer_text": False,
             "writes_profile_or_memory": False,
@@ -31776,6 +32055,70 @@ def _write_final_answer_blocker_xlsx(report: dict[str, Any], path: Path) -> None
             archive.writestr(
                 f"xl/worksheets/sheet{index}.xml",
                 _xlsx_sheet(rows, freeze_header=index != 1),
+            )
+
+
+def _write_final_answer_user_input_xlsx(report: dict[str, Any], path: Path) -> None:
+    blockers = [row for row in report.get("blockers") or [] if isinstance(row, dict)]
+    answer_rows: list[list[Any]] = [
+        [
+            "alias",
+            "answer",
+            "confirmed",
+            "high_risk",
+            "question_group",
+            "hint",
+            "expected_shape",
+            "seen_prompt",
+        ]
+    ]
+    for row in blockers:
+        alias = str(row.get("alias") or "").strip()
+        if not alias:
+            continue
+        observed_examples = [
+            str(item).strip()
+            for item in row.get("observed_prompt_examples") or []
+            if str(item).strip()
+        ]
+        answer_rows.append(
+            [
+                alias,
+                "<fill>",
+                "\u786e\u8ba4" if row.get("high_risk") else "",
+                bool(row.get("high_risk")),
+                row.get("question"),
+                row.get("answer_specificity_hint") or row.get("answer_format_hint"),
+                row.get("answer_example_shape"),
+                observed_examples[0] if observed_examples else "",
+            ]
+        )
+    instruction_rows = [
+        ["Field", "Value"],
+        ["Purpose", "Fill the answer column with truthful reusable answers."],
+        ["How to confirm", "Keep confirmed as \u786e\u8ba4 only when the high-risk answer is exact and truthful."],
+        ["Validate", f"python3 -m job_apply_agent final-answer-autopilot --reply-file {path} --dry-run --fail-on-not-ready"],
+        ["Run after filling", f"python3 -m job_apply_agent final-answer-autopilot --reply-file {path} --apply --live-check --include-values --fail-on-not-ready"],
+        ["Safety", "This file does not submit real applications; final submit remains supervised."],
+    ]
+    sheets = [
+        ("Answer Entry", answer_rows),
+        ("Instructions", instruction_rows),
+    ]
+    sheet_names = [_safe_sheet_name(name) for name, _rows in sheets]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", _xlsx_content_types(len(sheets)))
+        archive.writestr("_rels/.rels", _xlsx_root_rels())
+        archive.writestr("docProps/core.xml", _xlsx_core_props(report.get("generated_at")))
+        archive.writestr("docProps/app.xml", _xlsx_app_props(sheet_names))
+        archive.writestr("xl/workbook.xml", _xlsx_workbook(sheet_names))
+        archive.writestr("xl/_rels/workbook.xml.rels", _xlsx_workbook_rels(len(sheets)))
+        archive.writestr("xl/styles.xml", _xlsx_styles())
+        for index, (_name, rows) in enumerate(sheets, start=1):
+            archive.writestr(
+                f"xl/worksheets/sheet{index}.xml",
+                _xlsx_sheet(rows, freeze_header=True),
             )
 
 
