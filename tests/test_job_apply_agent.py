@@ -11994,6 +11994,56 @@ class JobApplyAgentTests(unittest.TestCase):
                 "synthetic_final_unblocker_update_count": 6,
                 "synthetic_unblocker_existing_draft_update_count": 83,
                 "synthetic_unblocker_data_blocking_prompts_after": 0,
+                "latest_final_answer_validation_status": "validation_failed",
+                "latest_final_answer_validation_ready_for_finalize": False,
+                "latest_final_answer_validation_safe_to_resume": False,
+                "latest_final_answer_validation_answer_count": 6,
+                "latest_final_answer_validation_ready_count": 4,
+                "latest_final_answer_validation_missing_count": 0,
+                "latest_final_answer_validation_unconfirmed_high_risk_count": 0,
+                "latest_final_answer_validation_needs_more_specific_count": 2,
+                "latest_final_answer_validation_unknown_count": 0,
+                "latest_final_answer_validation_ready_aliases": [
+                    "zip_or_postal_code",
+                    "background_or_export_control",
+                    "country_work_permit",
+                    "health_requirement",
+                ],
+                "latest_final_answer_validation_missing_aliases": [],
+                "latest_final_answer_validation_unconfirmed_high_risk_aliases": [],
+                "latest_final_answer_validation_needs_more_specific_aliases": [
+                    "citizenship_status",
+                    "interview_recording_consent",
+                ],
+                "latest_final_answer_validation_revision_file": "job_apply_agent/outbox/final_answer_revision_needed.md",
+                "latest_final_answer_validation_reply_file": "job_apply_agent/outbox/final_answer_revision_user_input_needed.xlsx",
+                "latest_final_answer_validation_base_reply_file": "/tmp/final_answer_user_input_needed 2.numbers",
+            },
+            "latest_final_answer_validation": {
+                "source_status": "validation_failed",
+                "ready_for_finalize": False,
+                "safe_to_resume_after_answers": False,
+                "answer_input_count": 6,
+                "ready_alias_count": 4,
+                "missing_alias_count": 0,
+                "unconfirmed_high_risk_alias_count": 0,
+                "needs_more_specific_alias_count": 2,
+                "unknown_answer_count": 0,
+                "ready_aliases": [
+                    "zip_or_postal_code",
+                    "background_or_export_control",
+                    "country_work_permit",
+                    "health_requirement",
+                ],
+                "missing_aliases": [],
+                "unconfirmed_high_risk_aliases": [],
+                "needs_more_specific_aliases": [
+                    "citizenship_status",
+                    "interview_recording_consent",
+                ],
+                "revision_markdown_output": "job_apply_agent/outbox/final_answer_revision_needed.md",
+                "reply_file": "job_apply_agent/outbox/final_answer_revision_user_input_needed.xlsx",
+                "base_reply_file": "/tmp/final_answer_user_input_needed 2.numbers",
             },
             "requirements": [
                 {
@@ -12409,8 +12459,18 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertEqual(report["summary"]["final_answer_intake_count"], 6)
         self.assertEqual(report["summary"]["final_answer_intake_high_risk_count"], 5)
         self.assertFalse(report["summary"]["final_answer_intake_ready_for_finalize"])
-        self.assertEqual(report["summary"]["final_answer_intake_missing_count"], 6)
-        self.assertEqual(report["summary"]["final_answer_intake_needs_more_specific_count"], 0)
+        self.assertEqual(report["summary"]["final_answer_intake_missing_count"], 0)
+        self.assertEqual(report["summary"]["final_answer_intake_needs_more_specific_count"], 2)
+        self.assertEqual(report["summary"]["final_answer_intake_unknown_count"], 0)
+        self.assertEqual(report["summary"]["final_answer_intake_problem_count"], 2)
+        self.assertEqual(
+            report["summary"]["final_answer_intake_problem_aliases"],
+            ["citizenship_status", "interview_recording_consent"],
+        )
+        self.assertEqual(
+            report["summary"]["final_answer_intake_status_source"],
+            "latest_final_answer_validation",
+        )
         self.assertTrue(report["summary"]["synthetic_unblocker_proof_complete"])
         self.assertEqual(report["summary"]["synthetic_final_unblocker_update_count"], 6)
         self.assertEqual(report["summary"]["goal_completion_status"], "waiting_for_truthful_user_answers")
@@ -12476,22 +12536,30 @@ class JobApplyAgentTests(unittest.TestCase):
             "needs_user_answers",
         )
         self.assertEqual(report["confirmed_answer_runbook"][0]["status"], "waiting_for_user")
-        self.assertIn("final-answer-autopilot --reply-file", report["confirmed_answer_runbook"][2]["action"])
-        self.assertIn("final_answer_user_input_needed.xlsx", report["confirmed_answer_runbook"][2]["action"])
+        self.assertIn("final-answer-autopilot", report["confirmed_answer_runbook"][2]["action"])
+        self.assertIn("--reply-file", report["confirmed_answer_runbook"][2]["action"])
+        self.assertIn("final_answer_revision_user_input_needed.xlsx", report["confirmed_answer_runbook"][2]["action"])
+        self.assertIn("--base-reply-file", report["confirmed_answer_runbook"][2]["action"])
         self.assertIn("--dry-run", report["confirmed_answer_runbook"][2]["action"])
-        self.assertIn("final_answer_user_input_needed.xlsx", report["confirmed_answer_runbook"][3]["action"])
+        self.assertIn("final_answer_revision_user_input_needed.xlsx", report["confirmed_answer_runbook"][3]["action"])
         self.assertIn("--apply --live-check --include-values", report["confirmed_answer_runbook"][3]["action"])
         self.assertIn("refresh-apply-queue", report["confirmed_answer_runbook"][5]["action"])
         self.assertIn("--include-values", report["confirmed_answer_runbook"][5]["action"])
         self.assertIn("resume-after-answers", report["one_command_resume"])
-        self.assertIn("final_answer_user_input_needed.xlsx", report["one_command_resume"])
+        self.assertIn("final_answer_revision_user_input_needed.xlsx", report["one_command_resume"])
+        self.assertIn("--base-reply-file", report["one_command_resume"])
         self.assertIn("--live-check-limit", report["one_command_resume"])
         self.assertIn("--open-browser", report["one_command_resume_and_open"])
         self.assertEqual(
             report["minimal_final_answer_reply_lines"],
-            ["\u6211\u7684\u516c\u6c11\u8eab\u4efd\u662f<fill>", "\u4ee5\u4e0a\u786e\u8ba4"],
+            [
+                "\u6211\u7684\u516c\u6c11\u8eab\u4efd\u662f<fill>",
+                "\u9762\u8bd5\u5f55\u97f3\u662f<fill>",
+                "\u4ee5\u4e0a\u786e\u8ba4",
+            ],
         )
         self.assertIn("\u6211\u7684\u516c\u6c11\u8eab\u4efd\u662f<fill>", report["minimal_final_answer_reply"])
+        self.assertIn("\u9762\u8bd5\u5f55\u97f3\u662f<fill>", report["minimal_final_answer_reply"])
         next_commands = "\n".join(report["next_commands"])
         self.assertIn("resume-after-answers", next_commands)
         self.assertIn("final-answer-blockers", next_commands)
@@ -12544,7 +12612,9 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("final-answer-reply --reply-file", markdown)
         self.assertIn("Final-Answer Intake", markdown)
         self.assertIn("Selected 100 Answer Dependencies", markdown)
-        self.assertIn("needs specificity 0", markdown)
+        self.assertIn("problems 2, missing 0", markdown)
+        self.assertIn("needs specificity 2", markdown)
+        self.assertIn("final-answer problem aliases: citizenship_status, interview_recording_consent", markdown)
         self.assertIn("100-Position Stop Actions", markdown)
         self.assertIn("position execution audit: ready_after_confirmed_answers", markdown)
         self.assertIn("100-Position Execution Audit", markdown)
@@ -12567,6 +12637,7 @@ class JobApplyAgentTests(unittest.TestCase):
         self.assertIn("One-Command Resume", html)
         self.assertIn("Minimal Final-Answer Reply", html)
         self.assertIn("\u6211\u7684\u516c\u6c11\u8eab\u4efd\u662f&lt;fill&gt;", html)
+        self.assertIn("\u9762\u8bd5\u5f55\u97f3\u662f&lt;fill&gt;", html)
         self.assertIn("Final-Answer Intake", html)
         self.assertIn("Answer Impact Queue", html)
         self.assertIn("100-Position Execution Audit", html)

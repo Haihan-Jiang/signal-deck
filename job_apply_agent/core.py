@@ -17850,13 +17850,25 @@ def build_automation_handoff_report(
     goal_completion_checklist = (
         goal.get("completion_checklist") if isinstance(goal.get("completion_checklist"), list) else []
     )
+    latest_final_answer_validation = (
+        goal.get("latest_final_answer_validation")
+        if isinstance(goal.get("latest_final_answer_validation"), dict)
+        else {}
+    )
     impact_summary = impact.get("summary") or {}
     final_answer_intake_rows = _final_answer_intake_export_rows(
         final_answer_intake_template,
         final_answer_intake_update,
     )
+    final_answer_intake_rows = _automation_handoff_apply_latest_final_answer_validation(
+        final_answer_intake_rows,
+        latest_final_answer_validation=latest_final_answer_validation,
+        blocker_summary=blocker_summary,
+    )
     minimal_final_answer_reply_lines = _automation_handoff_minimal_final_answer_reply_lines(
-        final_answer_intake_rows
+        final_answer_intake_rows,
+        latest_final_answer_validation=latest_final_answer_validation,
+        blocker_summary=blocker_summary,
     )
     final_intake_count = int(
         (final_answer_intake_template or {}).get("answer_count") or len(final_answer_intake_rows)
@@ -17874,6 +17886,53 @@ def build_automation_handoff_report(
         final_intake_missing_count = final_intake_count
         final_intake_unconfirmed_high_risk_count = 0
         final_intake_needs_more_specific_count = 0
+    latest_validation_attempted = _automation_handoff_latest_validation_attempted(
+        latest_final_answer_validation,
+        blocker_summary,
+    )
+    latest_validation_unknown_count = _automation_handoff_latest_validation_count(
+        latest_final_answer_validation,
+        blocker_summary,
+        count_key="unknown_answer_count",
+        summary_count_key="latest_final_answer_validation_unknown_count",
+        alias_key="unknown_answer_keys",
+        summary_alias_key="latest_final_answer_validation_unknown_aliases",
+    )
+    if latest_validation_attempted:
+        final_intake_missing_count = _automation_handoff_latest_validation_count(
+            latest_final_answer_validation,
+            blocker_summary,
+            count_key="missing_alias_count",
+            summary_count_key="latest_final_answer_validation_missing_count",
+            alias_key="missing_aliases",
+            summary_alias_key="latest_final_answer_validation_missing_aliases",
+        )
+        final_intake_unconfirmed_high_risk_count = _automation_handoff_latest_validation_count(
+            latest_final_answer_validation,
+            blocker_summary,
+            count_key="unconfirmed_high_risk_alias_count",
+            summary_count_key="latest_final_answer_validation_unconfirmed_high_risk_count",
+            alias_key="unconfirmed_high_risk_aliases",
+            summary_alias_key="latest_final_answer_validation_unconfirmed_high_risk_aliases",
+        )
+        final_intake_needs_more_specific_count = _automation_handoff_latest_validation_count(
+            latest_final_answer_validation,
+            blocker_summary,
+            count_key="needs_more_specific_alias_count",
+            summary_count_key="latest_final_answer_validation_needs_more_specific_count",
+            alias_key="needs_more_specific_aliases",
+            summary_alias_key="latest_final_answer_validation_needs_more_specific_aliases",
+        )
+    final_intake_problem_aliases = _automation_handoff_latest_validation_problem_aliases(
+        latest_final_answer_validation,
+        blocker_summary,
+    )
+    final_intake_problem_count = (
+        final_intake_missing_count
+        + final_intake_unconfirmed_high_risk_count
+        + final_intake_needs_more_specific_count
+        + latest_validation_unknown_count
+    )
     answer_queue = _automation_handoff_answer_queue_rows(questionnaire, impact)
     selected_stop_summary = _automation_handoff_stop_summary_rows(
         batch.get("selected_stop_action_counts") or {},
@@ -17987,10 +18046,20 @@ def build_automation_handoff_report(
         "final_answer_intake_high_risk_count": int(
             (final_answer_intake_template or {}).get("high_risk_count") or 0
         ),
-        "final_answer_intake_ready_for_finalize": bool(final_intake_update.get("ready_for_finalize")),
+        "final_answer_intake_ready_for_finalize": bool(
+            latest_final_answer_validation.get("ready_for_finalize")
+            if latest_validation_attempted
+            else final_intake_update.get("ready_for_finalize")
+        ),
         "final_answer_intake_missing_count": final_intake_missing_count,
         "final_answer_intake_unconfirmed_high_risk_count": final_intake_unconfirmed_high_risk_count,
         "final_answer_intake_needs_more_specific_count": final_intake_needs_more_specific_count,
+        "final_answer_intake_unknown_count": latest_validation_unknown_count,
+        "final_answer_intake_problem_count": final_intake_problem_count,
+        "final_answer_intake_problem_aliases": final_intake_problem_aliases,
+        "final_answer_intake_status_source": "latest_final_answer_validation"
+        if latest_validation_attempted
+        else "final_answer_intake",
         "latest_final_answer_validation_status": blocker_summary.get(
             "latest_final_answer_validation_status", ""
         ),
@@ -18322,10 +18391,7 @@ def _automation_handoff_completion_verdict_rows(
         or 0
     )
     final_missing = int(
-        summary.get("final_answer_intake_missing_count")
-        or summary.get("updates_waiting_after_update_count")
-        or goal_summary.get("final_answer_waiting_count_after_drafts")
-        or 0
+        _automation_handoff_remaining_final_answer_count(summary, goal_summary)
     )
     data_blockers_after = int(
         summary.get("updates_data_blocking_prompts_after")
@@ -18473,7 +18539,9 @@ def render_automation_handoff_markdown(report: dict[str, Any]) -> str:
         f"- synthetic final unblocker proof: {str(bool(summary.get('synthetic_unblocker_proof_complete'))).lower()}, final blanks {summary.get('synthetic_final_unblocker_update_count', 0)}, prefilled drafts {summary.get('synthetic_unblocker_existing_draft_update_count', 0)}, blockers after {summary.get('synthetic_unblocker_data_blocking_prompts_after', 0)}",
         f"- updates readiness: {str(bool(summary.get('updates_ready_for_apply'))).lower()}, waiting {summary.get('updates_waiting_after_update_count', 0)}, high-risk unconfirmed {summary.get('updates_high_risk_unconfirmed_count', 0)}, blockers after {summary.get('updates_data_blocking_prompts_after', 0)}",
         f"- final-answer intake: {summary.get('final_answer_intake_count', 0)} answers, {summary.get('final_answer_intake_high_risk_count', 0)} high-risk, ready for finalize {str(bool(summary.get('final_answer_intake_ready_for_finalize'))).lower()}",
-        f"- final-answer blockers: missing {summary.get('final_answer_intake_missing_count', 0)}, unconfirmed high-risk {summary.get('final_answer_intake_unconfirmed_high_risk_count', 0)}, needs specificity {summary.get('final_answer_intake_needs_more_specific_count', 0)}",
+        f"- final-answer blockers: source {summary.get('final_answer_intake_status_source') or 'final_answer_intake'}, problems {summary.get('final_answer_intake_problem_count', 0)}, missing {summary.get('final_answer_intake_missing_count', 0)}, unconfirmed high-risk {summary.get('final_answer_intake_unconfirmed_high_risk_count', 0)}, needs specificity {summary.get('final_answer_intake_needs_more_specific_count', 0)}, unknown {summary.get('final_answer_intake_unknown_count', 0)}",
+        "- final-answer problem aliases: "
+        + (", ".join(_string_list(summary.get("final_answer_intake_problem_aliases"))) or "none"),
         f"- latest final-answer validation: {summary.get('latest_final_answer_validation_status') or 'missing'}, answers {summary.get('latest_final_answer_validation_answer_count', 0)}, ready {summary.get('latest_final_answer_validation_ready_count', 0)}, missing {summary.get('latest_final_answer_validation_missing_count', 0)}, unconfirmed {summary.get('latest_final_answer_validation_unconfirmed_high_risk_count', 0)}, needs specificity {summary.get('latest_final_answer_validation_needs_more_specific_count', 0)}, safe to resume {str(bool(summary.get('latest_final_answer_validation_safe_to_resume'))).lower()}",
         "- latest final-answer needs specificity aliases: "
         + (
@@ -18826,7 +18894,11 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
                     ("Final intake", summary.get("final_answer_intake_count", 0)),
                     ("Intake high risk", summary.get("final_answer_intake_high_risk_count", 0)),
                     ("Intake ready", str(bool(summary.get("final_answer_intake_ready_for_finalize"))).lower()),
+                    ("Intake source", summary.get("final_answer_intake_status_source") or "final_answer_intake"),
+                    ("Intake problems", summary.get("final_answer_intake_problem_count", 0)),
+                    ("Intake missing", summary.get("final_answer_intake_missing_count", 0)),
                     ("Intake specificity", summary.get("final_answer_intake_needs_more_specific_count", 0)),
+                    ("Intake unknown", summary.get("final_answer_intake_unknown_count", 0)),
                     ("Latest answers", summary.get("latest_final_answer_validation_answer_count", 0)),
                     ("Latest ready", summary.get("latest_final_answer_validation_ready_count", 0)),
                     (
@@ -19230,28 +19302,235 @@ def render_automation_handoff_html(report: dict[str, Any]) -> str:
     )
 
 
+def _automation_handoff_apply_latest_final_answer_validation(
+    final_answer_intake_rows: list[dict[str, Any]],
+    *,
+    latest_final_answer_validation: dict[str, Any] | None = None,
+    blocker_summary: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    if not _automation_handoff_latest_validation_attempted(
+        latest_final_answer_validation,
+        blocker_summary,
+    ):
+        return final_answer_intake_rows
+    ready_aliases = set(
+        _automation_handoff_latest_validation_aliases(
+            latest_final_answer_validation,
+            blocker_summary,
+            alias_key="ready_aliases",
+            summary_alias_key="latest_final_answer_validation_ready_aliases",
+        )
+    )
+    missing_aliases = set(
+        _automation_handoff_latest_validation_aliases(
+            latest_final_answer_validation,
+            blocker_summary,
+            alias_key="missing_aliases",
+            summary_alias_key="latest_final_answer_validation_missing_aliases",
+        )
+    )
+    unconfirmed_aliases = set(
+        _automation_handoff_latest_validation_aliases(
+            latest_final_answer_validation,
+            blocker_summary,
+            alias_key="unconfirmed_high_risk_aliases",
+            summary_alias_key="latest_final_answer_validation_unconfirmed_high_risk_aliases",
+        )
+    )
+    specificity_aliases = set(
+        _automation_handoff_latest_validation_aliases(
+            latest_final_answer_validation,
+            blocker_summary,
+            alias_key="needs_more_specific_aliases",
+            summary_alias_key="latest_final_answer_validation_needs_more_specific_aliases",
+        )
+    )
+    rows: list[dict[str, Any]] = []
+    for row in final_answer_intake_rows:
+        updated = dict(row)
+        alias = str(updated.get("alias") or "").strip()
+        if alias in specificity_aliases:
+            updated["status"] = "needs_more_specific_answer"
+            updated["specificity_reason"] = (
+                updated.get("specificity_reason")
+                or "latest validation says this answer needs a more specific reusable statement"
+            )
+        elif alias in unconfirmed_aliases:
+            updated["status"] = "unconfirmed_high_risk"
+        elif alias in missing_aliases:
+            updated["status"] = "missing"
+        elif alias in ready_aliases:
+            updated["status"] = "ready"
+        rows.append(updated)
+    return rows
+
+
+def _automation_handoff_latest_validation_attempted(
+    latest_final_answer_validation: dict[str, Any] | None,
+    blocker_summary: dict[str, Any] | None = None,
+) -> bool:
+    if _goal_latest_final_answer_validation_has_attempt(latest_final_answer_validation):
+        return True
+    summary = blocker_summary or {}
+    return bool(
+        int(summary.get("latest_final_answer_validation_answer_count") or 0) > 0
+        or _string_list(summary.get("latest_final_answer_validation_ready_aliases"))
+        or _string_list(summary.get("latest_final_answer_validation_missing_aliases"))
+        or _string_list(summary.get("latest_final_answer_validation_needs_more_specific_aliases"))
+        or _string_list(summary.get("latest_final_answer_validation_unconfirmed_high_risk_aliases"))
+    )
+
+
+def _automation_handoff_latest_validation_aliases(
+    latest_final_answer_validation: dict[str, Any] | None,
+    blocker_summary: dict[str, Any] | None,
+    *,
+    alias_key: str,
+    summary_alias_key: str,
+) -> list[str]:
+    aliases = _string_list(
+        (latest_final_answer_validation or {}).get(alias_key)
+        if isinstance(latest_final_answer_validation, dict)
+        else []
+    )
+    if aliases:
+        return aliases
+    return _string_list((blocker_summary or {}).get(summary_alias_key))
+
+
+def _automation_handoff_latest_validation_count(
+    latest_final_answer_validation: dict[str, Any] | None,
+    blocker_summary: dict[str, Any] | None,
+    *,
+    count_key: str,
+    summary_count_key: str,
+    alias_key: str,
+    summary_alias_key: str,
+) -> int:
+    if isinstance(latest_final_answer_validation, dict) and count_key in latest_final_answer_validation:
+        return int(latest_final_answer_validation.get(count_key) or 0)
+    if summary_count_key in (blocker_summary or {}):
+        return int((blocker_summary or {}).get(summary_count_key) or 0)
+    return len(
+        _automation_handoff_latest_validation_aliases(
+            latest_final_answer_validation,
+            blocker_summary,
+            alias_key=alias_key,
+            summary_alias_key=summary_alias_key,
+        )
+    )
+
+
+def _automation_handoff_latest_validation_problem_aliases(
+    latest_final_answer_validation: dict[str, Any] | None,
+    blocker_summary: dict[str, Any] | None,
+) -> list[str]:
+    aliases = _goal_latest_final_answer_problem_aliases(latest_final_answer_validation)
+    if aliases:
+        return aliases
+    combined: list[str] = []
+    for key in [
+        "latest_final_answer_validation_missing_aliases",
+        "latest_final_answer_validation_unconfirmed_high_risk_aliases",
+        "latest_final_answer_validation_needs_more_specific_aliases",
+        "latest_final_answer_validation_unknown_aliases",
+    ]:
+        for alias in _string_list((blocker_summary or {}).get(key)):
+            if alias not in combined:
+                combined.append(alias)
+    return combined
+
+
+def _automation_handoff_remaining_final_answer_count(
+    summary: dict[str, Any],
+    goal_summary: dict[str, Any] | None = None,
+) -> int:
+    if _automation_handoff_latest_validation_attempted_from_summary(summary):
+        return int(summary.get("final_answer_intake_problem_count") or 0)
+    return int(
+        summary.get("final_answer_intake_missing_count")
+        or summary.get("updates_waiting_after_update_count")
+        or (goal_summary or {}).get("final_answer_waiting_count_after_drafts")
+        or (goal_summary or {}).get("final_answer_intake_count")
+        or 0
+    )
+
+
+def _automation_handoff_latest_validation_attempted_from_summary(
+    summary: dict[str, Any],
+) -> bool:
+    return bool(
+        int(summary.get("latest_final_answer_validation_answer_count") or 0) > 0
+        or _string_list(summary.get("latest_final_answer_validation_ready_aliases"))
+        or _string_list(summary.get("latest_final_answer_validation_missing_aliases"))
+        or _string_list(summary.get("latest_final_answer_validation_needs_more_specific_aliases"))
+        or _string_list(summary.get("latest_final_answer_validation_unconfirmed_high_risk_aliases"))
+        or _string_list(summary.get("final_answer_intake_problem_aliases"))
+    )
+
+
 def _automation_handoff_minimal_final_answer_reply_lines(
     final_answer_intake_rows: list[dict[str, Any]],
+    *,
+    latest_final_answer_validation: dict[str, Any] | None = None,
+    blocker_summary: dict[str, Any] | None = None,
 ) -> list[str]:
+    latest_problem_aliases = _automation_handoff_latest_validation_problem_aliases(
+        latest_final_answer_validation,
+        blocker_summary,
+    )
+    latest_problem_alias_set = set(latest_problem_aliases)
     blocker_rows: list[dict[str, Any]] = []
+    seen_problem_aliases: set[str] = set()
     for row in final_answer_intake_rows:
         if not isinstance(row, dict):
             continue
         status = str(row.get("status") or "").strip()
-        if status == "ready":
-            continue
         alias = str(row.get("alias") or "").strip()
         if not alias:
             continue
+        if latest_problem_alias_set:
+            if alias not in latest_problem_alias_set:
+                continue
+            seen_problem_aliases.add(alias)
+        elif status == "ready":
+            continue
         blocker_rows.append({"alias": alias, "high_risk": bool(row.get("high_risk"))})
+    for alias in latest_problem_aliases:
+        if alias in seen_problem_aliases:
+            continue
+        blocker_rows.append({"alias": alias, "high_risk": alias != "zip_or_postal_code"})
     return _final_answer_blocker_minimal_reply_prompt_lines(blocker_rows)
 
 
 def _automation_handoff_confirmed_answer_runbook(summary: dict[str, Any]) -> list[dict[str, Any]]:
     final_blanks = int(
-        summary.get("updates_waiting_after_update_count")
+        _automation_handoff_remaining_final_answer_count(summary)
         or summary.get("synthetic_final_unblocker_update_count")
         or 0
+    )
+    final_reply_file = (
+        FINAL_ANSWER_REVISION_USER_INPUT_XLSX_PATH
+        if _automation_handoff_latest_validation_attempted_from_summary(summary)
+        and final_blanks
+        else FINAL_ANSWER_USER_INPUT_XLSX_PATH
+    )
+    base_reply = str(summary.get("latest_final_answer_validation_base_reply_file") or "").strip()
+    validate_parts = ["python3", "-m", "job_apply_agent", "final-answer-autopilot"]
+    run_parts = ["python3", "-m", "job_apply_agent", "final-answer-autopilot"]
+    if final_reply_file == FINAL_ANSWER_REVISION_USER_INPUT_XLSX_PATH and base_reply:
+        validate_parts.extend(["--base-reply-file", base_reply])
+        run_parts.extend(["--base-reply-file", base_reply])
+    validate_parts.extend(["--reply-file", str(final_reply_file), "--dry-run", "--fail-on-not-ready"])
+    run_parts.extend(
+        [
+            "--reply-file",
+            str(final_reply_file),
+            "--apply",
+            "--live-check",
+            "--include-values",
+            "--fail-on-not-ready",
+        ]
     )
     open_after_answers = int(summary.get("apply_queue_open_after_answers_count") or 0)
     manual_live_checks = int(summary.get("apply_queue_manual_live_check_count") or 0)
@@ -19263,8 +19542,13 @@ def _automation_handoff_confirmed_answer_runbook(summary: dict[str, Any]) -> lis
             "step": 1,
             "name": "Confirm final answer blanks",
             "status": "waiting_for_user" if final_blanks else "ready",
-            "action": "python3 -m job_apply_agent final-answer-user-input, fill job_apply_agent/outbox/final_answer_user_input_needed.xlsx, then validate it.",
-            "expected_result": f"{final_blanks} final blanks are captured in the Excel reply-file format without sending answer text; blocker HTML/XLSX are refreshed.",
+            "action": (
+                "python3 -m job_apply_agent final-answer-revision-user-input, fill "
+                f"{FINAL_ANSWER_REVISION_USER_INPUT_XLSX_PATH}, then validate it."
+                if final_reply_file == FINAL_ANSWER_REVISION_USER_INPUT_XLSX_PATH
+                else "python3 -m job_apply_agent final-answer-user-input, fill job_apply_agent/outbox/final_answer_user_input_needed.xlsx, then validate it."
+            ),
+            "expected_result": f"{final_blanks} final answer issue(s) are captured in the Excel reply-file format without sending answer text; blocker HTML/XLSX are refreshed.",
         },
         {
             "step": 2,
@@ -19277,7 +19561,7 @@ def _automation_handoff_confirmed_answer_runbook(summary: dict[str, Any]) -> lis
             "step": 3,
             "name": "Run safe post-answer preflight",
             "status": "ready_after_confirmation" if final_blanks else "ready",
-            "action": f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_USER_INPUT_XLSX_PATH} --dry-run --fail-on-not-ready",
+            "action": shlex.join(validate_parts),
             "alternate_action": "python3 -m job_apply_agent resume-after-answers --reply-stdin --validate-only",
             "expected_result": "The reply is parsed and verified without writing outbox updates, profile, or answer memory.",
         },
@@ -19285,7 +19569,7 @@ def _automation_handoff_confirmed_answer_runbook(summary: dict[str, Any]) -> lis
             "step": 4,
             "name": "Apply approved answers and live-check",
             "status": "ready_after_confirmation" if final_blanks else "ready",
-            "action": f"python3 -m job_apply_agent final-answer-autopilot --reply-file {FINAL_ANSWER_USER_INPUT_XLSX_PATH} --apply --live-check --include-values --fail-on-not-ready",
+            "action": shlex.join(run_parts),
             "expected_result": "Approved answers are written to profile/memory, live closed-posting preflight runs, and the supervised autofill packet is rebuilt.",
         },
         {
@@ -33422,7 +33706,16 @@ def _goal_evidence_export_rows(
     completion_ids = _string_list(automation_summary.get("goal_completion_blocking_requirement_ids"))
     final_missing = int(summary.get("final_answer_intake_count") or 0)
     if automation_summary:
-        final_missing = int(automation_summary.get("final_answer_intake_missing_count") or final_missing)
+        final_missing = _automation_handoff_remaining_final_answer_count(
+            automation_summary,
+            summary,
+        )
+    final_problem_aliases = _string_list(
+        automation_summary.get("final_answer_intake_problem_aliases")
+        or automation_summary.get("latest_final_answer_validation_needs_more_specific_aliases")
+        or automation_summary.get("latest_final_answer_validation_missing_aliases")
+        or automation_summary.get("goal_completion_blocking_final_answer_aliases")
+    )
     latest_preflight_stale = bool(automation_summary.get("latest_preflight_stale"))
     open_after_answers = int(
         automation_summary.get("apply_queue_open_after_answers_count")
@@ -33595,7 +33888,11 @@ def _goal_evidence_export_rows(
                 f"blocking_ids={', '.join(completion_ids) or 'none'}; "
                 f"playbook_targets={playbook_target_text or 'not_reported'}"
             ),
-            "next_action": "fill zip, citizenship, export-control, work-permit, recording, and health/vaccine answers"
+            "next_action": (
+                "fill latest final-answer aliases: " + ", ".join(final_problem_aliases)
+                if final_problem_aliases
+                else "fill latest final-answer reply"
+            )
             if final_missing
             else "none",
         },
