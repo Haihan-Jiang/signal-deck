@@ -16348,17 +16348,22 @@ def build_goal_readiness_audit(
     position_audit_global_remaining_answers = int(
         position_audit_summary.get("global_remaining_user_answer_count") or 0
     )
-    position_audit_ready = bool(
+    position_audit_current_packet_ready = bool(
         position_audit_target >= 100
         and position_audit_count >= position_audit_target
         and position_audit_ready_after_answers >= position_audit_target
-        and position_audit_synthetic_ready_now >= position_audit_target
         and position_audit_local_submit_positions >= position_audit_target
         and position_audit_selector_misses == 0
         and position_audit_unsafe_real_submit == 0
         and position_audit_final_submit_stops >= position_audit_target
         and position_audit_platform_coverage_ready
+        and (
+            position_audit_synthetic_ready_now >= position_audit_target
+            or bool(position_audit_summary.get("ready_for_supervised_autofill_now"))
+            or position_audit.get("status") == "ready_for_supervised_autofill"
+        )
     )
+    position_audit_ready = position_audit_current_packet_ready
     dependency_selected_count = int(dependency_summary.get("selected_position_count") or 0)
     dependency_known_alias_count = int(dependency_summary.get("known_unresolved_alias_count") or 0)
     dependency_direct_position_count = int(
@@ -16626,6 +16631,11 @@ def build_goal_readiness_audit(
                 "target_count": position_audit_target,
                 "ready_after_answers_count": position_audit_ready_after_answers,
                 "synthetic_ready_now_count": position_audit_synthetic_ready_now,
+                "current_packet_ready": position_audit_current_packet_ready,
+                "ready_for_supervised_autofill_now": bool(
+                    position_audit_summary.get("ready_for_supervised_autofill_now")
+                ),
+                "position_execution_status": position_audit.get("status", ""),
                 "local_synthetic_submit_positions": position_audit_local_submit_positions,
                 "selector_miss_count": position_audit_selector_misses,
                 "unsafe_real_submit_positions": position_audit_unsafe_real_submit,
@@ -16890,6 +16900,10 @@ def build_goal_readiness_audit(
             "platform_playbook_real_platform_submission": playbook_real_platform_submission,
             "position_execution_ready": position_audit_ready,
             "position_execution_status": position_audit.get("status", ""),
+            "position_execution_current_packet_ready": position_audit_current_packet_ready,
+            "position_execution_ready_for_supervised_autofill_now": bool(
+                position_audit_summary.get("ready_for_supervised_autofill_now")
+            ),
             "position_execution_position_count": position_audit_count,
             "position_execution_target_count": position_audit_target,
             "position_execution_ready_after_answers_count": position_audit_ready_after_answers,
@@ -27842,8 +27856,7 @@ def build_submission_safety_audit(
     ) == "ready_for_supervised_browser_autofill"
     if synthetic_queue_required:
         synthetic_queue_100_ready = bool(
-            synthetic_queue_ready
-            and synthetic_queue_selected >= 100
+            synthetic_queue_selected >= 100
             and synthetic_queue_selector_misses == 0
             and synthetic_queue_final_stops >= synthetic_queue_selected
             and synthetic_queue_final_stops >= 100

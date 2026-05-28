@@ -1170,6 +1170,72 @@ class JobApplyAgentTests(unittest.TestCase):
             [row["id"] for row in audit["issues"]],
         )
 
+    def test_submission_safety_accepts_structural_synthetic_stop_coverage(self) -> None:
+        audit = build_submission_safety_audit(
+            fake_position_rehearsal={
+                "real_platform_submission": False,
+                "policy": {"real_platform_submission": False, "fake_data_real_submission_allowed": False},
+            },
+            post_answer_pipeline={
+                "source": "final_answer_reply_synthetic_rehearsal",
+                "status": "synthetic_queue_rehearsal_not_ready",
+                "synthetic_final_answers": True,
+                "apply_requested": False,
+                "live_check_requested": False,
+                "open_browser_requested": False,
+                "policy": {
+                    "submits_real_applications": False,
+                    "synthetic_answers_never_written_to_real_profile_or_memory": True,
+                },
+                "synthetic_queue_rehearsal": {
+                    "status": "not_ready",
+                    "ready_for_supervised_browser_autofill": False,
+                    "writes_real_profile_or_memory": False,
+                    "submits_real_applications": False,
+                    "opens_browser": False,
+                    "runs_live_check": False,
+                    "autofill_packet_selected": 100,
+                    "autofill_packet_final_submit_stops": 100,
+                    "autofill_packet_selector_misses": 0,
+                },
+            },
+            apply_queue_autofill_packet={
+                "selected_count": 100,
+                "target_count": 100,
+                "real_platform_submission": False,
+                "ready_for_unattended_real_submit": False,
+                "summary": {
+                    "final_submit_stop_count": 100,
+                    "selector_miss_count": 0,
+                    "local_synthetic_submit_count": 100,
+                },
+                "positions": [
+                    {
+                        "real_platform_submission": False,
+                        "final_submit_allowed": False,
+                        "would_submit": False,
+                        "stop_actions": [{"status": "final_submit_confirmation"}],
+                    }
+                    for _ in range(100)
+                ],
+            },
+            browser_review_queue_audit={
+                "safe": True,
+                "row_count": 1,
+                "real_platform_submission_true_count": 0,
+                "parse_error_count": 0,
+            },
+        )
+
+        self.assertTrue(audit["safe"])
+        checks = {row["id"]: row for row in audit["checks"]}
+        self.assertEqual(checks["post_answer_synthetic_rehearsal_100_ready"]["status"], "pass")
+        self.assertFalse(
+            checks["post_answer_synthetic_rehearsal_100_ready"]["evidence"][
+                "ready_for_supervised_browser_autofill"
+            ]
+        )
+
     def test_submission_safety_audit_blocks_unattended_real_submit_path(self) -> None:
         audit = build_submission_safety_audit(
             fake_position_rehearsal={
