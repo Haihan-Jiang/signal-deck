@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Alan Jiang - Production Engineer and Site Reliability Engineer focused on production infrastructure, automation, reliability, and open-source infrastructure work." />
+  <title>Alan Jiang - Production Engineer / SRE</title>
+  <style>
+    :root {
+      --bg: #f4f5f7;
+      --paper: #ffffff;
+      --ink: #171717;
+      --muted: #5e6673;
+      --line: #dadde3;
+      --accent: #1f5fbf;
+      --soft: #f7f8fa;
+      --max: 980px;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font-family: var(--sans);
+      line-height: 1.45;
+      letter-spacing: 0;
+    }
+
+    a {
+      color: var(--accent);
+      text-underline-offset: 3px;
+      text-decoration-thickness: 1px;
+    }
+
+    .page {
+      width: min(var(--max), calc(100% - 28px));
+      margin: 24px auto;
+      padding: 34px 38px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      box-shadow: 0 16px 45px rgba(23, 23, 23, 0.055);
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 22px;
+      align-items: start;
+      padding-bottom: 22px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin: 0;
+    }
+
+    h1 {
+      font-size: clamp(34px, 5vw, 52px);
+      line-height: 1;
+      letter-spacing: 0;
+    }
+
+    .title {
+      margin-top: 8px;
+      color: #2f3742;
+      font-size: 18px;
+      font-weight: 650;
+    }
+
+    .summary {
+      max-width: 710px;
+      margin-top: 14px;
+      color: var(--muted);
+      font-size: 15.5px;
+    }
+
+    .contact {
+      display: grid;
+      gap: 6px;
+      justify-items: end;
+      color: var(--muted);
+      font-size: 14px;
+      white-space: nowrap;
+    }
+
+    .section {
+      padding: 22px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .section:last-child {
+      padding-bottom: 0;
+      border-bottom: 0;
+    }
+
+    .section-head {
+      display: grid;
+      grid-template-columns: 170px 1fr;
+      gap: 22px;
+      align-items: start;
+    }
+
+    h2 {
+      color: #333b47;
+      font-size: 13px;
+      font-weight: 760;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .content {
+      display: grid;
+      gap: 20px;
+    }
+
+    .role {
+      display: grid;
+      gap: 8px;
+    }
+
+    .role-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      align-items: baseline;
+    }
+
+    h3 {
+      font-size: 18px;
+      line-height: 1.25;
+    }
+
+    .time {
+      color: var(--muted);
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .sub {
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 620;
+    }
+
+    ul {
+      margin: 0;
+      padding-left: 18px;
+    }
+
+    li {
+      margin: 6px 0;
+      color: #26303b;
+      font-size: 14.5px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .item {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--soft);
+    }
+
+    .item h3 {
+      font-size: 15.5px;
+    }
+
+    .item p {
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .stack {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+    }
+
+    .stack span {
+      padding: 5px 8px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: var(--soft);
+      color: #344050;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 9px;
+      font-size: 14px;
+    }
+
+    footer {
+      margin-top: 22px;
+      padding-top: 16px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 760px) {
+      .page {
+        width: 100%;
+        margin: 0;
+        padding: 26px 18px;
+        border-left: 0;
+        border-right: 0;
+        border-radius: 0;
+      }
+
+      header,
+      .section-head,
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .contact {
+        justify-items: start;
+        white-space: normal;
+      }
+
+      .role-top {
+        display: grid;
+        gap: 3px;
+      }
+
+      .time {
+        white-space: normal;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <div>
+        <h1>Alan Jiang</h1>
+        <p class="title">Production Engineer / Site Reliability Engineer</p>
+        <p class="summary">I work on production infrastructure, automation, and reliability systems. My recent work spans gateway migrations, quota and capacity automation, SLO-based operations, on-call tooling, and infrastructure contributions to Google-maintained open-source projects.</p>
+      </div>
+      <div class="contact" aria-label="Contact">
+        <span>Bellevue, WA</span>
+        <a href="mailto:hanjiang19991001@gmail.com">hanjiang19991001@gmail.com</a>
+        <a href="https://www.linkedin.com/in/haihan-jiang/">LinkedIn</a>
+        <a href="https://github.com/Haihan-Jiang">GitHub</a>
+      </div>
+    </header>
+
+    <section class="section" id="experience">
+      <div class="section-head">
+        <h2>Experience</h2>
+        <div class="content">
+          <article class="role">
+            <div class="role-top">
+              <h3>SHEIN - Site Reliability Engineer</h3>
+              <span class="time">Jan 2026 - Present</span>
+            </div>
+            <p class="sub">Production gateway infrastructure, AKS operations, APISIX/Nginx automation</p>
+            <ul>
+              <li>Operated US production infrastructure across 28 Nginx clusters, 221 VMs, 200+ APISIX gateway service registrations, 21 AKS clusters, 11 Kafka clusters, and 54 Elasticsearch clusters.</li>
+              <li>Led a zero-downtime Nginx V5-to-V6 migration for 221 VMs across 16+ production gateway clusters using staged traffic cutover, health checks, standby legacy nodes, and observation windows; completed with 0 P1/P2 incidents.</li>
+              <li>Developed backend features for internal gateway operations, including route rollback consistency, raw-config diff validation, SSL workflows, and Consul Template upstream synchronization.</li>
+              <li>Built certificate-rotation validation for lb-admin-managed certificates across 23 service clusters and about 170 APISIX nodes, reducing manual verification from 40+ minutes to under 5 minutes.</li>
+            </ul>
+          </article>
+
+          <article class="role">
+            <div class="role-top">
+              <h3>Meta - Production Engineer, Monetization Data Infrastructure</h3>
+              <span class="time">Jan 2025 - Jan 2026</span>
+            </div>
+            <p class="sub">Capacity automation, quota infrastructure, reliability controls, production on-call</p>
+            <ul>
+              <li>Built and productionized Data &amp; Features fulfillment automation using a Thrift service, MWFS workflow, XDB-backed state tracking, pre-validation, cost estimation, status polling, and quota provisioning.</li>
+              <li>Increased fulfillment automation from a 42.2% CLI/Bento baseline to 82%, and defined reliability controls including success-rate SLI, P95 latency target, punctuality target, dashboards, alerts, weekly SLO windows, and on-call routing.</li>
+              <li>Built Incremental Supply Detection and Smart Quota mitigation automation for warehouse quota changes, redistribution, audit logging, and CLI-driven quota reductions; saved 213.5 hours/year and reduced SEV mitigation by up to 4 hours per event.</li>
+              <li>Served in production on-call rotations for monetization data infrastructure, triaging capacity requests, quota alerts, and SEV scenarios while writing runbooks, monitoring queries, and remediation scripts.</li>
+            </ul>
+          </article>
+
+          <article class="role">
+            <div class="role-top">
+              <h3>Google / Google Cloud OSS - Open Source Contributor</h3>
+              <span class="time">Merged contributions</span>
+            </div>
+            <p class="sub">C++ benchmarking, CMake/pkg-config integration, Terraform examples, Google Cloud configuration</p>
+            <ul>
+              <li>Contributed to Google-maintained projects including google/benchmark, google/stellar-engine, and Google Cloud sample repositories.</li>
+              <li>Improved google/benchmark reliability and integration around pkg-config install paths, repetition statistics, perf-counter behavior, static-library registration docs, and CMake guidance.</li>
+              <li>Hardened Google Cloud Terraform examples by deprivileging bootstrap service accounts and exposing configurable model location settings.</li>
+            </ul>
+            <div class="links">
+              <a href="https://github.com/google/benchmark/pull/2198">benchmark pkg-config</a>
+              <a href="https://github.com/google/benchmark/pull/2204">benchmark perf counters</a>
+              <a href="https://github.com/google/stellar-engine/pull/68">stellar-engine Terraform</a>
+              <a href="https://github.com/GoogleCloudPlatform/vertex-ai-creative-studio/pull/1445">creative-studio config</a>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <h2>Selected Work</h2>
+        <div class="grid">
+          <article class="item">
+            <h3>Gateway migration</h3>
+            <p>CentOS-to-Rocky migration with staged load-balancer traffic movement, health validation, standby nodes, rollback paths, and post-cutover observation.</p>
+          </article>
+          <article class="item">
+            <h3>Capacity automation</h3>
+            <p>Workflow-backed fulfillment service for demand breakdown, quota allocation, state tracking, status polling, and operational visibility.</p>
+          </article>
+          <article class="item">
+            <h3>Gateway admin backend</h3>
+            <p>Backend work for APISIX/Nginx route management, config validation, upstream synchronization, and certificate rotation validation.</p>
+          </article>
+          <article class="item">
+            <h3>Reliability operations</h3>
+            <p>SLI/SLO definition, dashboarding, alert routing, on-call runbooks, quota remediation scripts, and alert inventory cleanup.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <h2>Tech</h2>
+        <div class="stack" aria-label="Technology stack">
+          <span>Python</span>
+          <span>C++</span>
+          <span>Java</span>
+          <span>Go</span>
+          <span>PHP</span>
+          <span>SQL</span>
+          <span>Bash</span>
+          <span>Linux</span>
+          <span>Kubernetes/AKS</span>
+          <span>Tupperware (Kubernetes-equivalence)</span>
+          <span>Azure</span>
+          <span>AWS</span>
+          <span>Terraform</span>
+          <span>Ansible</span>
+          <span>Nginx/APISIX</span>
+          <span>Consul/etcd</span>
+          <span>Kafka</span>
+          <span>ZooKeeper</span>
+          <span>Elasticsearch</span>
+          <span>Hive/Scuba</span>
+          <span>XDB</span>
+          <span>MWFS</span>
+          <span>Thrift/RPC</span>
+          <span>SLI/SLO</span>
+          <span>Incident response</span>
+          <span>Git/GitHub</span>
+          <span>CMake/pkg-config</span>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      Alan Jiang - Production Engineer / Site Reliability Engineer
+    </footer>
+  </main>
+</body>
+</html>
