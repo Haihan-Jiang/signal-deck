@@ -35,6 +35,31 @@ To inspect full simulated payloads:
 python3 -m job_apply_agent run --limit 2 --json
 ```
 
+## Supervised Resume Upload
+
+For Greenhouse application forms, use native Playwright file chooser handling
+instead of the Chrome extension path. This uploads the file into the
+`Resume/CV` field and writes proof JSON, but it never clicks final submit:
+
+```bash
+python3 -m job_apply_agent greenhouse-resume-upload \
+  --url "https://www.digitalocean.com/careers/position/apply?gh_jid=7974355&gh_src=3j7yi26u1us" \
+  --resume /Users/haihan/Downloads/Alan-Jiang-SWE-DigitalOcean.pdf \
+  --proof job_apply_agent/outbox/greenhouse_resume_upload_latest.json
+```
+
+If a Playwright browser is already on the application page, reuse it:
+
+```bash
+python3 -m job_apply_agent greenhouse-resume-upload \
+  --reuse-current-page \
+  --resume /Users/haihan/Downloads/Alan-Jiang-SWE-DigitalOcean.pdf
+```
+
+The proof JSON records the observed filename, whether a page was opened,
+whether upload was observed in the page snapshot, and `submit_clicked: false`.
+CAPTCHA and final submit remain human-supervised stops.
+
 ## Telegram Notification
 
 The agent can notify the existing Telegram bot when application drafts are ready.

@@ -109,6 +109,7 @@ from .core import (
     write_synthetic_application_simulation,
     write_synthetic_browser_action_execution,
 )
+from .greenhouse_resume_upload import run_greenhouse_resume_upload
 
 
 DEFAULT_PROFILE = Path(__file__).with_name("sample_profile.json")
@@ -161,6 +162,9 @@ DEFAULT_APPLY_AUDIT_JSON = Path(__file__).with_name("outbox") / "apply_run_audit
 DEFAULT_APPLY_AUDIT_MARKDOWN = Path(__file__).with_name("outbox") / "apply_run_audit_latest.md"
 DEFAULT_BROWSER_ACTIONS_JSON = Path(__file__).with_name("outbox") / "browser_action_manifest_latest.json"
 DEFAULT_BROWSER_ACTIONS_MARKDOWN = Path(__file__).with_name("outbox") / "browser_action_manifest_latest.md"
+DEFAULT_GREENHOUSE_RESUME_UPLOAD_PROOF = (
+    Path(__file__).with_name("outbox") / "greenhouse_resume_upload_latest.json"
+)
 DEFAULT_CLOSED_PREFLIGHT_JSON = Path(__file__).with_name("outbox") / "closed_posting_preflight_latest.json"
 DEFAULT_CLOSED_PREFLIGHT_MARKDOWN = Path(__file__).with_name("outbox") / "closed_posting_preflight_latest.md"
 DEFAULT_DOM_HARNESS_HTML = Path(__file__).with_name("outbox") / "browser_dom_harness_latest.html"
@@ -869,6 +873,33 @@ def main() -> int:
     browser_actions_parser.add_argument("--include-values", action="store_true")
     browser_actions_parser.add_argument("--json-output", default=str(DEFAULT_BROWSER_ACTIONS_JSON))
     browser_actions_parser.add_argument("--markdown-output", default=str(DEFAULT_BROWSER_ACTIONS_MARKDOWN))
+
+    greenhouse_resume_upload_parser = subparsers.add_parser(
+        "greenhouse-resume-upload",
+        help="upload a resume to a Greenhouse Resume/CV field through Playwright without final submit",
+    )
+    greenhouse_resume_upload_parser.add_argument(
+        "--url",
+        help="Greenhouse-hosted or Greenhouse-embedded application URL to open before upload",
+    )
+    greenhouse_resume_upload_parser.add_argument("--resume", required=True, type=Path)
+    greenhouse_resume_upload_parser.add_argument(
+        "--proof",
+        default=str(DEFAULT_GREENHOUSE_RESUME_UPLOAD_PROOF),
+        type=Path,
+        help="JSON proof file showing observed upload state and final-submit status",
+    )
+    greenhouse_resume_upload_parser.add_argument("--session", help="optional playwright-cli session name")
+    greenhouse_resume_upload_parser.add_argument(
+        "--reuse-current-page",
+        action="store_true",
+        help="use the current Playwright page instead of opening --url",
+    )
+    greenhouse_resume_upload_parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="open browser without --headed when --reuse-current-page is not used",
+    )
 
     dom_harness_parser = subparsers.add_parser(
         "dom-harness",
@@ -3275,6 +3306,22 @@ def main() -> int:
         print(f"Browser actions: {manifest.get('action_count', 0)}")
         print(f"Stop actions: {manifest.get('stop_action_count', 0)}")
         print(f"Would submit: {str(bool(manifest.get('would_submit'))).lower()}")
+        return 0
+
+    if args.command == "greenhouse-resume-upload":
+        upload = run_greenhouse_resume_upload(
+            url=args.url,
+            resume_path=args.resume,
+            proof_path=args.proof,
+            session=args.session,
+            headed=not args.headless,
+            reuse_current_page=args.reuse_current_page,
+        )
+        print(f"Wrote Greenhouse resume upload proof JSON to {args.proof}")
+        print(f"Resume filename: {upload.get('resume_filename')}")
+        print(f"Upload observed: {str(bool(upload.get('upload_observed'))).lower()}")
+        print(f"Submit clicked: {str(bool(upload.get('submit_clicked'))).lower()}")
+        print(f"Next action: {upload.get('next_action')}")
         return 0
 
     if args.command == "dom-harness":
